@@ -19,12 +19,12 @@ export async function POST(
     const job = jobsDb.get(params.id);
     if (!job) return notFound("Job no encontrado");
 
-    const body = (await req.json()) as { prompt?: string };
+    const body = (await req.json()) as { prompt?: string; model?: string };
     const prompt = (body.prompt ?? "").trim();
     if (!prompt) return badRequest("El prompt no puede estar vacio.");
 
-    changePrompt(job.id, prompt);
-    enqueueJob(job.id); // regenera con el prompt nuevo
+    changePrompt(job.id, prompt, body.model);
+    enqueueJob(job.id); // regenera con el prompt (y modelo) nuevo
     return ok({ updated: true, job: jobsDb.get(job.id) });
   } catch (err) {
     return serverError(err);

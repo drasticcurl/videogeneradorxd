@@ -70,6 +70,21 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     return m;
   }, [project]);
 
+  // Prompt actual por job.refId (image.prompt o clip.video_prompt) para precargar al editar.
+  const promptByRef = useMemo(() => {
+    const m = new Map<string, string>();
+    project?.plan.assets.forEach((a) =>
+      a.images.forEach((img) => m.set(img.id, img.prompt))
+    );
+    project?.plan.clips.forEach((c) => m.set(c.id, c.video_prompt));
+    return m;
+  }, [project]);
+
+  const imageModels = config?.catalog.image ?? [];
+  const videoModels = config?.catalog.video ?? [];
+  const projectImageModel = project?.models.image ?? "";
+  const projectVideoModel = project?.models.video ?? "";
+
   const resByClip = useMemo(() => {
     const m = new Map<string, string>();
     project?.plan.clips.forEach((c) =>
@@ -105,7 +120,20 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
   const handlers = {
     onApprove: (id: string, index?: number) => void approveJob(id, index),
     onRegenerate: (id: string) => void regenerateJob(id),
-    onChangePrompt: (id: string, p: string) => void changePromptJob(id, p),
+    onChangePrompt: (id: string, p: string, model?: string) =>
+      void changePromptJob(id, p, model),
+  };
+
+  // Datos para precargar prompt + selector de modelo en cada tarjeta.
+  const imageMeta = {
+    promptByRef,
+    modelOptions: imageModels,
+    projectModel: projectImageModel,
+  };
+  const videoMeta = {
+    promptByRef,
+    modelOptions: videoModels,
+    projectModel: projectVideoModel,
   };
 
   // Props extra para videos (selector de resolucion por clip).
@@ -207,15 +235,15 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
       {/* Cuerpo */}
       {view === "storyboard" ? (
         <div className="space-y-5">
-          <Group title="Imagenes base (text2image)" jobs={groups.t2i} projectId={projectId} handlers={handlers} />
-          <Group title="Imagenes derivadas (image2image · misma identidad)" jobs={groups.i2i} projectId={projectId} handlers={handlers} />
-          <Filmstrip title="Clips en orden" jobs={groups.vids} projectId={projectId} handlers={handlers} videoExtra={videoExtra} />
+          <Group title="Imagenes base (text2image)" jobs={groups.t2i} projectId={projectId} handlers={handlers} meta={imageMeta} />
+          <Group title="Imagenes derivadas (image2image · misma identidad)" jobs={groups.i2i} projectId={projectId} handlers={handlers} meta={imageMeta} />
+          <Filmstrip title="Clips en orden" jobs={groups.vids} projectId={projectId} handlers={handlers} meta={videoMeta} videoExtra={videoExtra} />
         </div>
       ) : (
         <div className="space-y-5">
-          <Group title="1 · Imagenes base" jobs={groups.t2i} projectId={projectId} handlers={handlers} />
-          <Group title="2 · Imagenes derivadas" jobs={groups.i2i} projectId={projectId} handlers={handlers} />
-          <Group title="3 · Videos" jobs={groups.vids} projectId={projectId} handlers={handlers} videoExtra={videoExtra} />
+          <Group title="1 · Imagenes base" jobs={groups.t2i} projectId={projectId} handlers={handlers} meta={imageMeta} />
+          <Group title="2 · Imagenes derivadas" jobs={groups.i2i} projectId={projectId} handlers={handlers} meta={imageMeta} />
+          <Group title="3 · Videos" jobs={groups.vids} projectId={projectId} handlers={handlers} meta={videoMeta} videoExtra={videoExtra} />
         </div>
       )}
 
@@ -227,7 +255,13 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
 interface GroupHandlers {
   onApprove: (id: string, index?: number) => void;
   onRegenerate: (id: string) => void;
-  onChangePrompt: (id: string, p: string) => void;
+  onChangePrompt: (id: string, p: string, model?: string) => void;
+}
+
+interface JobMeta {
+  promptByRef: Map<string, string>;
+  modelOptions: { id: string; label: string }[];
+  projectModel: string;
 }
 
 interface VideoExtra {
@@ -241,12 +275,14 @@ function Group({
   jobs,
   projectId,
   handlers,
+  meta,
   videoExtra,
 }: {
   title: string;
   jobs: JobRecord[];
   projectId: string;
   handlers: GroupHandlers;
+  meta: JobMeta;
   videoExtra?: VideoExtra;
 }) {
   return (
@@ -263,6 +299,9 @@ function Group({
               key={j.id}
               job={j}
               projectId={projectId}
+              currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
+              modelOptions={meta.modelOptions}
+              projectModel={meta.projectModel}
               {...handlers}
               resolution={videoExtra?.resByClip.get(j.refId)}
               resolutionOptions={videoExtra?.resolutionOptions}
@@ -280,12 +319,14 @@ function Filmstrip({
   jobs,
   projectId,
   handlers,
+  meta,
   videoExtra,
 }: {
   title: string;
   jobs: JobRecord[];
   projectId: string;
   handlers: GroupHandlers;
+  meta: JobMeta;
   videoExtra?: VideoExtra;
 }) {
   return (
@@ -304,6 +345,9 @@ function Filmstrip({
                 <JobCard
                   job={j}
                   projectId={projectId}
+                  currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
+                  modelOptions={meta.modelOptions}
+                  projectModel={meta.projectModel}
                   {...handlers}
                   resolution={videoExtra?.resByClip.get(j.refId)}
                   resolutionOptions={videoExtra?.resolutionOptions}
