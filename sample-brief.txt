@@ -1,0 +1,26 @@
+CAMPANA: Agua de arroz para desinflar la panza (funnel de quiz)
+Formato vertical 9:16. Dialogos en espanol rioplatense (vos). Estilo UGC casero, realista.
+
+AVATARES
+Avatar 1: mujer argentina de ~40 anos, con sobrepeso, en una cocina humilde, sostiene un vaso de
+agua de arroz. Estado posterior: la MISMA cara pero mas desinflada, con un vestido bordo, mirandose
+al espejo. La cara tiene que ser identica entre las dos imagenes.
+
+B-ROLL
+Primer plano del vaso de agua de arroz sobre la mesada de madera, luz natural.
+
+CLIPS (en orden)
+1) HOOK (IA, 8s) - [visual] selfie en mano en la cocina, mira a camara.
+   [audio] "Para dos segundos: esto me cambio la panza en serio."
+   texto en pantalla: "Para 2 segundos"
+2) REVEAL (IA, 8s) - [visual] se da vuelta frente al espejo con el vestido bordo, panza mas plana.
+   [audio] "Mira como me quedo despues de tomarlo todas las mananas."
+3) ESCEPTICISMO (IA, 8s) - [visual] se encoge de hombros, levanta una ceja.
+   [audio] "Yo tambien pensaba que era otro verso, te juro."
+4) MECANISMO (IA, 8s, b-roll) - [visual] macro del agua de arroz revuelta en el vaso, camara lenta.
+   [audio] "El agua de arroz ayuda a desinflar y a sentirte liviana."
+5) WARNING (FILMAR_REAL, 8s) - este lo grabo yo a mano con mi celular.
+   [audio] "Ojo: no lo tomes de cualquier forma, hay un truco."
+6) CTA (IA, 8s) - [visual] sonrie e invita a tocar, senala hacia abajo.
+   [audio] "Hace el quiz de 30 segundos y te digo como arrancar."
+   texto en pantalla: "Hace el quiz"
