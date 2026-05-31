@@ -1,7 +1,7 @@
 /**
  * POST /api/jobs/:id/prompt
- * Cambia el prompt de la imagen/clip del job y lo regenera.
- * Body: { prompt: string }
+ * Cambia el prompt (y para videos, el dialogo) del job y lo regenera.
+ * Body: { prompt?: string, dialogue?: string, model?: string }
  */
 import { jobsDb } from "@/lib/db";
 import { changePrompt } from "@/lib/jobs/pipeline";
@@ -19,12 +19,26 @@ export async function POST(
     const job = jobsDb.get(params.id);
     if (!job) return notFound("Job no encontrado");
 
-    const body = (await req.json()) as { prompt?: string; model?: string };
-    const prompt = (body.prompt ?? "").trim();
-    if (!prompt) return badRequest("El prompt no puede estar vacio.");
+    const body = (await req.json()) as {
+      prompt?: string;
+      dialogue?: string;
+      durationSec?: number;
+      resolution?: string;
+      model?: string;
+    };
+    const prompt = body.prompt !== undefined ? body.prompt.trim() : undefined;
+    if (prompt !== undefined && !prompt) {
+      return badRequest("El prompt no puede estar vacio.");
+    }
 
-    changePrompt(job.id, prompt, body.model);
-    enqueueJob(job.id); // regenera con el prompt (y modelo) nuevo
+    changePrompt(job.id, {
+      prompt,
+      dialogue: body.dialogue,
+      durationSec: body.durationSec,
+      resolution: body.resolution,
+      modelOverride: body.model,
+    });
+    enqueueJob(job.id); // regenera con el prompt/dialogo/duracion (y modelo) nuevo
     return ok({ updated: true, job: jobsDb.get(job.id) });
   } catch (err) {
     return serverError(err);

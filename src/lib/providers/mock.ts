@@ -9,6 +9,7 @@ import type {
   ImageGenResult,
   ImageProvider,
   LlmProvider,
+  VideoExtendInput,
   VideoGenInput,
   VideoGenResult,
   VideoProvider,
@@ -177,6 +178,17 @@ export class MockVideoProvider implements VideoProvider {
     await new Promise((r) => setTimeout(r, 800));
     const bytes = makeMp4Placeholder(
       (input.model ?? "") + ":" + input.prompt,
+      input.durationSec,
+      input.aspectRatio ?? "9:16"
+    );
+    return { bytes, mimeType: "video/mp4" };
+  }
+
+  async extend(input: VideoExtendInput): Promise<VideoGenResult> {
+    await new Promise((r) => setTimeout(r, 800));
+    // En mock devolvemos un placeholder de la duracion de la extension.
+    const bytes = makeMp4Placeholder(
+      "extend:" + (input.model ?? "") + ":" + input.prompt,
       input.durationSec,
       input.aspectRatio ?? "9:16"
     );

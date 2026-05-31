@@ -14,7 +14,12 @@ import {
   snapDuration,
 } from "../../config";
 import { buildVeoVideoPrompt } from "../../prompts";
-import type { VideoGenInput, VideoGenResult, VideoProvider } from "../types";
+import type {
+  VideoExtendInput,
+  VideoGenInput,
+  VideoGenResult,
+  VideoProvider,
+} from "../types";
 import { authHeaders, getAccessToken } from "./auth";
 
 interface LroStart {
@@ -89,6 +94,64 @@ export class VertexVideoProvider implements VideoProvider {
       throw new Error("Veo no devolvio el nombre de la operacion (LRO).");
     }
 
+    return this.pollOperation(model, start.name);
+  }
+
+  /**
+   * Extiende un video ya generado (continuacion). Veo recibe el video base en
+   * `instances[].video` y genera una continuacion de `durationSeconds` segundos.
+   * La extension siempre es a 7s (lo fija el pipeline).
+   */
+  async extend(input: VideoExtendInput): Promise<VideoGenResult> {
+    assertVertexConfig();
+    const model = resolveModel("video", input.model);
+    const startUrl = `${vertexBaseUrl()}/${model}:predictLongRunning`;
+
+    const prompt = buildVeoVideoPrompt({
+      videoPrompt:
+        input.prompt +
+        " Continue seamlessly from the provided video, keeping the same person, " +
+        "wardrobe, lighting and setting consistent.",
+      dialogue: input.dialogue,
+      durationSec: input.durationSec,
+      aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
+    });
+
+    const body = {
+      instances: [
+        {
+          prompt,
+          // Video base a extender. TODO: confirmar shape exacto del campo segun version de Veo.
+          video: {
+            bytesBase64Encoded: Buffer.from(input.videoBytes).toString("base64"),
+            mimeType: input.videoMimeType ?? "video/mp4",
+          },
+        },
+      ],
+      parameters: {
+        aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
+        durationSeconds: Math.round(input.durationSec),
+        sampleCount: 1,
+        resolution: input.resolution ?? "720p",
+        generateAudio: true,
+      },
+    };
+
+    const startRes = await fetch(startUrl, {
+      method: "POST",
+      headers: await authHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!startRes.ok) {
+      const t = await startRes.text();
+      throw new Error(
+        `Veo (${model}) extend/predictLongRunning fallo (${startRes.status}): ${t.slice(0, 500)}`
+      );
+    }
+    const start = (await startRes.json()) as LroStart;
+    if (!start.name) {
+      throw new Error("Veo no devolvio el nombre de la operacion (LRO) al extender.");
+    }
     return this.pollOperation(model, start.name);
   }
 

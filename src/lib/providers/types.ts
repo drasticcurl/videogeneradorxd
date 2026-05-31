@@ -54,8 +54,23 @@ export interface VideoGenResult {
   gcsUri?: string;
 }
 
+export interface VideoExtendInput {
+  /** video base (mp4) que se quiere extender. */
+  videoBytes: Uint8Array;
+  videoMimeType?: string;
+  prompt: string;
+  /** segundos a extender (siempre 7 por ahora). */
+  durationSec: number;
+  aspectRatio?: string;
+  resolution?: string;
+  dialogue?: string;
+  model?: string;
+}
+
 export interface VideoProvider {
   generate(input: VideoGenInput): Promise<VideoGenResult>;
+  /** Extiende un video ya generado (continuacion). Devuelve el video extendido. */
+  extend(input: VideoExtendInput): Promise<VideoGenResult>;
 }
 
 export interface Providers {

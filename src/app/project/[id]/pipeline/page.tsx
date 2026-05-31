@@ -32,6 +32,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     changePromptJob,
     control,
     setClipResolution,
+    extendJob,
   } = useProjectStore();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [view, setView] = useState<View>("storyboard");
@@ -80,6 +81,20 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     return m;
   }, [project]);
 
+  // Dialogo actual por clip.id (para precargar y editar lo que dice la persona).
+  const dialogueByRef = useMemo(() => {
+    const m = new Map<string, string>();
+    project?.plan.clips.forEach((c) => m.set(c.id, c.dialogo ?? ""));
+    return m;
+  }, [project]);
+
+  // Duracion actual por clip.id (para precargar el selector 4/6/8).
+  const durationByRef = useMemo(() => {
+    const m = new Map<string, number>();
+    project?.plan.clips.forEach((c) => m.set(c.id, c.duracion_seg));
+    return m;
+  }, [project]);
+
   const imageModels = config?.catalog.image ?? [];
   const videoModels = config?.catalog.video ?? [];
   const projectImageModel = project?.models.image ?? "";
@@ -120,18 +135,31 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
   const handlers = {
     onApprove: (id: string, index?: number) => void approveJob(id, index),
     onRegenerate: (id: string) => void regenerateJob(id),
-    onChangePrompt: (id: string, p: string, model?: string) =>
-      void changePromptJob(id, p, model),
+    onChangePrompt: (
+      id: string,
+      payload: {
+        prompt?: string;
+        dialogue?: string;
+        durationSec?: number;
+        resolution?: string;
+        model?: string;
+      }
+    ) => void changePromptJob(id, payload),
+    onExtend: (id: string) => void extendJob(id),
   };
 
   // Datos para precargar prompt + selector de modelo en cada tarjeta.
   const imageMeta = {
     promptByRef,
+    dialogueByRef,
+    durationByRef,
     modelOptions: imageModels,
     projectModel: projectImageModel,
   };
   const videoMeta = {
     promptByRef,
+    dialogueByRef,
+    durationByRef,
     modelOptions: videoModels,
     projectModel: projectVideoModel,
   };
@@ -255,11 +283,23 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
 interface GroupHandlers {
   onApprove: (id: string, index?: number) => void;
   onRegenerate: (id: string) => void;
-  onChangePrompt: (id: string, p: string, model?: string) => void;
+  onChangePrompt: (
+    id: string,
+    payload: {
+      prompt?: string;
+      dialogue?: string;
+      durationSec?: number;
+      resolution?: string;
+      model?: string;
+    }
+  ) => void;
+  onExtend: (id: string) => void;
 }
 
 interface JobMeta {
   promptByRef: Map<string, string>;
+  dialogueByRef: Map<string, string>;
+  durationByRef: Map<string, number>;
   modelOptions: { id: string; label: string }[];
   projectModel: string;
 }
@@ -300,6 +340,8 @@ function Group({
               job={j}
               projectId={projectId}
               currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
+              currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
+              currentDuration={meta.durationByRef.get(j.refId)}
               modelOptions={meta.modelOptions}
               projectModel={meta.projectModel}
               {...handlers}
@@ -346,6 +388,8 @@ function Filmstrip({
                   job={j}
                   projectId={projectId}
                   currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
+                  currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
+                  currentDuration={meta.durationByRef.get(j.refId)}
                   modelOptions={meta.modelOptions}
                   projectModel={meta.projectModel}
                   {...handlers}
