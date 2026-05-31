@@ -5,7 +5,7 @@
  */
 import { jobsDb, projectsDb } from "@/lib/db";
 import { validatePlan } from "@/lib/schema";
-import { resolveModel } from "@/lib/config";
+import { resolveModel, resolveResolution } from "@/lib/config";
 import { buildManifest, writeManifest } from "@/lib/storage";
 import { buildJobs, estimateCost } from "@/lib/jobs/pipeline";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
@@ -41,6 +41,7 @@ export async function PUT(
       plan?: unknown;
       models?: { llm?: string; image?: string; video?: string };
       imageVariants?: number;
+      defaultResolution?: string;
     };
 
     if (body.plan !== undefined) {
@@ -65,6 +66,11 @@ export async function PUT(
     if (body.imageVariants !== undefined) {
       projectsDb.update(project.id, {
         imageVariants: Math.min(4, Math.max(1, body.imageVariants)),
+      });
+    }
+    if (body.defaultResolution !== undefined) {
+      projectsDb.update(project.id, {
+        defaultResolution: resolveResolution(body.defaultResolution),
       });
     }
 

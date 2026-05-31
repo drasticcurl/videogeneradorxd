@@ -36,6 +36,8 @@ export interface AppConfig {
   catalog: { llm: ModelOption[]; image: ModelOption[]; video: ModelOption[] };
   defaults: ProjectModels;
   defaultImageVariants: number;
+  resolutions: string[];
+  defaultResolution: string;
   location: string;
   project: string | null;
   outputDir: string;
@@ -53,6 +55,7 @@ interface ProjectState {
 
   selectedModels: ProjectModels;
   imageVariants: number;
+  defaultResolution: string;
 
   project: ProjectRecord | null;
   jobs: JobRecord[];
@@ -62,6 +65,7 @@ interface ProjectState {
   setBrief: (b: string) => void;
   setModel: (kind: keyof ProjectModels, id: string) => void;
   setImageVariants: (n: number) => void;
+  setDefaultResolution: (r: string) => void;
   loadConfig: () => Promise<void>;
   parseBrief: () => Promise<void>;
   setPlanFromJson: (raw: unknown) => void;
@@ -77,6 +81,7 @@ interface ProjectState {
   regenerateJob: (jobId: string) => Promise<void>;
   changePromptJob: (jobId: string, prompt: string) => Promise<void>;
   control: (action: "pause" | "resume" | "cancel") => Promise<void>;
+  setClipResolution: (clipId: string, resolution: string) => Promise<void>;
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -90,9 +95,9 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 const FALLBACK_MODELS: ProjectModels = {
-  llm: "gemini-3.1-pro-preview",
-  image: "gemini-3.1-flash-image",
-  video: "veo-3.1-lite-generate-001",
+  llm: "gemini-2.5-flash",
+  image: "gemini-2.5-flash-image",
+  video: "veo-3.1-generate-001",
 };
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -105,6 +110,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   selectedModels: { ...FALLBACK_MODELS },
   imageVariants: 1,
+  defaultResolution: "720p",
 
   project: null,
   jobs: [],
@@ -115,6 +121,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setModel: (kind, id) =>
     set((s) => ({ selectedModels: { ...s.selectedModels, [kind]: id } })),
   setImageVariants: (n) => set({ imageVariants: Math.min(4, Math.max(1, n)) }),
+  setDefaultResolution: (r) => set({ defaultResolution: r }),
 
   loadConfig: async () => {
     try {
@@ -123,6 +130,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         config: cfg,
         selectedModels: { ...cfg.defaults },
         imageVariants: cfg.defaultImageVariants,
+        defaultResolution: cfg.defaultResolution,
       });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
@@ -193,6 +201,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       plan: data.project.plan,
       selectedModels: data.project.models,
       imageVariants: data.project.imageVariants,
+      defaultResolution: data.project.defaultResolution ?? "720p",
     });
   },
 
@@ -247,5 +256,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       body: JSON.stringify({ action }),
     });
     await get().refreshJobs(id);
+  },
+
+  setClipResolution: async (clipId, resolution) => {
+    const { project, plan } = get();
+    if (!project || !plan) return;
+    // Actualizamos la resolucion del clip en el plan y persistimos via PUT.
+    const newPlan: ProjectPlan = {
+      ...plan,
+      clips: plan.clips.map((c) =>
+        c.id === clipId ? { ...c, resolucion: resolution as "720p" | "1080p" } : c
+      ),
+    };
+    set({ plan: newPlan });
+    await fetch(`/api/projects/${project.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan: newPlan }),
+    });
+    await get().loadProject(project.id);
   },
 }));

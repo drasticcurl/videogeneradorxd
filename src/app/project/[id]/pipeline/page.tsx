@@ -22,18 +22,23 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     project,
     jobs,
     logs,
+    config,
+    defaultResolution,
     loadProject,
+    loadConfig,
     refreshJobs,
     approveJob,
     regenerateJob,
     changePromptJob,
     control,
+    setClipResolution,
   } = useProjectStore();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [view, setView] = useState<View>("storyboard");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    loadConfig();
     loadProject(projectId).catch((e) =>
       setLoadError(e instanceof Error ? e.message : String(e))
     );
@@ -65,6 +70,16 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     return m;
   }, [project]);
 
+  const resByClip = useMemo(() => {
+    const m = new Map<string, string>();
+    project?.plan.clips.forEach((c) =>
+      m.set(c.id, c.resolucion ?? project.defaultResolution ?? defaultResolution)
+    );
+    return m;
+  }, [project, defaultResolution]);
+
+  const resolutionOptions = config?.resolutions ?? ["720p", "1080p"];
+
   const groups = useMemo(() => {
     const t2i: JobRecord[] = [];
     const i2i: JobRecord[] = [];
@@ -91,6 +106,14 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     onApprove: (id: string, index?: number) => void approveJob(id, index),
     onRegenerate: (id: string) => void regenerateJob(id),
     onChangePrompt: (id: string, p: string) => void changePromptJob(id, p),
+  };
+
+  // Props extra para videos (selector de resolucion por clip).
+  const videoExtra = {
+    resByClip,
+    resolutionOptions,
+    onChangeResolution: (clipId: string, r: string) =>
+      void setClipResolution(clipId, r),
   };
 
   if (loadError) {
@@ -186,13 +209,13 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
         <div className="space-y-5">
           <Group title="Imagenes base (text2image)" jobs={groups.t2i} projectId={projectId} handlers={handlers} />
           <Group title="Imagenes derivadas (image2image · misma identidad)" jobs={groups.i2i} projectId={projectId} handlers={handlers} />
-          <Filmstrip title="Clips en orden" jobs={groups.vids} projectId={projectId} handlers={handlers} />
+          <Filmstrip title="Clips en orden" jobs={groups.vids} projectId={projectId} handlers={handlers} videoExtra={videoExtra} />
         </div>
       ) : (
         <div className="space-y-5">
           <Group title="1 · Imagenes base" jobs={groups.t2i} projectId={projectId} handlers={handlers} />
           <Group title="2 · Imagenes derivadas" jobs={groups.i2i} projectId={projectId} handlers={handlers} />
-          <Group title="3 · Videos" jobs={groups.vids} projectId={projectId} handlers={handlers} />
+          <Group title="3 · Videos" jobs={groups.vids} projectId={projectId} handlers={handlers} videoExtra={videoExtra} />
         </div>
       )}
 
@@ -207,16 +230,24 @@ interface GroupHandlers {
   onChangePrompt: (id: string, p: string) => void;
 }
 
+interface VideoExtra {
+  resByClip: Map<string, string>;
+  resolutionOptions: string[];
+  onChangeResolution: (clipId: string, r: string) => void;
+}
+
 function Group({
   title,
   jobs,
   projectId,
   handlers,
+  videoExtra,
 }: {
   title: string;
   jobs: JobRecord[];
   projectId: string;
   handlers: GroupHandlers;
+  videoExtra?: VideoExtra;
 }) {
   return (
     <section className="space-y-2">
@@ -228,7 +259,15 @@ function Group({
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {jobs.map((j) => (
-            <JobCard key={j.id} job={j} projectId={projectId} {...handlers} />
+            <JobCard
+              key={j.id}
+              job={j}
+              projectId={projectId}
+              {...handlers}
+              resolution={videoExtra?.resByClip.get(j.refId)}
+              resolutionOptions={videoExtra?.resolutionOptions}
+              onChangeResolution={videoExtra?.onChangeResolution}
+            />
           ))}
         </div>
       )}
@@ -241,11 +280,13 @@ function Filmstrip({
   jobs,
   projectId,
   handlers,
+  videoExtra,
 }: {
   title: string;
   jobs: JobRecord[];
   projectId: string;
   handlers: GroupHandlers;
+  videoExtra?: VideoExtra;
 }) {
   return (
     <section className="space-y-2">
@@ -260,7 +301,14 @@ function Filmstrip({
             <div key={j.id} className="flex items-center gap-3">
               {i > 0 && <span className="text-slate-600">→</span>}
               <div className="w-56 shrink-0">
-                <JobCard job={j} projectId={projectId} {...handlers} />
+                <JobCard
+                  job={j}
+                  projectId={projectId}
+                  {...handlers}
+                  resolution={videoExtra?.resByClip.get(j.refId)}
+                  resolutionOptions={videoExtra?.resolutionOptions}
+                  onChangeResolution={videoExtra?.onChangeResolution}
+                />
               </div>
             </div>
           ))}

@@ -38,6 +38,8 @@ export interface VideoGenInput {
   prompt: string;
   durationSec: number;
   aspectRatio?: string;
+  /** resolucion del video (720p / 1080p). */
+  resolution?: string;
   /** dialogo a usar para audio (Veo genera el audio hablado). */
   dialogue?: string;
   /** id de modelo de video (Veo 3.1). */

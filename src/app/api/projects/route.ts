@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { projectsDb } from "@/lib/db";
 import { validatePlan } from "@/lib/schema";
-import { resolveModel, config } from "@/lib/config";
+import { resolveModel, resolveResolution, config } from "@/lib/config";
 import { ensureProjectDirs, projectDir, writeManifest } from "@/lib/storage";
 import { badRequest, ok, serverError } from "@/lib/http";
 import type { ProjectRecord } from "@/lib/types";
@@ -34,6 +34,7 @@ export async function POST(req: Request) {
       plan?: unknown;
       models?: { llm?: string; image?: string; video?: string };
       imageVariants?: number;
+      defaultResolution?: string;
     };
 
     const validation = validatePlan(body.plan);
@@ -62,6 +63,7 @@ export async function POST(req: Request) {
         4,
         Math.max(1, body.imageVariants ?? config.defaultImageVariants)
       ),
+      defaultResolution: resolveResolution(body.defaultResolution),
       outputDir: projectDir(id),
       createdAt: now,
       updatedAt: now,

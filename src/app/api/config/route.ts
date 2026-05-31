@@ -3,7 +3,7 @@
  * Config no sensible para la UI: modo proveedor, catalogo de modelos, defaults,
  * carpeta de salida, si hay ffmpeg. NO expone credenciales.
  */
-import { config, MODEL_CATALOG } from "@/lib/config";
+import { config, MODEL_CATALOG, VIDEO_RESOLUTIONS, DEFAULT_RESOLUTION } from "@/lib/config";
 import { hasFfmpeg } from "@/lib/providers/placeholder";
 import { ok } from "@/lib/http";
 
@@ -16,6 +16,8 @@ export async function GET() {
     catalog: MODEL_CATALOG,
     defaults: config.models,
     defaultImageVariants: config.defaultImageVariants,
+    resolutions: VIDEO_RESOLUTIONS,
+    defaultResolution: DEFAULT_RESOLUTION,
     location: config.google.location,
     project: config.google.project || null,
     outputDir: config.storage.outputDir,
