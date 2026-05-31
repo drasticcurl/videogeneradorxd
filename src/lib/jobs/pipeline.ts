@@ -8,7 +8,7 @@
  *   - clips FILMAR_REAL no generan job (placeholders para subir a mano).
  */
 import path from "node:path";
-import { config, ASPECT_RATIO } from "../config";
+import { config, ASPECT_RATIO, resolveResolution } from "../config";
 import { jobsDb, logsDb, projectsDb } from "../db";
 import { getImageProvider, getVideoProvider } from "../providers";
 import {
@@ -243,7 +243,8 @@ async function runVideoGeneration(
   }
   const imageBytes = await readBytes(project.id, imgJob.outputPath);
 
-  logEvent(project.id, "info", `Generando video "${clip.id}" con audio`, {
+  const resolution = resolveResolution(clip.resolucion ?? project.defaultResolution);
+  logEvent(project.id, "info", `Generando video "${clip.id}" con audio (${resolution})`, {
     jobId: job.id,
     model,
   });
@@ -254,6 +255,7 @@ async function runVideoGeneration(
     prompt: clip.video_prompt,
     durationSec: clip.duracion_seg,
     aspectRatio: ASPECT_RATIO,
+    resolution,
     dialogue: clip.dialogo,
     model,
   });
