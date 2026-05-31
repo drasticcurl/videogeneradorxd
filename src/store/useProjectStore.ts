@@ -79,7 +79,7 @@ interface ProjectState {
   // acciones de pipeline
   approveJob: (jobId: string, index?: number) => Promise<void>;
   regenerateJob: (jobId: string) => Promise<void>;
-  changePromptJob: (jobId: string, prompt: string) => Promise<void>;
+  changePromptJob: (jobId: string, prompt: string, model?: string) => Promise<void>;
   control: (action: "pause" | "resume" | "cancel") => Promise<void>;
   setClipResolution: (clipId: string, resolution: string) => Promise<void>;
 }
@@ -237,11 +237,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (id) await get().refreshJobs(id);
   },
 
-  changePromptJob: async (jobId, prompt) => {
+  changePromptJob: async (jobId, prompt, model) => {
     await fetch(`/api/jobs/${jobId}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, model }),
     });
     const id = get().project?.id;
     if (id) await get().refreshJobs(id);

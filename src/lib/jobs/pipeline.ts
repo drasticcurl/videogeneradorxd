@@ -88,6 +88,7 @@ export function buildJobs(project: ProjectRecord): JobRecord[] {
     variants: 1,
     locked: false,
     model: null,
+    modelOverride: null,
     meta: {},
     createdAt: now,
     updatedAt: now,
@@ -176,7 +177,7 @@ async function runImageGeneration(
   const found = findImage(project.plan, job.refId);
   if (!found) throw new Error(`Imagen "${job.refId}" no existe en el plan.`);
   const { img } = found;
-  const model = project.models.image;
+  const model = job.modelOverride || project.models.image;
   const negativePrompt =
     img.negative_prompt || project.plan.global.negative_prompt || undefined;
 
@@ -233,7 +234,7 @@ async function runVideoGeneration(
 ): Promise<void> {
   const clip = project.plan.clips.find((c) => c.id === job.refId);
   if (!clip) throw new Error(`Clip "${job.refId}" no existe en el plan.`);
-  const model = project.models.video;
+  const model = job.modelOverride || project.models.video;
 
   const imgJob = jobsDb.get(imageJobId(project.id, clip.image_id));
   if (!imgJob || imgJob.status !== "done" || !imgJob.outputPath) {
@@ -320,7 +321,11 @@ export async function approveJob(
 }
 
 /** Cambia el prompt de la imagen/clip de un job (para regenerar con otro prompt). */
-export function changePrompt(jobId: string, newPrompt: string): JobRecord | undefined {
+export function changePrompt(
+  jobId: string,
+  newPrompt: string,
+  modelOverride?: string
+): JobRecord | undefined {
   const job = jobsDb.get(jobId);
   if (!job) return undefined;
   const project = projectsDb.get(job.projectId);
@@ -335,10 +340,14 @@ export function changePrompt(jobId: string, newPrompt: string): JobRecord | unde
     if (clip) clip.video_prompt = newPrompt;
   }
   projectsDb.update(project.id, { plan });
+  // Si se eligio un modelo distinto para este job, lo guardamos como override.
+  if (modelOverride !== undefined) {
+    jobsDb.update(jobId, { modelOverride: modelOverride || null });
+  }
   logEvent(job.projectId, "info", `Prompt actualizado para "${job.refId}".`, {
     jobId,
   });
-  return job;
+  return jobsDb.get(jobId);
 }
 
 /* ----------------------------- manifest ------------------------------ */
