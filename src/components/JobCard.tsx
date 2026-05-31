@@ -3,9 +3,13 @@
  * Tarjeta de job con flujo de aprobacion:
  *  - awaiting_approval (imagen): muestra las variantes candidatas, elegís una y Aprobás.
  *  - awaiting_approval (video): muestra el video y Aprobás.
- *  - Acciones: Aprobar / Regenerar / Cambiar prompt.
- *    Al "Cambiar prompt" se PRECARGA el prompt actual (el que se usó para generar)
- *    y se muestra un selector de modelo para regenerar ese item puntual.
+ *  - Acciones: Aprobar / Regenerar / Editar.
+ *    Al "Editar" se PRECARGA el prompt actual (el que se usó para generar), el diálogo,
+ *    la duración y la resolución, y se muestra un selector de modelo. Desde el editor
+ *    podés:
+ *      · "Guardar sin regenerar": solo persiste los cambios (texto/tiempo/diálogo) para
+ *        poder revisarlos y controlarlos ANTES de generar en batch (no consume cuota).
+ *      · "Guardar y regenerar": guarda y vuelve a generar ese item puntual.
  */
 import { useState } from "react";
 import { StatusBadge } from "./StatusBadge";
@@ -39,6 +43,7 @@ interface Props {
       durationSec?: number;
       resolution?: string;
       model?: string;
+      regenerate?: boolean;
     }
   ) => void;
   /** Solo videos: extender el video +7s. */
@@ -95,6 +100,23 @@ export function JobCard({
     setResChoice(resolution ?? "720p");
     setModelChoice(effectiveModel);
     setEditing(true);
+  }
+
+  // Guarda los cambios del editor. Si regenerate=false SOLO persiste (no genera),
+  // util para ajustar texto/tiempo/dialogo antes de generar en batch.
+  function submitEdits(regenerate: boolean) {
+    const payload = isImage
+      ? { prompt: promptText.trim(), model: modelChoice, regenerate }
+      : {
+          prompt: promptText.trim(),
+          dialogue: dialogueText,
+          durationSec: durationChoice,
+          resolution: resChoice,
+          model: modelChoice,
+          regenerate,
+        };
+    if (payload.prompt) onChangePrompt(job.id, payload);
+    setEditing(false);
   }
 
   return (
@@ -181,7 +203,7 @@ export function JobCard({
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-slate-100">
-                Editar prompt · <span className="text-slate-400">{job.label}</span>
+                Editar · <span className="text-slate-400">{job.label}</span>
               </h3>
               <span className="rounded bg-slate-700 px-2 py-0.5 text-xs text-slate-300">
                 {isImage ? "imagen" : "video"}
@@ -283,31 +305,32 @@ export function JobCard({
               </select>
             </div>
 
-            <div className="flex justify-end gap-2 pt-1">
-              <button
-                onClick={() => setEditing(false)}
-                className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={() => {
-                  const payload = isImage
-                    ? { prompt: promptText.trim(), model: modelChoice }
-                    : {
-                        prompt: promptText.trim(),
-                        dialogue: dialogueText,
-                        durationSec: durationChoice,
-                        resolution: resChoice,
-                        model: modelChoice,
-                      };
-                  if (payload.prompt) onChangePrompt(job.id, payload);
-                  setEditing(false);
-                }}
-                className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-              >
-                Guardar y regenerar
-              </button>
+            <div className="flex flex-col gap-2 pt-1">
+              <p className="text-[11px] leading-relaxed text-slate-500">
+                «Guardar sin regenerar» actualiza el texto, el tiempo y el diálogo
+                (audio) sin volver a generar — útil para revisarlos y controlarlos
+                antes de generar en batch. No consume cuota.
+              </p>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  onClick={() => setEditing(false)}
+                  className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => submitEdits(false)}
+                  className="rounded-lg border border-emerald-600/60 px-4 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10"
+                >
+                  💾 Guardar sin regenerar
+                </button>
+                <button
+                  onClick={() => submitEdits(true)}
+                  className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                >
+                  ↻ Guardar y regenerar
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -353,9 +376,10 @@ export function JobCard({
           <button
             onClick={openEditor}
             disabled={job.status === "generating"}
+            title="Editá prompt, diálogo, tiempo y resolución. Podés guardar sin regenerar para controlarlo antes del batch."
             className="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
           >
-            ✎ Cambiar prompt
+            ✎ Editar
           </button>
           {!isImage && onExtend && job.outputPath && (
             <button
