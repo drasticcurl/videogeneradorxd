@@ -21,13 +21,28 @@ interface Props {
   projectId: string;
   /** prompt actual del item (image.prompt o clip.video_prompt) para precargar al editar */
   currentPrompt: string;
+  /** dialogo actual del clip (solo videos) para precargar al editar */
+  currentDialogue?: string;
+  /** duracion actual del clip en segundos (solo videos) */
+  currentDuration?: number;
   /** opciones de modelo para el selector (catalogo de imagen o de video segun el tipo) */
   modelOptions: ModelOption[];
   /** modelo del proyecto para este tipo (default si no hay override) */
   projectModel: string;
   onApprove: (jobId: string, index?: number) => void;
   onRegenerate: (jobId: string) => void;
-  onChangePrompt: (jobId: string, prompt: string, model?: string) => void;
+  onChangePrompt: (
+    jobId: string,
+    payload: {
+      prompt?: string;
+      dialogue?: string;
+      durationSec?: number;
+      resolution?: string;
+      model?: string;
+    }
+  ) => void;
+  /** Solo videos: extender el video +7s. */
+  onExtend?: (jobId: string) => void;
   /** Solo videos: resolucion actual del clip y callback para cambiarla. */
   resolution?: string;
   resolutionOptions?: string[];
@@ -38,15 +53,20 @@ function fileUrl(projectId: string, rel: string) {
   return `/api/files/${projectId}/${rel}`;
 }
 
+const DURATION_OPTIONS = [4, 6, 8];
+
 export function JobCard({
   job,
   projectId,
   currentPrompt,
+  currentDialogue,
+  currentDuration,
   modelOptions,
   projectModel,
   onApprove,
   onRegenerate,
   onChangePrompt,
+  onExtend,
   resolution,
   resolutionOptions,
   onChangeResolution,
@@ -54,6 +74,9 @@ export function JobCard({
   const [selected, setSelected] = useState<number | null>(job.selectedIndex);
   const [editing, setEditing] = useState(false);
   const [promptText, setPromptText] = useState("");
+  const [dialogueText, setDialogueText] = useState("");
+  const [durationChoice, setDurationChoice] = useState<number>(8);
+  const [resChoice, setResChoice] = useState<string>("720p");
   const [modelChoice, setModelChoice] = useState("");
 
   const isImage = job.type === "image";
@@ -65,8 +88,11 @@ export function JobCard({
   const effectiveModel = job.modelOverride || job.model || projectModel;
 
   function openEditor() {
-    // PRECARGAMOS el prompt actual y el modelo efectivo, asi el usuario ve lo que se uso.
+    // PRECARGAMOS prompt + dialogo + duracion + resolucion + modelo efectivo.
     setPromptText(currentPrompt ?? "");
+    setDialogueText(currentDialogue ?? "");
+    setDurationChoice(currentDuration ?? 8);
+    setResChoice(resolution ?? "720p");
     setModelChoice(effectiveModel);
     setEditing(true);
   }
@@ -164,19 +190,78 @@ export function JobCard({
 
             <div className="flex flex-col gap-1">
               <label className="text-xs uppercase tracking-wide text-slate-400">
-                Prompt actual (editá lo que quieras)
+                {isImage
+                  ? "Prompt de la imagen (editá lo que quieras)"
+                  : "Prompt visual del video (cámara, acción, escena)"}
               </label>
               <textarea
                 value={promptText}
                 onChange={(e) => setPromptText(e.target.value)}
                 placeholder="Prompt…"
                 spellCheck={false}
-                className="code min-h-[320px] w-full resize-y whitespace-pre-wrap break-words rounded-lg border border-slate-600 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
+                className="code min-h-[240px] w-full resize-y whitespace-pre-wrap break-words rounded-lg border border-slate-600 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
               />
               <span className="text-[11px] text-slate-500">
                 {promptText.length} caracteres
               </span>
             </div>
+
+            {/* Solo videos: el DIALOGO que dice la persona (lo que se escucha). */}
+            {!isImage && (
+              <div className="flex flex-col gap-1">
+                <label className="text-xs uppercase tracking-wide text-slate-400">
+                  Diálogo (lo que dice la persona · es-AR)
+                </label>
+                <textarea
+                  value={dialogueText}
+                  onChange={(e) => setDialogueText(e.target.value)}
+                  placeholder="Texto hablado… (vacío = b-roll mudo)"
+                  spellCheck={false}
+                  className="min-h-[120px] w-full resize-y whitespace-pre-wrap break-words rounded-lg border border-slate-600 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
+                />
+                <span className="text-[11px] text-slate-500">
+                  {dialogueText.length} caracteres
+                </span>
+              </div>
+            )}
+
+            {/* Solo videos: duracion (4/6/8) + resolucion, campo por campo. */}
+            {!isImage && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs uppercase tracking-wide text-slate-400">
+                    Duración (segundos)
+                  </label>
+                  <select
+                    value={durationChoice}
+                    onChange={(e) => setDurationChoice(Number(e.target.value))}
+                    className="rounded-lg border border-slate-600 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
+                  >
+                    {DURATION_OPTIONS.map((d) => (
+                      <option key={d} value={d}>
+                        {d}s
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs uppercase tracking-wide text-slate-400">
+                    Resolución
+                  </label>
+                  <select
+                    value={resChoice}
+                    onChange={(e) => setResChoice(e.target.value)}
+                    className="rounded-lg border border-slate-600 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
+                  >
+                    {(resolutionOptions ?? ["720p", "1080p"]).map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-col gap-1">
               <label className="text-xs uppercase tracking-wide text-slate-400">
@@ -207,8 +292,16 @@ export function JobCard({
               </button>
               <button
                 onClick={() => {
-                  if (promptText.trim())
-                    onChangePrompt(job.id, promptText.trim(), modelChoice);
+                  const payload = isImage
+                    ? { prompt: promptText.trim(), model: modelChoice }
+                    : {
+                        prompt: promptText.trim(),
+                        dialogue: dialogueText,
+                        durationSec: durationChoice,
+                        resolution: resChoice,
+                        model: modelChoice,
+                      };
+                  if (payload.prompt) onChangePrompt(job.id, payload);
                   setEditing(false);
                 }}
                 className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
@@ -264,6 +357,16 @@ export function JobCard({
           >
             ✎ Cambiar prompt
           </button>
+          {!isImage && onExtend && job.outputPath && (
+            <button
+              onClick={() => onExtend(job.id)}
+              disabled={job.status === "generating"}
+              title="Genera 7s más de continuación y los une al final del video"
+              className="rounded-md border border-sky-600/60 px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/10 disabled:opacity-40"
+            >
+              ⏩ Extender +7s
+            </button>
+          )}
         </div>
       )}
     </div>
