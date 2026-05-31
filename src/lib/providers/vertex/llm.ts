@@ -2,7 +2,7 @@
  * Adaptador Gemini (Vertex AI) para parseBrief -> PlanJSON.
  * Usa generateContent con responseMimeType=application/json + responseSchema.
  */
-import { config, vertexBaseUrl, assertVertexConfig } from "../../config";
+import { vertexBaseUrl, assertVertexConfig, resolveModel } from "../../config";
 import { PARSER_RESPONSE_SCHEMA, PARSER_SYSTEM_PROMPT } from "../../prompts";
 import { validatePlan, type ProjectPlan } from "../../schema";
 import type { LlmProvider } from "../types";
@@ -17,9 +17,10 @@ interface GeminiResponse {
 }
 
 export class VertexLlmProvider implements LlmProvider {
-  async parseBrief(text: string): Promise<ProjectPlan> {
+  async parseBrief(text: string, opts?: { model?: string }): Promise<ProjectPlan> {
     assertVertexConfig();
-    const url = `${vertexBaseUrl()}/${config.models.llm}:generateContent`;
+    const model = resolveModel("llm", opts?.model);
+    const url = `${vertexBaseUrl()}/${model}:generateContent`;
 
     const body = {
       systemInstruction: {

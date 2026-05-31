@@ -10,6 +10,53 @@
 import path from "node:path";
 
 export type ProviderMode = "mock" | "vertex";
+export type ModelKind = "llm" | "image" | "video";
+
+export interface ModelOption {
+  id: string;
+  label: string;
+}
+
+/**
+ * Catalogo de modelos disponibles para los selectores de la UI.
+ * - Imagen: SOLO Nano Banana (Gemini image). Hace text2image e image2image.
+ * - Video: familia Veo 3.1.
+ * - Chat: Gemini para interpretar el brief.
+ */
+export const MODEL_CATALOG: Record<ModelKind, ModelOption[]> = {
+  llm: [
+    { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
+    { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+  ],
+  image: [
+    { id: "gemini-3.1-flash-image", label: "Nano Banana 2 (Flash)" },
+    { id: "gemini-3-pro-image", label: "Nano Banana Pro" },
+  ],
+  video: [
+    { id: "veo-3.1-lite-generate-001", label: "Veo 3.1 Lite" },
+    { id: "veo-3.1-generate-001", label: "Veo 3.1" },
+    { id: "veo-3.1-fast-generate-001", label: "Veo 3.1 Fast" },
+  ],
+};
+
+/** Formato fijo por ahora: vertical 9:16. */
+export const ASPECT_RATIO = "9:16";
+
+/** Duraciones validas de Veo (segundos). Se hace snap al valor mas cercano. */
+export const VALID_DURATIONS = [4, 6, 8] as const;
+
+export function snapDuration(sec: number): number {
+  let best = VALID_DURATIONS[0] as number;
+  let bestDiff = Math.abs(sec - best);
+  for (const d of VALID_DURATIONS) {
+    const diff = Math.abs(sec - d);
+    if (diff < bestDiff) {
+      best = d;
+      bestDiff = diff;
+    }
+  }
+  return best;
+}
 
 function env(name: string, fallback?: string): string {
   const v = process.env[name];
@@ -35,20 +82,23 @@ export const config = {
   },
 
   /**
-   * IDs de modelo. Verificados contra la doc oficial de Vertex AI (2025).
-   * Si Google publica nuevas versiones, cambialas por env var sin tocar el codigo.
+   * Modelos por defecto (configurables por env y por proyecto via la UI).
+   * Verifica los IDs vigentes en la doc oficial de Vertex AI.
    */
   models: {
     // Gemini para interpretar el brief -> PlanJSON estructurado.
-    llm: env("LLM_MODEL", "gemini-2.5-flash"),
-    // Imagen para text2image. (ej. imagen-4.0-generate-001 / imagen-4.0-fast-generate-001)
-    image: env("IMAGE_MODEL", "imagen-4.0-generate-001"),
-    // Modelo de imagen de Gemini para image2image / edicion con referencia (consistencia de avatar).
-    // "Nano Banana" mantiene identidad muy bien. Configurable por si se prefiere imagen-3 capability.
-    imageEdit: env("IMAGE_EDIT_MODEL", "gemini-2.5-flash-image"),
+    llm: env("LLM_MODEL", "gemini-3.1-pro-preview"),
+    // Nano Banana (Gemini image) para text2image E image2image (consistencia de avatar).
+    image: env("IMAGE_MODEL", "gemini-3.1-flash-image"),
     // Veo para imagen->video (operacion de larga duracion / LRO).
-    video: env("VIDEO_MODEL", "veo-3.0-generate-001"),
+    video: env("VIDEO_MODEL", "veo-3.1-lite-generate-001"),
   },
+
+  /** Cantidad de variantes por imagen (1-4). Solo aplica a imagenes, no a videos. */
+  defaultImageVariants: Math.min(
+    4,
+    Math.max(1, Number(env("IMAGE_VARIANTS", "1")))
+  ),
 
   storage: {
     // Carpeta raiz de salida. Default ./output. Cada proyecto en ./output/<project_id>/
@@ -67,6 +117,8 @@ export const config = {
     // Polling del LRO de Veo.
     veoPollIntervalMs: Number(env("VEO_POLL_INTERVAL_MS", "10000")),
     veoPollTimeoutMs: Number(env("VEO_POLL_TIMEOUT_MS", "600000")), // 10 min
+    // Maximo de entradas de log que se guardan por proyecto.
+    maxLogEntries: Number(env("PIPELINE_MAX_LOG", "500")),
   },
 
   /** Estimacion de costo aproximada (solo informativa para la UI antes de generar). */
@@ -76,6 +128,14 @@ export const config = {
     llmCallUsd: Number(env("PRICE_LLM_CALL_USD", "0.02")),
   },
 } as const;
+
+/** Valida que un id de modelo pertenezca al catalogo del tipo dado. Si no, usa el default. */
+export function resolveModel(kind: ModelKind, requested?: string): string {
+  if (requested && MODEL_CATALOG[kind].some((m) => m.id === requested)) {
+    return requested;
+  }
+  return config.models[kind];
+}
 
 /** URL base de la API REST de Vertex AI para el proyecto/region configurados. */
 export function vertexBaseUrl(): string {

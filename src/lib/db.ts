@@ -1,7 +1,7 @@
 /**
  * Base de datos LOCAL en archivo JSON (./data/db.json).
  *
- * No usamos servicios externos. Guardamos estado de proyectos y jobs.
+ * No usamos servicios externos. Guardamos estado de proyectos, jobs y logs.
  * Persistencia sincronica: como Node corre single-thread y nuestras escrituras
  * son sync, no hay races dentro del proceso. Se usa un singleton via globalThis
  * para sobrevivir al HMR de Next en dev.
@@ -9,17 +9,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config";
-import type { JobRecord, ProjectRecord } from "./types";
+import type { JobRecord, LogEntry, ProjectRecord } from "./types";
 
 interface DbShape {
   projects: Record<string, ProjectRecord>;
   jobs: Record<string, JobRecord>;
+  logs: Record<string, LogEntry[]>;
 }
 
 const DB_FILE = path.join(config.storage.dataDir, "db.json");
 
 function emptyDb(): DbShape {
-  return { projects: {}, jobs: {} };
+  return { projects: {}, jobs: {}, logs: {} };
 }
 
 function load(): DbShape {
@@ -33,6 +34,7 @@ function load(): DbShape {
     return {
       projects: parsed.projects ?? {},
       jobs: parsed.jobs ?? {},
+      logs: parsed.logs ?? {},
     };
   } catch (err) {
     console.error("[db] No se pudo leer db.json, arrancando vacio:", err);
@@ -89,6 +91,7 @@ export const projectsDb = {
     for (const jobId of Object.keys(db.jobs)) {
       if (db.jobs[jobId].projectId === id) delete db.jobs[jobId];
     }
+    delete db.logs[id];
     save();
   },
 };
@@ -135,6 +138,26 @@ export const jobsDb = {
     for (const id of Object.keys(db.jobs)) {
       if (db.jobs[id].projectId === projectId) delete db.jobs[id];
     }
+    save();
+  },
+};
+
+/* ------------------------------- Logs -------------------------------- */
+
+export const logsDb = {
+  byProject(projectId: string): LogEntry[] {
+    return db.logs[projectId] ?? [];
+  },
+  append(projectId: string, entry: LogEntry): void {
+    const list = db.logs[projectId] ?? [];
+    list.push(entry);
+    // Recortamos al maximo configurado (conservamos las mas nuevas).
+    const max = config.pipeline.maxLogEntries;
+    db.logs[projectId] = list.length > max ? list.slice(list.length - max) : list;
+    save();
+  },
+  clear(projectId: string): void {
+    delete db.logs[projectId];
     save();
   },
 };

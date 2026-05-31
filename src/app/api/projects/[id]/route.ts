@@ -1,10 +1,11 @@
 /**
  * GET    /api/projects/:id   -> proyecto + jobs + manifest + estimacion
- * PUT    /api/projects/:id   -> actualiza el plan (edicion del JSON) y/o el nombre
+ * PUT    /api/projects/:id   -> actualiza plan / nombre / modelos / variantes
  * DELETE /api/projects/:id   -> elimina proyecto y sus jobs (no borra archivos en disco)
  */
 import { jobsDb, projectsDb } from "@/lib/db";
 import { validatePlan } from "@/lib/schema";
+import { resolveModel } from "@/lib/config";
 import { buildManifest, writeManifest } from "@/lib/storage";
 import { buildJobs, estimateCost } from "@/lib/jobs/pipeline";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
@@ -23,7 +24,7 @@ export async function GET(
     project,
     jobs,
     manifest: buildManifest(project, jobs),
-    estimate: estimateCost(project.plan),
+    estimate: estimateCost(project.plan, project.imageVariants),
   });
 }
 
@@ -35,8 +36,12 @@ export async function PUT(
     const project = projectsDb.get(params.id);
     if (!project) return notFound("Proyecto no encontrado");
 
-    const body = (await req.json()) as { name?: string; plan?: unknown };
-    const patch: { name?: string; plan?: ReturnType<typeof validatePlan> } = {};
+    const body = (await req.json()) as {
+      name?: string;
+      plan?: unknown;
+      models?: { llm?: string; image?: string; video?: string };
+      imageVariants?: number;
+    };
 
     if (body.plan !== undefined) {
       const validation = validatePlan(body.plan);
@@ -48,16 +53,29 @@ export async function PUT(
     if (body.name !== undefined) {
       projectsDb.update(project.id, { name: body.name });
     }
+    if (body.models !== undefined) {
+      projectsDb.update(project.id, {
+        models: {
+          llm: resolveModel("llm", body.models.llm ?? project.models.llm),
+          image: resolveModel("image", body.models.image ?? project.models.image),
+          video: resolveModel("video", body.models.video ?? project.models.video),
+        },
+      });
+    }
+    if (body.imageVariants !== undefined) {
+      projectsDb.update(project.id, {
+        imageVariants: Math.min(4, Math.max(1, body.imageVariants)),
+      });
+    }
 
     const updated = projectsDb.get(project.id)!;
-    // Reconstruimos jobs (idempotente) y reescribimos manifest con el plan nuevo.
     buildJobs(updated);
     await writeManifest(updated, jobsDb.byProject(updated.id));
 
     return ok({
       project: updated,
       jobs: jobsDb.byProject(updated.id),
-      estimate: estimateCost(updated.plan),
+      estimate: estimateCost(updated.plan, updated.imageVariants),
     });
   } catch (err) {
     return serverError(err);

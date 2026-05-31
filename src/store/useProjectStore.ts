@@ -1,14 +1,22 @@
 "use client";
 /**
- * Estado global del cliente (Zustand): brief, plan interpretado, estimacion,
- * proyecto actual y jobs en vivo. Llamadas al backend centralizadas aca.
+ * Estado global del cliente (Zustand): config/modelos, brief, plan, estimacion,
+ * proyecto actual, jobs y logs en vivo. Llamadas al backend centralizadas aca.
  */
 import { create } from "zustand";
 import type { ProjectPlan } from "@/lib/schema";
-import type { JobRecord, Manifest, ProjectRecord } from "@/lib/types";
+import type {
+  JobRecord,
+  LogEntry,
+  Manifest,
+  ProjectModels,
+  ProjectRecord,
+} from "@/lib/types";
 
 export interface CostEstimate {
   imageCount: number;
+  baseImages: number;
+  imageVariants: number;
   videoCount: number;
   realClipCount: number;
   videoSeconds: number;
@@ -18,9 +26,16 @@ export interface CostEstimate {
   note: string;
 }
 
+export interface ModelOption {
+  id: string;
+  label: string;
+}
+
 export interface AppConfig {
   providerMode: string;
-  models: Record<string, string>;
+  catalog: { llm: ModelOption[]; image: ModelOption[]; video: ModelOption[] };
+  defaults: ProjectModels;
+  defaultImageVariants: number;
   location: string;
   project: string | null;
   outputDir: string;
@@ -36,31 +51,49 @@ interface ProjectState {
   parsing: boolean;
   error: string | null;
 
+  selectedModels: ProjectModels;
+  imageVariants: number;
+
   project: ProjectRecord | null;
   jobs: JobRecord[];
   manifest: Manifest | null;
+  logs: LogEntry[];
 
   setBrief: (b: string) => void;
+  setModel: (kind: keyof ProjectModels, id: string) => void;
+  setImageVariants: (n: number) => void;
   loadConfig: () => Promise<void>;
   parseBrief: () => Promise<void>;
+  setPlanFromJson: (raw: unknown) => void;
   setPlan: (p: ProjectPlan) => void;
   setEstimate: (e: CostEstimate | null) => void;
   reset: () => void;
 
   loadProject: (id: string) => Promise<void>;
   refreshJobs: (id: string) => Promise<void>;
+
+  // acciones de pipeline
+  approveJob: (jobId: string, index?: number) => Promise<void>;
+  regenerateJob: (jobId: string) => Promise<void>;
+  changePromptJob: (jobId: string, prompt: string) => Promise<void>;
+  control: (action: "pause" | "resume" | "cancel") => Promise<void>;
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const msg =
-      (data && (data.error as string)) || `Error ${res.status} en ${url}`;
+    const msg = (data && (data.error as string)) || `Error ${res.status} en ${url}`;
     throw new Error(msg);
   }
   return data as T;
 }
+
+const FALLBACK_MODELS: ProjectModels = {
+  llm: "gemini-3.1-pro-preview",
+  image: "gemini-3.1-flash-image",
+  video: "veo-3.1-lite-generate-001",
+};
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   config: null,
@@ -70,23 +103,34 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   parsing: false,
   error: null,
 
+  selectedModels: { ...FALLBACK_MODELS },
+  imageVariants: 1,
+
   project: null,
   jobs: [],
   manifest: null,
+  logs: [],
 
   setBrief: (b) => set({ brief: b }),
+  setModel: (kind, id) =>
+    set((s) => ({ selectedModels: { ...s.selectedModels, [kind]: id } })),
+  setImageVariants: (n) => set({ imageVariants: Math.min(4, Math.max(1, n)) }),
 
   loadConfig: async () => {
     try {
       const cfg = await jsonFetch<AppConfig>("/api/config");
-      set({ config: cfg });
+      set({
+        config: cfg,
+        selectedModels: { ...cfg.defaults },
+        imageVariants: cfg.defaultImageVariants,
+      });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
     }
   },
 
   parseBrief: async () => {
-    const { brief } = get();
+    const { brief, selectedModels, imageVariants } = get();
     set({ parsing: true, error: null });
     try {
       const data = await jsonFetch<{ plan: ProjectPlan; estimate: CostEstimate }>(
@@ -94,7 +138,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ brief }),
+          body: JSON.stringify({
+            brief,
+            model: selectedModels.llm,
+            imageVariants,
+          }),
         }
       );
       set({ plan: data.plan, estimate: data.estimate, parsing: false });
@@ -103,6 +151,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         parsing: false,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  },
+
+  setPlanFromJson: (raw) => {
+    try {
+      const plan = typeof raw === "string" ? JSON.parse(raw) : raw;
+      set({ plan: plan as ProjectPlan, error: null });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : "JSON invalido" });
     }
   },
 
@@ -118,6 +175,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       project: null,
       jobs: [],
       manifest: null,
+      logs: [],
     }),
 
   loadProject: async (id) => {
@@ -133,6 +191,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       manifest: data.manifest,
       estimate: data.estimate,
       plan: data.project.plan,
+      selectedModels: data.project.models,
+      imageVariants: data.project.imageVariants,
     });
   },
 
@@ -141,12 +201,51 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projectStatus: ProjectRecord["status"];
       jobs: JobRecord[];
       manifest: Manifest;
+      logs: LogEntry[];
     }>(`/api/projects/${id}/jobs`);
     const current = get().project;
     set({
       jobs: data.jobs,
       manifest: data.manifest,
+      logs: data.logs ?? [],
       project: current ? { ...current, status: data.projectStatus } : current,
     });
+  },
+
+  approveJob: async (jobId, index) => {
+    await fetch(`/api/jobs/${jobId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index }),
+    });
+    const id = get().project?.id;
+    if (id) await get().refreshJobs(id);
+  },
+
+  regenerateJob: async (jobId) => {
+    await fetch(`/api/jobs/${jobId}/retry`, { method: "POST" });
+    const id = get().project?.id;
+    if (id) await get().refreshJobs(id);
+  },
+
+  changePromptJob: async (jobId, prompt) => {
+    await fetch(`/api/jobs/${jobId}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    const id = get().project?.id;
+    if (id) await get().refreshJobs(id);
+  },
+
+  control: async (action) => {
+    const id = get().project?.id;
+    if (!id) return;
+    await fetch(`/api/projects/${id}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    await get().refreshJobs(id);
   },
 }));
