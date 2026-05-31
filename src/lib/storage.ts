@@ -3,10 +3,12 @@
  *
  * Estructura por proyecto:
  *   ./output/<project_id>/
- *     images/<image_id>.png
+ *     images/<image_id>.png              (imagen aprobada/elegida)
+ *     images/_candidates/<id>__vN.png    (candidatos antes de aprobar)
  *     clips/NN_<clip>.mp4
  *     manifest.json
- *     final.mp4            (opcional, si se hace stitch con ffmpeg)
+ *     pipeline.log
+ *     final.mp4                          (opcional, si se hace stitch con ffmpeg)
  *
  * NADA se sube a servicios externos.
  */
@@ -17,13 +19,15 @@ import { config } from "./config";
 import type { JobRecord, Manifest, ProjectRecord } from "./types";
 
 export function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 60) || "item";
+  return (
+    input
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60) || "item"
+  );
 }
 
 export function projectDir(projectId: string): string {
@@ -37,13 +41,28 @@ export function clipsDir(projectId: string): string {
 }
 
 export async function ensureProjectDirs(projectId: string): Promise<void> {
-  await fsp.mkdir(imagesDir(projectId), { recursive: true });
+  await fsp.mkdir(path.join(imagesDir(projectId), "_candidates"), {
+    recursive: true,
+  });
   await fsp.mkdir(clipsDir(projectId), { recursive: true });
 }
 
-/** Nombre de archivo de imagen relativo a la carpeta del proyecto. */
+/** Imagen aprobada/canonica relativa a la carpeta del proyecto. */
 export function imageRelPath(imageId: string, ext = "png"): string {
   return path.posix.join("images", `${slugify(imageId)}.${ext}`);
+}
+
+/** Candidato de imagen (antes de aprobar). */
+export function candidateRelPath(
+  imageId: string,
+  index: number,
+  ext = "png"
+): string {
+  return path.posix.join(
+    "images",
+    "_candidates",
+    `${slugify(imageId)}__v${index}.${ext}`
+  );
 }
 
 /** Nombre de archivo de clip: NN_<slug>.mp4 (ordenado por "orden"). */
@@ -71,8 +90,32 @@ export async function readBytes(
   return fsp.readFile(abs);
 }
 
+export async function copyWithin(
+  projectId: string,
+  fromRel: string,
+  toRel: string
+): Promise<string> {
+  const fromAbs = path.join(projectDir(projectId), fromRel);
+  const toAbs = path.join(projectDir(projectId), toRel);
+  await fsp.mkdir(path.dirname(toAbs), { recursive: true });
+  await fsp.copyFile(fromAbs, toAbs);
+  return toRel;
+}
+
+export async function removeRel(projectId: string, relPath: string): Promise<void> {
+  try {
+    await fsp.unlink(path.join(projectDir(projectId), relPath));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function absPathFor(projectId: string, relPath: string): string {
   return path.join(projectDir(projectId), relPath);
+}
+
+export function existsRel(projectId: string, relPath: string): boolean {
+  return fs.existsSync(absPathFor(projectId, relPath));
 }
 
 /**
@@ -113,6 +156,7 @@ export function buildManifest(
         prompt: img.prompt,
         status: job?.status ?? "pending",
         file: job?.outputPath ?? null,
+        model: job?.model ?? null,
       });
     }
   }
@@ -122,9 +166,8 @@ export function buildManifest(
     .sort((a, b) => a.orden - b.orden)
     .map((clip) => {
       if (clip.etiqueta === "FILMAR_REAL") {
-        // El placeholder puede tener un archivo subido manualmente.
         const rel = clipRelPath(clip.orden, clip.id);
-        const exists = fs.existsSync(absPathFor(project.id, rel));
+        const exists = existsRel(project.id, rel);
         return {
           id: clip.id,
           orden: clip.orden,
@@ -136,6 +179,7 @@ export function buildManifest(
           on_screen_text: clip.on_screen_text,
           status: exists ? "done" : "placeholder",
           file: exists ? rel : null,
+          model: null,
         };
       }
       const job = videoJobByRef.get(clip.id);
@@ -150,11 +194,12 @@ export function buildManifest(
         on_screen_text: clip.on_screen_text,
         status: job?.status ?? "pending",
         file: job?.outputPath ?? null,
+        model: job?.model ?? null,
       };
     });
 
   const finalRel = "final.mp4";
-  const finalExists = fs.existsSync(absPathFor(project.id, finalRel));
+  const finalExists = existsRel(project.id, finalRel);
 
   return {
     project_id: project.id,
@@ -162,6 +207,7 @@ export function buildManifest(
     created_at: project.createdAt,
     updated_at: new Date().toISOString(),
     provider_mode: config.providerMode,
+    models: project.models,
     global: project.plan.global,
     images,
     clips,
@@ -179,4 +225,18 @@ export async function writeManifest(
   const abs = absPathFor(project.id, "manifest.json");
   await fsp.writeFile(abs, JSON.stringify(manifest, null, 2), "utf8");
   return manifest;
+}
+
+/** Agrega una linea al pipeline.log del proyecto (best-effort). */
+export function appendLogFile(
+  projectId: string,
+  line: string
+): void {
+  try {
+    const abs = absPathFor(projectId, "pipeline.log");
+    fs.mkdirSync(projectDir(projectId), { recursive: true });
+    fs.appendFileSync(abs, line + "\n", "utf8");
+  } catch {
+    /* best-effort */
+  }
 }

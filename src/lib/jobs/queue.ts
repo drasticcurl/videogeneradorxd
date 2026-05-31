@@ -1,22 +1,24 @@
 /**
  * Cola de jobs en backend (en memoria, dentro del proceso de Next).
  *
- * - Respeta dependencias (un job corre solo si su dependsOn esta "done").
- * - Concurrencia limitada (config.pipeline.concurrency).
- * - Reintentos con backoff exponencial + jitter.
- * - Idempotente: regenerar UN job no rehace el resto.
+ * - Respeta dependencias: un job corre solo si su dependencia esta APROBADA ("done").
+ * - Tras generar, el job queda en "awaiting_approval" (el usuario aprueba/regenera).
+ * - Concurrencia limitada, reintentos con backoff exponencial + jitter.
+ * - Pausar / reanudar / cancelar por proyecto.
+ * - Idempotente: regenerar UN job no rehace el resto; lo aprobado queda lockeado.
  *
  * Singleton via globalThis para sobrevivir al HMR de Next en dev.
  */
 import { config } from "../config";
 import { jobsDb, projectsDb } from "../db";
 import type { JobRecord, ProjectStatus } from "../types";
-import { executeJob, refreshManifest } from "./pipeline";
+import { logEvent, refreshManifest, runJobGeneration } from "./pipeline";
 
 interface QueueState {
   activeProjects: Set<string>;
-  running: Set<string>; // job ids en ejecucion
-  retryAt: Map<string, number>; // job id -> timestamp minimo para reintentar
+  pausedProjects: Set<string>;
+  running: Set<string>;
+  retryAt: Map<string, number>;
   pumping: boolean;
 }
 
@@ -25,6 +27,7 @@ const state: QueueState =
   globalForQueue.__augcQueue ??
   (globalForQueue.__augcQueue = {
     activeProjects: new Set(),
+    pausedProjects: new Set(),
     running: new Set(),
     retryAt: new Map(),
     pumping: false,
@@ -39,6 +42,7 @@ function backoffDelay(attempt: number): number {
 
 /** Marca el proyecto para procesar y arranca el bombeo. */
 export function enqueueProject(projectId: string): void {
+  state.pausedProjects.delete(projectId);
   state.activeProjects.add(projectId);
   projectsDb.update(projectId, { status: "running" });
   pump();
@@ -52,15 +56,40 @@ export function enqueueJob(jobId: string): void {
     status: "pending",
     error: null,
     attempts: 0,
+    locked: false,
+    // limpiamos candidatos/seleccion para imagenes (se regeneran)
+    candidates: [],
+    selectedIndex: null,
     outputPath: job.type === "image" ? null : job.outputPath,
   });
   state.retryAt.delete(jobId);
+  state.pausedProjects.delete(job.projectId);
   state.activeProjects.add(job.projectId);
   projectsDb.update(job.projectId, { status: "running" });
+  logEvent(job.projectId, "info", `Regenerando "${job.refId}"`, { jobId });
   pump();
 }
 
-/** Determina si un job puede correr ahora (deps done, no en backoff). */
+/** Pausa / reanuda / cancela el procesamiento de un proyecto. */
+export function pauseProject(projectId: string): void {
+  state.pausedProjects.add(projectId);
+  projectsDb.update(projectId, { status: "paused" });
+  logEvent(projectId, "warn", "Pipeline pausado.");
+}
+export function resumeProject(projectId: string): void {
+  state.pausedProjects.delete(projectId);
+  state.activeProjects.add(projectId);
+  projectsDb.update(projectId, { status: "running" });
+  logEvent(projectId, "info", "Pipeline reanudado.");
+  pump();
+}
+export function cancelProject(projectId: string): void {
+  state.pausedProjects.add(projectId);
+  state.activeProjects.delete(projectId);
+  projectsDb.update(projectId, { status: "paused" });
+  logEvent(projectId, "warn", "Pipeline cancelado (los jobs en curso terminan).");
+}
+
 function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   if (job.status !== "pending") return "wait";
   const until = state.retryAt.get(job.id);
@@ -68,20 +97,20 @@ function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   if (!job.dependsOn) return "run";
   const dep = jobsDb.get(job.dependsOn);
   if (!dep) return "dep-failed";
-  if (dep.status === "done") return "run";
+  if (dep.status === "done") return "run"; // dependencia APROBADA
   if (dep.status === "failed") return "dep-failed";
-  return "wait";
+  return "wait"; // dep pending/generating/awaiting_approval
 }
 
 function collectPending(): JobRecord[] {
   const out: JobRecord[] = [];
   for (const projectId of state.activeProjects) {
+    if (state.pausedProjects.has(projectId)) continue;
     out.push(...jobsDb.byProject(projectId).filter((j) => j.status === "pending"));
   }
   return out;
 }
 
-/** Bombea jobs runnable hasta el limite de concurrencia. */
 function pump(): void {
   if (state.pumping) return;
   state.pumping = true;
@@ -103,11 +132,13 @@ function pump(): void {
             status: "failed",
             error: "La dependencia (imagen previa) fallo, no se puede generar.",
           });
+          logEvent(job.projectId, "error", `"${job.refId}" cancelado: la dependencia fallo.`, {
+            jobId: job.id,
+          });
         }
       }
 
       if (!started) {
-        // Hay pendientes pero ninguno runnable ahora (esperando deps o backoff).
         if (!scheduledRetryTick) {
           scheduledRetryTick = true;
           setTimeout(() => pump(), 500);
@@ -131,8 +162,9 @@ function startJob(job: JobRecord): void {
 
   void (async () => {
     try {
-      const outputPath = await executeJob(job);
-      jobsDb.update(job.id, { status: "done", outputPath, error: null });
+      await runJobGeneration(job);
+      // Tras generar, espera aprobacion del usuario.
+      jobsDb.update(job.id, { status: "awaiting_approval", error: null });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const current = jobsDb.get(job.id);
@@ -146,9 +178,15 @@ function startJob(job: JobRecord): void {
             delay / 1000
           )}s...`,
         });
+        logEvent(job.projectId, "warn", `"${job.refId}" fallo (intento ${attempts}): ${message}`, {
+          jobId: job.id,
+        });
         setTimeout(() => pump(), delay + 50);
       } else {
         jobsDb.update(job.id, { status: "failed", error: message });
+        logEvent(job.projectId, "error", `"${job.refId}" fallo definitivamente: ${message}`, {
+          jobId: job.id,
+        });
       }
     } finally {
       state.running.delete(job.id);
@@ -162,14 +200,25 @@ function startJob(job: JobRecord): void {
   })();
 }
 
-/** Si un proyecto no tiene jobs pendientes/en curso, fija su estado final. */
 function finalizeProjects(): void {
   for (const projectId of Array.from(state.activeProjects)) {
+    if (state.pausedProjects.has(projectId)) {
+      continue; // pausado: no finalizamos
+    }
     const jobs = jobsDb.byProject(projectId);
-    const anyActive = jobs.some(
-      (j) => j.status === "pending" || j.status === "generating"
+    const generating = jobs.some((j) => j.status === "generating");
+    const runnablePending = jobs.some(
+      (j) => j.status === "pending" && runnableReason(j) === "run"
     );
-    if (anyActive) continue;
+    if (generating || runnablePending) continue; // sigue trabajando
+
+    const awaiting = jobs.some((j) => j.status === "awaiting_approval");
+    if (awaiting) {
+      projectsDb.update(projectId, { status: "review" });
+      state.activeProjects.delete(projectId); // se re-activa al aprobar/regenerar
+      void refreshManifest(projectId);
+      continue;
+    }
 
     const anyFailed = jobs.some((j) => j.status === "failed");
     const anyDone = jobs.some((j) => j.status === "done");
@@ -182,10 +231,10 @@ function finalizeProjects(): void {
   }
 }
 
-/** Snapshot del estado de la cola (para debug/UI). */
 export function queueSnapshot() {
   return {
     activeProjects: Array.from(state.activeProjects),
+    pausedProjects: Array.from(state.pausedProjects),
     running: Array.from(state.running),
     concurrency: config.pipeline.concurrency,
   };

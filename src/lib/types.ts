@@ -3,8 +3,21 @@
  */
 import type { ProjectPlan } from "./schema";
 
-export type JobStatus = "pending" | "generating" | "done" | "failed";
+/** awaiting_approval = generado, esperando que el usuario apruebe (imagenes y videos). */
+export type JobStatus =
+  | "pending"
+  | "generating"
+  | "awaiting_approval"
+  | "done"
+  | "failed";
 export type JobType = "image" | "video";
+
+/** Una variante candidata generada para una imagen (cuando variants > 1). */
+export interface Candidate {
+  /** path relativo dentro de output/<projectId>/ */
+  file: string;
+  index: number;
+}
 
 export interface JobRecord {
   id: string;
@@ -20,15 +33,38 @@ export interface JobRecord {
   attempts: number;
   maxAttempts: number;
   error: string | null;
-  /** path relativo (dentro de output/<projectId>/) del archivo generado */
+  /** path relativo (dentro de output/<projectId>/) del archivo aprobado/elegido */
   outputPath: string | null;
+  /** candidatos generados (solo imagenes con variants>1, o siempre como historial) */
+  candidates: Candidate[];
+  /** indice del candidato elegido */
+  selectedIndex: number | null;
+  /** cuantas variantes generar (solo imagenes) */
+  variants: number;
+  /** una vez aprobado y bloqueado, no se regenera por "reanudar" */
+  locked: boolean;
+  /** modelo usado en la ultima ejecucion (para el log/manifest) */
+  model: string | null;
   /** info extra para debug/UI (ej operationName de Veo) */
   meta: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
 
-export type ProjectStatus = "draft" | "running" | "done" | "failed" | "partial";
+export type ProjectStatus =
+  | "draft"
+  | "running"
+  | "review"
+  | "done"
+  | "failed"
+  | "partial"
+  | "paused";
+
+export interface ProjectModels {
+  llm: string;
+  image: string;
+  video: string;
+}
 
 export interface ProjectRecord {
   id: string;
@@ -36,10 +72,24 @@ export interface ProjectRecord {
   brief: string;
   plan: ProjectPlan;
   status: ProjectStatus;
+  /** modelos elegidos para este proyecto */
+  models: ProjectModels;
+  /** variantes por imagen (1-4) */
+  imageVariants: number;
   /** path absoluto a la carpeta de salida del proyecto */
   outputDir: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type LogLevel = "info" | "warn" | "error" | "success";
+
+export interface LogEntry {
+  ts: string;
+  level: LogLevel;
+  message: string;
+  jobId?: string;
+  model?: string;
 }
 
 /** Entrada del manifest.json por imagen. */
@@ -51,6 +101,7 @@ export interface ManifestImage {
   prompt: string;
   status: JobStatus;
   file: string | null; // path relativo, ej "images/avatar1_base.png"
+  model: string | null;
 }
 
 /** Entrada del manifest.json por clip. */
@@ -65,6 +116,7 @@ export interface ManifestClip {
   on_screen_text?: string;
   status: JobStatus | "placeholder";
   file: string | null; // path relativo, ej "clips/01_hook.mp4"
+  model: string | null;
 }
 
 export interface Manifest {
@@ -73,6 +125,7 @@ export interface Manifest {
   created_at: string;
   updated_at: string;
   provider_mode: string;
+  models: ProjectModels;
   global: ProjectPlan["global"];
   images: ManifestImage[];
   clips: ManifestClip[];
