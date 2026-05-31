@@ -6,10 +6,19 @@
 import { useProjectStore } from "@/store/useProjectStore";
 
 export function ModelSelectorBar({ disabled = false }: { disabled?: boolean }) {
-  const { config, selectedModels, setModel, imageVariants, setImageVariants } =
-    useProjectStore();
+  const {
+    config,
+    selectedModels,
+    setModel,
+    imageVariants,
+    setImageVariants,
+    defaultResolution,
+    setDefaultResolution,
+  } = useProjectStore();
 
   if (!config) return null;
+
+  const resolutions = config.resolutions ?? ["720p", "1080p"];
 
   return (
     <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-700 bg-panel px-4 py-3">
@@ -45,6 +54,21 @@ export function ModelSelectorBar({ disabled = false }: { disabled?: boolean }) {
           {[1, 2, 3, 4].map((n) => (
             <option key={n} value={n}>
               {n}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className="text-xs text-slate-400">Resolucion video (default)</label>
+        <select
+          disabled={disabled}
+          value={defaultResolution}
+          onChange={(e) => setDefaultResolution(e.target.value)}
+          className="rounded-md border border-slate-600 bg-ink px-2 py-1.5 text-sm focus:border-accent focus:outline-none disabled:opacity-50"
+        >
+          {resolutions.map((r) => (
+            <option key={r} value={r}>
+              {r}
             </option>
           ))}
         </select>

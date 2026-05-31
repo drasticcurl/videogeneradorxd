@@ -37,6 +37,8 @@ export const ClipSchema = z.object({
   duracion_seg: z.number().positive(),
   etiqueta: z.enum(["IA", "FILMAR_REAL"]),
   on_screen_text: z.string().optional(),
+  /** resolucion del video para este clip; si falta, usa el default del proyecto */
+  resolucion: z.enum(["720p", "1080p"]).optional(),
 });
 
 export const GlobalSchema = z.object({

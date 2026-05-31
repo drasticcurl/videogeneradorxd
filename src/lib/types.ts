@@ -76,6 +76,8 @@ export interface ProjectRecord {
   models: ProjectModels;
   /** variantes por imagen (1-4) */
   imageVariants: number;
+  /** resolucion de video por defecto del proyecto (720p / 1080p) */
+  defaultResolution: string;
   /** path absoluto a la carpeta de salida del proyecto */
   outputDir: string;
   createdAt: string;
@@ -114,6 +116,7 @@ export interface ManifestClip {
   dialogo: string;
   duracion_seg: number;
   on_screen_text?: string;
+  resolucion?: string;
   status: JobStatus | "placeholder";
   file: string | null; // path relativo, ej "clips/01_hook.mp4"
   model: string | null;
