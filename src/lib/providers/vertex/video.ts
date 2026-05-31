@@ -62,6 +62,8 @@ export class VertexVideoProvider implements VideoProvider {
         aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
         durationSeconds: snapDuration(input.durationSec),
         sampleCount: 1,
+        // Resolucion del video (720p / 1080p). TODO: confirmar soporte por modelo.
+        resolution: input.resolution ?? "720p",
         // Veo 3.1 genera audio (incluido el dialogo). TODO: confirmar flag por modelo.
         generateAudio: true,
       },

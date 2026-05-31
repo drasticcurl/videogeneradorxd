@@ -40,6 +40,7 @@ export default function HomePage() {
     error,
     selectedModels,
     imageVariants,
+    defaultResolution,
     setBrief,
     loadConfig,
     parseBrief,
@@ -91,6 +92,7 @@ export default function HomePage() {
           plan,
           models: selectedModels,
           imageVariants,
+          defaultResolution,
         }),
       });
       const createData = await createRes.json();

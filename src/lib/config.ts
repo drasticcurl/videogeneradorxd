@@ -19,28 +19,52 @@ export interface ModelOption {
 
 /**
  * Catalogo de modelos disponibles para los selectores de la UI.
- * - Imagen: SOLO Nano Banana (Gemini image). Hace text2image e image2image.
+ * IMPORTANTE: estos IDs estan verificados contra los modelos disponibles en el
+ * proyecto del usuario (Model Garden / model-versions). Si tu proyecto tiene otros,
+ * podes pisarlos por env (LLM_MODEL / IMAGE_MODEL / VIDEO_MODEL).
+ * - Imagen: Nano Banana (gemini-*-image). Hace text2image e image2image.
  * - Video: familia Veo 3.1.
  * - Chat: Gemini para interpretar el brief.
  */
 export const MODEL_CATALOG: Record<ModelKind, ModelOption[]> = {
   llm: [
-    { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
     { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite" },
   ],
   image: [
-    { id: "gemini-3.1-flash-image", label: "Nano Banana 2 (Flash)" },
-    { id: "gemini-3-pro-image", label: "Nano Banana Pro" },
+    { id: "gemini-2.5-flash-image", label: "Nano Banana (Gemini 2.5 Flash Image)" },
   ],
   video: [
-    { id: "veo-3.1-lite-generate-001", label: "Veo 3.1 Lite" },
     { id: "veo-3.1-generate-001", label: "Veo 3.1" },
     { id: "veo-3.1-fast-generate-001", label: "Veo 3.1 Fast" },
+    // Variantes "lite" para testear cual habilita tu proyecto (pueden no estar disponibles).
+    { id: "veo-3.1-lite-generate-001", label: "Veo 3.1 Lite (probar)" },
+    { id: "veo-3.1-lite-generate-001-preview", label: "Veo 3.1 Lite preview (probar)" },
   ],
 };
 
 /** Formato fijo por ahora: vertical 9:16. */
 export const ASPECT_RATIO = "9:16";
+
+/** Resoluciones de video que el usuario puede elegir (por video). */
+export const VIDEO_RESOLUTIONS = ["720p", "1080p"] as const;
+export type VideoResolution = (typeof VIDEO_RESOLUTIONS)[number];
+
+function envDefaultResolution(): VideoResolution {
+  const v = process.env.VIDEO_RESOLUTION;
+  return (VIDEO_RESOLUTIONS as readonly string[]).includes(v ?? "")
+    ? (v as VideoResolution)
+    : "720p";
+}
+export const DEFAULT_RESOLUTION: VideoResolution = envDefaultResolution();
+
+export function resolveResolution(value?: string): VideoResolution {
+  return (VIDEO_RESOLUTIONS as readonly string[]).includes(value ?? "")
+    ? (value as VideoResolution)
+    : DEFAULT_RESOLUTION;
+}
 
 /** Duraciones validas de Veo (segundos). Se hace snap al valor mas cercano. */
 export const VALID_DURATIONS = [4, 6, 8] as const;
@@ -87,11 +111,11 @@ export const config = {
    */
   models: {
     // Gemini para interpretar el brief -> PlanJSON estructurado.
-    llm: env("LLM_MODEL", "gemini-3.1-pro-preview"),
+    llm: env("LLM_MODEL", "gemini-2.5-flash"),
     // Nano Banana (Gemini image) para text2image E image2image (consistencia de avatar).
-    image: env("IMAGE_MODEL", "gemini-3.1-flash-image"),
+    image: env("IMAGE_MODEL", "gemini-2.5-flash-image"),
     // Veo para imagen->video (operacion de larga duracion / LRO).
-    video: env("VIDEO_MODEL", "veo-3.1-lite-generate-001"),
+    video: env("VIDEO_MODEL", "veo-3.1-generate-001"),
   },
 
   /** Cantidad de variantes por imagen (1-4). Solo aplica a imagenes, no a videos. */

@@ -15,6 +15,10 @@ interface Props {
   onApprove: (jobId: string, index?: number) => void;
   onRegenerate: (jobId: string) => void;
   onChangePrompt: (jobId: string, prompt: string) => void;
+  /** Solo videos: resolucion actual del clip y callback para cambiarla. */
+  resolution?: string;
+  resolutionOptions?: string[];
+  onChangeResolution?: (jobRefId: string, resolution: string) => void;
 }
 
 function fileUrl(projectId: string, rel: string) {
@@ -27,6 +31,9 @@ export function JobCard({
   onApprove,
   onRegenerate,
   onChangePrompt,
+  resolution,
+  resolutionOptions,
+  onChangeResolution,
 }: Props) {
   const [selected, setSelected] = useState<number | null>(job.selectedIndex);
   const [editing, setEditing] = useState(false);
@@ -135,6 +142,25 @@ export function JobCard({
               Cancelar
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Selector de resolucion (solo videos) */}
+      {!isImage && onChangeResolution && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-slate-400">Resolucion:</span>
+          <select
+            value={resolution ?? "720p"}
+            disabled={job.status === "generating"}
+            onChange={(e) => onChangeResolution(job.refId, e.target.value)}
+            className="rounded border border-slate-600 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none disabled:opacity-40"
+          >
+            {(resolutionOptions ?? ["720p", "1080p"]).map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 
