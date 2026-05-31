@@ -1,9 +1,8 @@
 /**
  * GET /api/projects/:id/jobs
- * Devuelve el estado en vivo de todos los jobs + estado del proyecto + manifest.
- * Pensado para polling desde la UI del pipeline.
+ * Estado en vivo de jobs + estado del proyecto + manifest + LOGS. Para polling de la UI.
  */
-import { jobsDb, projectsDb } from "@/lib/db";
+import { jobsDb, logsDb, projectsDb } from "@/lib/db";
 import { buildManifest } from "@/lib/storage";
 import { queueSnapshot } from "@/lib/jobs/queue";
 import { notFound, ok } from "@/lib/http";
@@ -22,6 +21,7 @@ export async function GET(
     projectStatus: project.status,
     jobs,
     manifest: buildManifest(project, jobs),
+    logs: logsDb.byProject(project.id).slice(-200),
     queue: queueSnapshot(),
   });
 }
