@@ -13,6 +13,7 @@ import {
   ASPECT_RATIO,
   snapDuration,
 } from "../../config";
+import { buildVeoVideoPrompt } from "../../prompts";
 import type { VideoGenInput, VideoGenResult, VideoProvider } from "../types";
 import { authHeaders, getAccessToken } from "./auth";
 
@@ -43,10 +44,13 @@ export class VertexVideoProvider implements VideoProvider {
     const model = resolveModel("video", input.model);
     const startUrl = `${vertexBaseUrl()}/${model}:predictLongRunning`;
 
-    const hasDialogue = Boolean(input.dialogue && input.dialogue.trim().length > 0);
-    const prompt = hasDialogue
-      ? `${input.prompt}\nSpoken line (keep this exact language, natural delivery): "${input.dialogue}"`
-      : input.prompt;
+    // Prompt final con estilo UGC/selfie + acento rioplatense argentino (siempre que haya dialogo).
+    const prompt = buildVeoVideoPrompt({
+      videoPrompt: input.prompt,
+      dialogue: input.dialogue,
+      durationSec: input.durationSec,
+      aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
+    });
 
     const body = {
       instances: [
