@@ -54,7 +54,9 @@ REGLAS OBLIGATORIAS DE CONSISTENCIA:
    "image2image" con "ref_image_id" apuntando a una imagen previa del MISMO avatar, y el prompt DEBE incluir
    explicitamente la instruccion "keep identity 100% consistent with the reference, same face, same person".
 3. Todos los prompts visuales (image.prompt, image.negative_prompt, clip.video_prompt) van EN INGLES.
-4. Todos los dialogos quedan en el idioma_dialogo (es-AR, registro "vos") SIN traducir.
+4. Todos los dialogos quedan en el idioma_dialogo (es-AR, registro "vos") SIN traducir. SIEMPRE espanol
+   RIOPLATENSE ARGENTINO (acento de Buenos Aires / porteno), nunca neutro ni mexicano. Usa "voseo"
+   (vos/tenes/mande/mira) y muletillas naturales argentinas (che, dale, posta, en serio, te juro).
 5. Cada clip referencia una image_id que exista en el proyecto y un asset_id valido.
 6. Asigna "orden" consecutivo segun la secuencia narrativa tipica del UGC: hook, reveal, escepticismo,
    mecanismo, warning, CTA (o el orden que indique el brief).
@@ -65,6 +67,10 @@ REGLAS OBLIGATORIAS DE CONSISTENCIA:
 10. negative_prompt global por defecto (si el brief no aclara): "blurry, deformed hands, extra fingers, text artifacts, watermark, low quality, plastic skin, oversaturated".
 11. "formato" SIEMPRE es "9:16" (vertical).
 12. "duracion_seg" SOLO puede ser 4, 6 u 8 (son las unicas duraciones validas de Veo). Si el brief pide otra, redondea a la mas cercana de esas tres.
+13. Para clips de avatar que hablan a camara, el "video_prompt" (en ingles) debe describir estilo UGC/selfie
+    realista: telefono a distancia de brazo, habla directo a camara, movimiento natural de cabeza/manos,
+    leve temblor de mano (handheld), lip-sync preciso, sin texto en pantalla. Para b-roll, describi el
+    movimiento de camara y la accion del objeto, sin dialogo.
 
 Devolve SOLO el JSON. Nada de markdown, ni \`\`\`, ni explicaciones.`;
 
@@ -204,3 +210,66 @@ REGLAS QUE TENES QUE CUMPLIR SI O SI:
 
 ESTE ES EL BRIEF:
 <<< PEGA ACA TU BRIEF >>>`;
+
+
+
+/* ========================================================================
+ * Construccion del prompt de VIDEO para Veo.
+ *
+ * Basado en un prompt probado por el usuario: animacion selfie/UGC realista,
+ * movimiento natural, lip-sync, sin texto en pantalla, 9:16, y un bloque de
+ * VOZ & ACENTO que fuerza espanol RIOPLATENSE ARGENTINO (Buenos Aires) SIEMPRE.
+ * ===================================================================== */
+
+/** Bloque de voz/acento argentino. Se agrega SIEMPRE que haya dialogo. */
+export const ARGENTINE_VOICE_BLOCK = `VOICE & ACCENT (very important): the person speaks in RIOPLATENSE ARGENTINE SPANISH (Buenos Aires / porteno accent), NOT Mexican, NOT Castilian, NOT neutral Latin American Spanish. Use the characteristic Argentine intonation, "voseo" (vos / tenes / mande / mira), the typical "sh" sound for "ll" and "y" (yo = "sho", ya = "sha", llave = "shave"), and a relaxed, melodic portena cadence. Natural adult voice, warm and conversational, casual everyday delivery.`;
+
+export interface VeoPromptInput {
+  /** Descripcion visual/cinematografica del clip (en ingles). */
+  videoPrompt: string;
+  /** Linea de dialogo en es-AR; "" si es b-roll mudo. */
+  dialogue?: string;
+  durationSec: number;
+  aspectRatio?: string;
+  /** texto en pantalla a evitar quemar en el video (lo agrega el usuario aparte). */
+  noOnScreenText?: boolean;
+}
+
+/**
+ * Arma el prompt final que se manda a Veo, combinando la cinematografia del clip
+ * con el estilo UGC/selfie y el bloque de acento argentino (cuando hay dialogo).
+ */
+export function buildVeoVideoPrompt(input: VeoPromptInput): string {
+  const dur = Math.max(1, Math.round(input.durationSec));
+  const aspect = input.aspectRatio ?? "9:16";
+  const hasDialogue = Boolean(input.dialogue && input.dialogue.trim().length > 0);
+
+  const parts: string[] = [];
+  parts.push(
+    `Animate the attached image into a realistic ${dur}-second vertical ${aspect} video.`
+  );
+  if (input.videoPrompt && input.videoPrompt.trim()) {
+    parts.push(input.videoPrompt.trim());
+  }
+
+  if (hasDialogue) {
+    parts.push(
+      "UGC selfie style: the person holds their phone at arm's length and talks directly to camera, " +
+        "natural casual head and hand movement, warm hopeful conversational tone, subtle handheld shake, " +
+        "accurate lip-sync to the spoken line. No on-screen text. " +
+        aspect +
+        "."
+    );
+    parts.push(ARGENTINE_VOICE_BLOCK);
+    parts.push(`[DIALOGO] (speak exactly this, in Rioplatense Argentine Spanish): "${input.dialogue!.trim()}"`);
+  } else {
+    parts.push(
+      "Smooth natural motion with subtle camera movement and realistic lighting. " +
+        "No spoken dialogue. No on-screen text. " +
+        aspect +
+        "."
+    );
+  }
+
+  return parts.join("\n\n");
+}
