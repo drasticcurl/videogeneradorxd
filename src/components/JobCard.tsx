@@ -143,55 +143,79 @@ export function JobCard({
         </p>
       )}
 
-      {/* Editor de prompt (precargado) + selector de modelo */}
+      {/* Editor de prompt en MODAL grande: se ve TODO el prompt completo. */}
       {editing && (
-        <div className="space-y-2 rounded-md border border-slate-700 bg-ink/60 p-2">
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] uppercase tracking-wide text-slate-400">
-              Prompt actual ({isImage ? "imagen" : "video"})
-            </label>
-            <textarea
-              value={promptText}
-              onChange={(e) => setPromptText(e.target.value)}
-              placeholder="Prompt…"
-              className="code h-32 w-full resize-y rounded border border-slate-600 bg-ink p-2 text-[11px] leading-relaxed focus:border-accent focus:outline-none"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-[11px] uppercase tracking-wide text-slate-400">
-              Modelo para regenerar
-            </label>
-            <select
-              value={modelChoice}
-              onChange={(e) => setModelChoice(e.target.value)}
-              className="rounded border border-slate-600 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none"
-            >
-              {modelOptions.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.label}
-                </option>
-              ))}
-              {!modelOptions.some((o) => o.id === modelChoice) && modelChoice && (
-                <option value={modelChoice}>{modelChoice}</option>
-              )}
-            </select>
-          </div>
-          <div className="flex gap-1">
-            <button
-              onClick={() => {
-                if (promptText.trim()) onChangePrompt(job.id, promptText.trim(), modelChoice);
-                setEditing(false);
-              }}
-              className="rounded bg-accent px-2 py-1 text-xs text-white"
-            >
-              Guardar y regenerar
-            </button>
-            <button
-              onClick={() => setEditing(false)}
-              className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
-            >
-              Cancelar
-            </button>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setEditing(false)}
+        >
+          <div
+            className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-3 overflow-y-auto rounded-xl border border-slate-700 bg-panel p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-slate-100">
+                Editar prompt · <span className="text-slate-400">{job.label}</span>
+              </h3>
+              <span className="rounded bg-slate-700 px-2 py-0.5 text-xs text-slate-300">
+                {isImage ? "imagen" : "video"}
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs uppercase tracking-wide text-slate-400">
+                Prompt actual (editá lo que quieras)
+              </label>
+              <textarea
+                value={promptText}
+                onChange={(e) => setPromptText(e.target.value)}
+                placeholder="Prompt…"
+                spellCheck={false}
+                className="code min-h-[320px] w-full resize-y whitespace-pre-wrap break-words rounded-lg border border-slate-600 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
+              />
+              <span className="text-[11px] text-slate-500">
+                {promptText.length} caracteres
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs uppercase tracking-wide text-slate-400">
+                Modelo para regenerar
+              </label>
+              <select
+                value={modelChoice}
+                onChange={(e) => setModelChoice(e.target.value)}
+                className="rounded-lg border border-slate-600 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
+              >
+                {modelOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+                {!modelOptions.some((o) => o.id === modelChoice) && modelChoice && (
+                  <option value={modelChoice}>{modelChoice}</option>
+                )}
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                onClick={() => setEditing(false)}
+                className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  if (promptText.trim())
+                    onChangePrompt(job.id, promptText.trim(), modelChoice);
+                  setEditing(false);
+                }}
+                className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+              >
+                Guardar y regenerar
+              </button>
+            </div>
           </div>
         </div>
       )}
