@@ -1,7 +1,10 @@
 /**
  * POST /api/jobs/:id/prompt
- * Cambia el prompt (y para videos, el dialogo) del job y lo regenera.
- * Body: { prompt?: string, dialogue?: string, model?: string }
+ * Cambia el prompt (y para videos, el dialogo/duracion/resolucion) del job.
+ * Por defecto regenera; si regenerate=false SOLO guarda los cambios (sin generar),
+ * util para ajustar texto/tiempo/dialogo antes de generar en batch.
+ * Body: { prompt?: string, dialogue?: string, durationSec?: number,
+ *         resolution?: string, model?: string, regenerate?: boolean }
  */
 import { jobsDb } from "@/lib/db";
 import { changePrompt } from "@/lib/jobs/pipeline";
@@ -25,6 +28,7 @@ export async function POST(
       durationSec?: number;
       resolution?: string;
       model?: string;
+      regenerate?: boolean;
     };
     const prompt = body.prompt !== undefined ? body.prompt.trim() : undefined;
     if (prompt !== undefined && !prompt) {
@@ -38,8 +42,13 @@ export async function POST(
       resolution: body.resolution,
       modelOverride: body.model,
     });
-    enqueueJob(job.id); // regenera con el prompt/dialogo/duracion (y modelo) nuevo
-    return ok({ updated: true, job: jobsDb.get(job.id) });
+
+    // regenerate=false => solo guarda los cambios (sin volver a generar).
+    const shouldRegenerate = body.regenerate !== false;
+    if (shouldRegenerate) {
+      enqueueJob(job.id); // regenera con el prompt/dialogo/duracion (y modelo) nuevo
+    }
+    return ok({ updated: true, regenerated: shouldRegenerate, job: jobsDb.get(job.id) });
   } catch (err) {
     return serverError(err);
   }

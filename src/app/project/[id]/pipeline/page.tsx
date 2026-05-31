@@ -143,6 +143,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
         durationSec?: number;
         resolution?: string;
         model?: string;
+        regenerate?: boolean;
       }
     ) => void changePromptJob(id, payload),
     onExtend: (id: string) => void extendJob(id),
@@ -291,6 +292,7 @@ interface GroupHandlers {
       durationSec?: number;
       resolution?: string;
       model?: string;
+      regenerate?: boolean;
     }
   ) => void;
   onExtend: (id: string) => void;

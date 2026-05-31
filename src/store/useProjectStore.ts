@@ -87,6 +87,7 @@ interface ProjectState {
       durationSec?: number;
       resolution?: string;
       model?: string;
+      regenerate?: boolean;
     }
   ) => Promise<void>;
   control: (action: "pause" | "resume" | "cancel") => Promise<void>;
@@ -254,7 +255,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       body: JSON.stringify(payload),
     });
     const id = get().project?.id;
-    if (id) await get().refreshJobs(id);
+    // loadProject refresca tambien el plan, para que los valores editados
+    // (prompt/dialogo/tiempo) queden persistidos en la UI aunque no se regenere.
+    if (id) await get().loadProject(id);
   },
 
   control: async (action) => {
