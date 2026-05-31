@@ -148,18 +148,25 @@ function demoPlan(brief: string): ProjectPlan {
 }
 
 export class MockLlmProvider implements LlmProvider {
-  async parseBrief(text: string): Promise<ProjectPlan> {
+  async parseBrief(_text: string, _opts?: { model?: string }): Promise<ProjectPlan> {
     // Simulamos latencia de la LLM.
     await new Promise((r) => setTimeout(r, 300));
-    return demoPlan(text);
+    return demoPlan(_text);
   }
 }
 
 export class MockImageProvider implements ImageProvider {
   async generate(input: ImageGenInput): Promise<ImageGenResult> {
     await new Promise((r) => setTimeout(r, 400));
+    // Incluimos un nonce para que cada variante/regeneracion salga distinta.
+    const nonce = Math.random().toString(36).slice(2, 8);
     const seed =
-      (input.refImageBytes ? "i2i:" : "t2i:") + input.prompt;
+      (input.refImageBytes ? "i2i:" : "t2i:") +
+      (input.model ?? "") +
+      ":" +
+      input.prompt +
+      ":" +
+      nonce;
     const bytes = makePngPlaceholder(seed, input.aspectRatio ?? "9:16");
     return { bytes, mimeType: "image/png" };
   }
@@ -169,7 +176,7 @@ export class MockVideoProvider implements VideoProvider {
   async generate(input: VideoGenInput): Promise<VideoGenResult> {
     await new Promise((r) => setTimeout(r, 800));
     const bytes = makeMp4Placeholder(
-      input.prompt,
+      (input.model ?? "") + ":" + input.prompt,
       input.durationSec,
       input.aspectRatio ?? "9:16"
     );

@@ -63,6 +63,8 @@ REGLAS OBLIGATORIAS DE CONSISTENCIA:
    "warnings" describiendo el supuesto. NUNCA falles ni devuelvas campos vacios obligatorios.
 9. Los ids deben ser slugs en minuscula sin espacios (a-z, 0-9, guion bajo).
 10. negative_prompt global por defecto (si el brief no aclara): "blurry, deformed hands, extra fingers, text artifacts, watermark, low quality, plastic skin, oversaturated".
+11. "formato" SIEMPRE es "9:16" (vertical).
+12. "duracion_seg" SOLO puede ser 4, 6 u 8 (son las unicas duraciones validas de Veo). Si el brief pide otra, redondea a la mas cercana de esas tres.
 
 Devolve SOLO el JSON. Nada de markdown, ni \`\`\`, ni explicaciones.`;
 
@@ -139,3 +141,66 @@ export const PARSER_RESPONSE_SCHEMA = {
   },
   required: ["global", "assets", "clips", "warnings"],
 } as const;
+
+
+
+/**
+ * Plantilla COPIABLE para que el usuario genere el storyboard en CUALQUIER IA
+ * (ChatGPT, Gemini, etc.) y obtenga EXACTAMENTE el JSON que la app espera.
+ * Asi el formato nunca falla: el usuario pega el JSON resultante en "Pegar PlanJSON".
+ */
+export const STORYBOARD_PROMPT_TEMPLATE = `Actua como director de arte y productor tecnico de anuncios UGC para un funnel de quiz.
+Te voy a pasar un brief de campaña y tenes que devolverme UN UNICO objeto JSON valido (sin markdown, sin texto extra)
+con este formato EXACTO, que despues voy a pegar en mi app "AUGC Pipeline":
+
+{
+  "global": {
+    "idioma_dialogo": "es-AR",
+    "formato": "9:16",
+    "reglas_realismo": "string con reglas de estilo/realismo para todas las imagenes y videos",
+    "negative_prompt": "string en ingles con lo que hay que evitar"
+  },
+  "assets": [
+    {
+      "id": "slug_unico",                 // ej "avatar1", "broll_vaso"
+      "tipo": "avatar" | "broll",
+      "images": [
+        {
+          "id": "slug_unico_global",      // ej "avatar1_base"
+          "modo": "text2image" | "image2image",
+          "ref_image_id": "id_de_otra_imagen", // SOLO si modo=image2image
+          "prompt": "descripcion visual EN INGLES, fotorrealista",
+          "negative_prompt": "EN INGLES (opcional)"
+        }
+      ]
+    }
+  ],
+  "clips": [
+    {
+      "id": "slug",                       // ej "hook"
+      "orden": 1,                         // 1,2,3... orden en el anuncio
+      "asset_id": "id_de_un_asset",
+      "image_id": "id_de_una_imagen",     // frame inicial del video
+      "video_prompt": "movimiento de camara/accion/expresion EN INGLES",
+      "dialogo": "linea hablada en es-AR (vos); '' si es b-roll mudo",
+      "duracion_seg": 8,                  // SOLO 4, 6 u 8
+      "etiqueta": "IA" | "FILMAR_REAL",
+      "on_screen_text": "texto en pantalla sugerido (opcional)"
+    }
+  ],
+  "warnings": [ "supuestos o defaults que hayas tenido que asumir" ]
+}
+
+REGLAS QUE TENES QUE CUMPLIR SI O SI:
+- "formato" siempre "9:16". "duracion_seg" solo 4, 6 u 8.
+- La PRIMERA imagen de cada avatar es "text2image". Los demas estados del MISMO avatar son "image2image"
+  con "ref_image_id" a una imagen previa y el prompt tiene que incluir
+  "keep identity 100% consistent with the reference, same face, same person".
+- Prompts visuales EN INGLES; dialogos en es-AR (vos) sin traducir.
+- "image_id" y "asset_id" de cada clip tienen que existir en el JSON.
+- ids en minuscula, sin espacios (a-z, 0-9, guion bajo).
+- Si falta info, completa con defaults razonables y agregalo en "warnings". NUNCA dejes campos obligatorios vacios.
+- Devolve SOLO el JSON.
+
+ESTE ES EL BRIEF:
+<<< PEGA ACA TU BRIEF >>>`;

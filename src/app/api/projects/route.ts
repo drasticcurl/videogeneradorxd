@@ -1,11 +1,11 @@
 /**
  * GET  /api/projects        -> lista de proyectos (resumen)
- * POST /api/projects        -> crea un proyecto a partir de { name?, brief, plan }
- *                              (el plan ya viene revisado/editado por el usuario).
+ * POST /api/projects        -> crea un proyecto a partir de { name?, brief, plan, models?, imageVariants? }
  */
 import { randomUUID } from "node:crypto";
 import { projectsDb } from "@/lib/db";
 import { validatePlan } from "@/lib/schema";
+import { resolveModel, config } from "@/lib/config";
 import { ensureProjectDirs, projectDir, writeManifest } from "@/lib/storage";
 import { badRequest, ok, serverError } from "@/lib/http";
 import type { ProjectRecord } from "@/lib/types";
@@ -32,6 +32,8 @@ export async function POST(req: Request) {
       name?: string;
       brief?: string;
       plan?: unknown;
+      models?: { llm?: string; image?: string; video?: string };
+      imageVariants?: number;
     };
 
     const validation = validatePlan(body.plan);
@@ -51,6 +53,15 @@ export async function POST(req: Request) {
       brief: body.brief ?? "",
       plan: validation.plan,
       status: "draft",
+      models: {
+        llm: resolveModel("llm", body.models?.llm),
+        image: resolveModel("image", body.models?.image),
+        video: resolveModel("video", body.models?.video),
+      },
+      imageVariants: Math.min(
+        4,
+        Math.max(1, body.imageVariants ?? config.defaultImageVariants)
+      ),
       outputDir: projectDir(id),
       createdAt: now,
       updatedAt: now,

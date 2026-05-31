@@ -1,9 +1,12 @@
 "use client";
 /**
  * Pantalla "Nuevo proyecto":
- *  - textarea del brief + "Interpretar con IA" -> muestra PlanJSON editable + estimacion.
- *  - "Generar todo": crea el proyecto, dispara el pipeline y navega a /project/:id/pipeline.
- *  - Lista de proyectos existentes para reabrir.
+ *  - Selectores de modelo (Chat/Imagen/Video) + variantes.
+ *  - Dos formas de armar el plan:
+ *      a) "Interpretar con IA": pegás el brief y la IA arma el PlanJSON.
+ *      b) "Pegar PlanJSON": pegás el JSON ya armado (lo generaste con el prompt copiable).
+ *  - PlanJSON editable + estimacion + "Generar todo".
+ *  - Lista de proyectos existentes.
  */
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -12,37 +15,46 @@ import { useProjectStore } from "@/store/useProjectStore";
 import { JsonEditor } from "@/components/JsonEditor";
 import { CostEstimatePanel } from "@/components/CostEstimatePanel";
 import { StatusBadge } from "@/components/StatusBadge";
+import { ModelSelectorBar } from "@/components/ModelSelectorBar";
 import { SAMPLE_BRIEF } from "@/lib/sampleBrief";
+import { STORYBOARD_PROMPT_TEMPLATE } from "@/lib/prompts";
 
 interface ProjectSummary {
   id: string;
   name: string;
-  status: "draft" | "running" | "done" | "failed" | "partial";
+  status: "draft" | "running" | "review" | "done" | "failed" | "partial" | "paused";
   createdAt: string;
   clipCount: number;
   imageCount: number;
 }
 
+type Mode = "ia" | "json";
+
 export default function HomePage() {
   const router = useRouter();
   const {
-    config,
     brief,
     plan,
     estimate,
     parsing,
     error,
+    selectedModels,
+    imageVariants,
     setBrief,
     loadConfig,
     parseBrief,
     setPlan,
+    setPlanFromJson,
     reset,
   } = useProjectStore();
 
   const [name, setName] = useState("");
+  const [mode, setMode] = useState<Mode>("ia");
+  const [jsonText, setJsonText] = useState("");
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     reset();
@@ -61,6 +73,10 @@ export default function HomePage() {
     }
   }
 
+  function applyPastedJson() {
+    setPlanFromJson(jsonText);
+  }
+
   async function handleGenerateAll() {
     if (!plan) return;
     setCreating(true);
@@ -69,7 +85,13 @@ export default function HomePage() {
       const createRes = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, brief, plan }),
+        body: JSON.stringify({
+          name,
+          brief,
+          plan,
+          models: selectedModels,
+          imageVariants,
+        }),
       });
       const createData = await createRes.json();
       if (!createRes.ok) throw new Error(createData.error ?? "No se pudo crear el proyecto");
@@ -88,39 +110,18 @@ export default function HomePage() {
     }
   }
 
-  const isVertexMissing =
-    config?.providerMode === "vertex" && !config?.project;
+  function copyPromptTemplate() {
+    navigator.clipboard?.writeText(STORYBOARD_PROMPT_TEMPLATE);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  }
 
   return (
-    <div className="space-y-8">
-      {/* Banner de configuracion */}
-      {config && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-700 bg-panel px-4 py-2 text-xs text-slate-300">
-          <span>
-            Proveedor: <b className="text-slate-100">{config.providerMode}</b>
-          </span>
-          <span>·</span>
-          <span>LLM: {config.models.llm}</span>
-          <span>·</span>
-          <span>Imagen: {config.models.image}</span>
-          <span>·</span>
-          <span>Video: {config.models.video}</span>
-          <span>·</span>
-          <span>ffmpeg: {config.ffmpeg ? "si" : "no"}</span>
-          {isVertexMissing && (
-            <span className="ml-auto rounded bg-amber-500/20 px-2 py-0.5 text-amber-300">
-              Falta GOOGLE_CLOUD_PROJECT (o usá PROVIDER_MODE=mock)
-            </span>
-          )}
-        </div>
-      )}
+    <div className="space-y-6">
+      <ModelSelectorBar />
 
       <section className="space-y-4">
         <h1 className="text-2xl font-bold">Nuevo proyecto</h1>
-        <p className="text-sm text-slate-400">
-          Pegá el brief con tus escenas (formato libre, con marcas [visual]/[audio] o prosa). La IA
-          lo interpreta y arma el plan; vos lo revisás y editás antes de generar.
-        </p>
 
         <input
           value={name}
@@ -129,35 +130,81 @@ export default function HomePage() {
           className="w-full rounded-lg border border-slate-700 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
         />
 
-        <textarea
-          value={brief}
-          onChange={(e) => setBrief(e.target.value)}
-          placeholder="Pegá acá tu brief largo con avatares, b-roll y clips en orden…"
-          className="h-64 w-full resize-y rounded-lg border border-slate-700 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
-        />
-
-        <div className="flex flex-wrap gap-3">
+        {/* Toggle de modo */}
+        <div className="flex gap-1 rounded-lg border border-slate-800 bg-panel p-1 text-sm">
           <button
-            onClick={() => setBrief(SAMPLE_BRIEF)}
-            className="rounded-lg border border-slate-600 px-4 py-2 text-sm hover:bg-slate-800"
+            onClick={() => setMode("ia")}
+            className={`rounded-md px-4 py-1.5 ${
+              mode === "ia" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
+            }`}
           >
-            Cargar ejemplo
+            Interpretar brief con IA
           </button>
           <button
-            onClick={() => void parseBrief()}
-            disabled={parsing || !brief.trim()}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            onClick={() => setMode("json")}
+            className={`rounded-md px-4 py-1.5 ${
+              mode === "json" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
+            }`}
           >
-            {parsing ? "Interpretando…" : "Interpretar con IA"}
+            Pegar PlanJSON
+          </button>
+          <button
+            onClick={copyPromptTemplate}
+            className="ml-auto rounded-md px-3 py-1.5 text-slate-300 hover:bg-slate-800"
+            title="Copiá este prompt, pegalo en ChatGPT/Gemini con tu brief, y te devuelve el JSON exacto"
+          >
+            {copied ? "✓ prompt copiado" : "📋 Copiar prompt para tu IA"}
           </button>
         </div>
+
+        {mode === "ia" ? (
+          <>
+            <textarea
+              value={brief}
+              onChange={(e) => setBrief(e.target.value)}
+              placeholder="Pegá acá tu brief largo con avatares, b-roll y clips en orden…"
+              className="h-56 w-full resize-y rounded-lg border border-slate-700 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
+            />
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={() => setBrief(SAMPLE_BRIEF)}
+                className="rounded-lg border border-slate-600 px-4 py-2 text-sm hover:bg-slate-800"
+              >
+                Cargar ejemplo
+              </button>
+              <button
+                onClick={() => void parseBrief()}
+                disabled={parsing || !brief.trim()}
+                className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {parsing ? "Interpretando…" : "Interpretar con IA"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <textarea
+              value={jsonText}
+              onChange={(e) => setJsonText(e.target.value)}
+              placeholder='Pegá acá el PlanJSON (el que te devolvió tu IA usando el prompt copiable)…'
+              spellCheck={false}
+              className="code h-56 w-full resize-y rounded-lg border border-slate-700 bg-ink p-3 text-xs leading-relaxed focus:border-accent focus:outline-none"
+            />
+            <button
+              onClick={applyPastedJson}
+              disabled={!jsonText.trim()}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              Cargar PlanJSON
+            </button>
+          </>
+        )}
 
         {error && (
           <p className="rounded bg-red-500/10 p-2 text-sm text-red-300">{error}</p>
         )}
       </section>
 
-      {/* Plan editable + estimacion + generar */}
       {plan && (
         <section className="space-y-4">
           <h2 className="text-xl font-semibold">Revisá y editá el plan</h2>
@@ -186,18 +233,14 @@ export default function HomePage() {
                 </p>
               )}
               <p className="text-xs text-slate-500">
-                Al generar, todo se guarda en{" "}
-                <code className="text-slate-300">
-                  {config?.outputDir ?? "./output"}/&lt;project_id&gt;/
-                </code>
-                : imagenes, clips y manifest.json.
+                Cada imagen y cada video van a pedirte <b>aprobación</b> antes de seguir.
+                Todo se guarda en <code className="text-slate-300">output/&lt;project_id&gt;/</code>.
               </p>
             </div>
           </div>
         </section>
       )}
 
-      {/* Proyectos existentes */}
       {projects.length > 0 && (
         <section className="space-y-3">
           <h2 className="text-xl font-semibold">Proyectos</h2>

@@ -1,9 +1,18 @@
 /**
- * Adaptador de video (Veo en Vertex AI), imagen->video.
+ * Adaptador de video (Veo 3.1 en Vertex AI), imagen->video CON audio.
  * Es una operacion de larga duracion (LRO): se lanza con :predictLongRunning y se
  * hace polling con :fetchPredictOperation hasta done.
+ *
+ * Guardrails: aspect ratio 9:16 fijo y duracion snap a 4/6/8 (en el pipeline).
  */
-import { config, vertexBaseUrl, assertVertexConfig } from "../../config";
+import {
+  config,
+  vertexBaseUrl,
+  assertVertexConfig,
+  resolveModel,
+  ASPECT_RATIO,
+  snapDuration,
+} from "../../config";
 import type { VideoGenInput, VideoGenResult, VideoProvider } from "../types";
 import { authHeaders, getAccessToken } from "./auth";
 
@@ -20,7 +29,6 @@ interface LroPoll {
       gcsUri?: string;
       mimeType?: string;
     }>;
-    // algunas variantes devuelven generatedSamples
     generatedSamples?: Array<{
       video?: { uri?: string; encodedVideo?: string };
     }>;
@@ -32,13 +40,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class VertexVideoProvider implements VideoProvider {
   async generate(input: VideoGenInput): Promise<VideoGenResult> {
     assertVertexConfig();
-    const model = config.models.video;
+    const model = resolveModel("video", input.model);
     const startUrl = `${vertexBaseUrl()}/${model}:predictLongRunning`;
 
-    const prompt =
-      input.dialogue && input.dialogue.trim().length > 0
-        ? `${input.prompt}\nSpoken line (keep this exact language): "${input.dialogue}"`
-        : input.prompt;
+    const hasDialogue = Boolean(input.dialogue && input.dialogue.trim().length > 0);
+    const prompt = hasDialogue
+      ? `${input.prompt}\nSpoken line (keep this exact language, natural delivery): "${input.dialogue}"`
+      : input.prompt;
 
     const body = {
       instances: [
@@ -51,11 +59,11 @@ export class VertexVideoProvider implements VideoProvider {
         },
       ],
       parameters: {
-        aspectRatio: input.aspectRatio ?? "9:16",
-        durationSeconds: Math.max(1, Math.round(input.durationSec)),
+        aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
+        durationSeconds: snapDuration(input.durationSec),
         sampleCount: 1,
-        // Veo 3 puede generar audio (incluido dialogo). TODO: confirmar soporte por modelo.
-        generateAudio: Boolean(input.dialogue && input.dialogue.trim().length > 0),
+        // Veo 3.1 genera audio (incluido el dialogo). TODO: confirmar flag por modelo.
+        generateAudio: true,
       },
     };
 
@@ -66,7 +74,9 @@ export class VertexVideoProvider implements VideoProvider {
     });
     if (!startRes.ok) {
       const t = await startRes.text();
-      throw new Error(`Veo predictLongRunning fallo (${startRes.status}): ${t.slice(0, 500)}`);
+      throw new Error(
+        `Veo (${model}) predictLongRunning fallo (${startRes.status}): ${t.slice(0, 500)}`
+      );
     }
     const start = (await startRes.json()) as LroStart;
     if (!start.name) {
@@ -92,7 +102,9 @@ export class VertexVideoProvider implements VideoProvider {
       });
       if (!res.ok) {
         const t = await res.text();
-        throw new Error(`Veo fetchPredictOperation fallo (${res.status}): ${t.slice(0, 300)}`);
+        throw new Error(
+          `Veo fetchPredictOperation fallo (${res.status}): ${t.slice(0, 300)}`
+        );
       }
       const poll = (await res.json()) as LroPoll;
       if (poll.error) {
@@ -103,7 +115,9 @@ export class VertexVideoProvider implements VideoProvider {
       }
     }
     throw new Error(
-      `Veo LRO timeout tras ${Math.round(config.pipeline.veoPollTimeoutMs / 1000)}s (operacion: ${operationName}).`
+      `Veo LRO timeout tras ${Math.round(
+        config.pipeline.veoPollTimeoutMs / 1000
+      )}s (operacion: ${operationName}).`
     );
   }
 
@@ -140,7 +154,9 @@ async function downloadGcs(gsUri: string): Promise<Uint8Array> {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) {
     const t = await res.text();
-    throw new Error(`No se pudo descargar el video desde GCS (${res.status}): ${t.slice(0, 200)}`);
+    throw new Error(
+      `No se pudo descargar el video desde GCS (${res.status}): ${t.slice(0, 200)}`
+    );
   }
   const ab = await res.arrayBuffer();
   return new Uint8Array(ab);
