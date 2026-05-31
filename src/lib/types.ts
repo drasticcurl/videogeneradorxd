@@ -45,6 +45,8 @@ export interface JobRecord {
   locked: boolean;
   /** modelo usado en la ultima ejecucion (para el log/manifest) */
   model: string | null;
+  /** override de modelo elegido por el usuario para ESTE job (pisa el del proyecto) */
+  modelOverride: string | null;
   /** info extra para debug/UI (ej operationName de Veo) */
   meta: Record<string, unknown>;
   createdAt: string;

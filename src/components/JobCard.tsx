@@ -3,18 +3,31 @@
  * Tarjeta de job con flujo de aprobacion:
  *  - awaiting_approval (imagen): muestra las variantes candidatas, elegís una y Aprobás.
  *  - awaiting_approval (video): muestra el video y Aprobás.
- *  - Acciones: Aprobar / Regenerar / Cambiar prompt (editás el prompt y regenera).
+ *  - Acciones: Aprobar / Regenerar / Cambiar prompt.
+ *    Al "Cambiar prompt" se PRECARGA el prompt actual (el que se usó para generar)
+ *    y se muestra un selector de modelo para regenerar ese item puntual.
  */
 import { useState } from "react";
 import { StatusBadge } from "./StatusBadge";
 import type { JobRecord } from "@/lib/types";
 
+interface ModelOption {
+  id: string;
+  label: string;
+}
+
 interface Props {
   job: JobRecord;
   projectId: string;
+  /** prompt actual del item (image.prompt o clip.video_prompt) para precargar al editar */
+  currentPrompt: string;
+  /** opciones de modelo para el selector (catalogo de imagen o de video segun el tipo) */
+  modelOptions: ModelOption[];
+  /** modelo del proyecto para este tipo (default si no hay override) */
+  projectModel: string;
   onApprove: (jobId: string, index?: number) => void;
   onRegenerate: (jobId: string) => void;
-  onChangePrompt: (jobId: string, prompt: string) => void;
+  onChangePrompt: (jobId: string, prompt: string, model?: string) => void;
   /** Solo videos: resolucion actual del clip y callback para cambiarla. */
   resolution?: string;
   resolutionOptions?: string[];
@@ -28,6 +41,9 @@ function fileUrl(projectId: string, rel: string) {
 export function JobCard({
   job,
   projectId,
+  currentPrompt,
+  modelOptions,
+  projectModel,
   onApprove,
   onRegenerate,
   onChangePrompt,
@@ -38,11 +54,22 @@ export function JobCard({
   const [selected, setSelected] = useState<number | null>(job.selectedIndex);
   const [editing, setEditing] = useState(false);
   const [promptText, setPromptText] = useState("");
+  const [modelChoice, setModelChoice] = useState("");
 
   const isImage = job.type === "image";
   const awaiting = job.status === "awaiting_approval";
   const approvedUrl = job.outputPath ? fileUrl(projectId, job.outputPath) : null;
   const chosen = selected ?? job.selectedIndex ?? job.candidates[0]?.index ?? null;
+
+  // El modelo efectivo de este job: override > modelo usado > modelo del proyecto.
+  const effectiveModel = job.modelOverride || job.model || projectModel;
+
+  function openEditor() {
+    // PRECARGAMOS el prompt actual y el modelo efectivo, asi el usuario ve lo que se uso.
+    setPromptText(currentPrompt ?? "");
+    setModelChoice(effectiveModel);
+    setEditing(true);
+  }
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-panel p-3">
@@ -51,7 +78,7 @@ export function JobCard({
           <div className="truncate text-sm font-medium text-slate-100">{job.label}</div>
           <div className="text-xs text-slate-500">
             {isImage ? "imagen" : "video"}
-            {job.model ? ` · ${job.model}` : ""}
+            {effectiveModel ? ` · ${effectiveModel}` : ""}
             {job.attempts > 0 && ` · intento ${job.attempts}/${job.maxAttempts}`}
             {job.locked && " · 🔒"}
           </div>
@@ -116,19 +143,43 @@ export function JobCard({
         </p>
       )}
 
-      {/* Editor de prompt */}
+      {/* Editor de prompt (precargado) + selector de modelo */}
       {editing && (
-        <div className="space-y-1">
-          <textarea
-            value={promptText}
-            onChange={(e) => setPromptText(e.target.value)}
-            placeholder="Nuevo prompt…"
-            className="h-20 w-full resize-y rounded border border-slate-600 bg-ink p-2 text-xs"
-          />
+        <div className="space-y-2 rounded-md border border-slate-700 bg-ink/60 p-2">
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] uppercase tracking-wide text-slate-400">
+              Prompt actual ({isImage ? "imagen" : "video"})
+            </label>
+            <textarea
+              value={promptText}
+              onChange={(e) => setPromptText(e.target.value)}
+              placeholder="Prompt…"
+              className="code h-32 w-full resize-y rounded border border-slate-600 bg-ink p-2 text-[11px] leading-relaxed focus:border-accent focus:outline-none"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[11px] uppercase tracking-wide text-slate-400">
+              Modelo para regenerar
+            </label>
+            <select
+              value={modelChoice}
+              onChange={(e) => setModelChoice(e.target.value)}
+              className="rounded border border-slate-600 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none"
+            >
+              {modelOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+              {!modelOptions.some((o) => o.id === modelChoice) && modelChoice && (
+                <option value={modelChoice}>{modelChoice}</option>
+              )}
+            </select>
+          </div>
           <div className="flex gap-1">
             <button
               onClick={() => {
-                if (promptText.trim()) onChangePrompt(job.id, promptText.trim());
+                if (promptText.trim()) onChangePrompt(job.id, promptText.trim(), modelChoice);
                 setEditing(false);
               }}
               className="rounded bg-accent px-2 py-1 text-xs text-white"
@@ -183,10 +234,7 @@ export function JobCard({
             ↻ Regenerar
           </button>
           <button
-            onClick={() => {
-              setPromptText("");
-              setEditing(true);
-            }}
+            onClick={openEditor}
             disabled={job.status === "generating"}
             className="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
           >
