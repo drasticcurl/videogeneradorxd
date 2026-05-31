@@ -79,9 +79,19 @@ interface ProjectState {
   // acciones de pipeline
   approveJob: (jobId: string, index?: number) => Promise<void>;
   regenerateJob: (jobId: string) => Promise<void>;
-  changePromptJob: (jobId: string, prompt: string, model?: string) => Promise<void>;
+  changePromptJob: (
+    jobId: string,
+    payload: {
+      prompt?: string;
+      dialogue?: string;
+      durationSec?: number;
+      resolution?: string;
+      model?: string;
+    }
+  ) => Promise<void>;
   control: (action: "pause" | "resume" | "cancel") => Promise<void>;
   setClipResolution: (clipId: string, resolution: string) => Promise<void>;
+  extendJob: (jobId: string) => Promise<void>;
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -237,11 +247,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (id) await get().refreshJobs(id);
   },
 
-  changePromptJob: async (jobId, prompt, model) => {
+  changePromptJob: async (jobId, payload) => {
     await fetch(`/api/jobs/${jobId}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, model }),
+      body: JSON.stringify(payload),
     });
     const id = get().project?.id;
     if (id) await get().refreshJobs(id);
@@ -275,5 +285,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       body: JSON.stringify({ plan: newPlan }),
     });
     await get().loadProject(project.id);
+  },
+
+  extendJob: async (jobId) => {
+    await fetch(`/api/jobs/${jobId}/extend`, { method: "POST" });
+    const id = get().project?.id;
+    if (id) await get().refreshJobs(id);
   },
 }));

@@ -8,7 +8,16 @@
  *   - clips FILMAR_REAL no generan job (placeholders para subir a mano).
  */
 import path from "node:path";
-import { config, ASPECT_RATIO, resolveResolution } from "../config";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
+import fs from "node:fs";
+import {
+  config,
+  ASPECT_RATIO,
+  resolveResolution,
+  snapDuration,
+  EXTEND_DURATION,
+} from "../config";
 import { jobsDb, logsDb, projectsDb } from "../db";
 import { getImageProvider, getVideoProvider } from "../providers";
 import {
@@ -16,11 +25,13 @@ import {
   candidateRelPath,
   clipRelPath,
   copyWithin,
+  existsRel,
   imageRelPath,
   readBytes,
   saveBytes,
   writeManifest,
 } from "../storage";
+import { hasFfmpeg } from "../providers/placeholder";
 import type { ProjectPlan } from "../schema";
 import type { Candidate, JobRecord, LogEntry, LogLevel, ProjectRecord } from "../types";
 
@@ -320,11 +331,22 @@ export async function approveJob(
   return updated;
 }
 
-/** Cambia el prompt de la imagen/clip de un job (para regenerar con otro prompt). */
+/**
+ * Cambia campos editables de un job y prepara la regeneracion.
+ * - imagen: opts.prompt -> image.prompt
+ * - video:  opts.prompt -> clip.video_prompt ; opts.dialogue -> clip.dialogo ;
+ *           opts.durationSec -> clip.duracion_seg (snap a 4/6/8) ;
+ *           opts.resolution -> clip.resolucion
+ */
 export function changePrompt(
   jobId: string,
-  newPrompt: string,
-  modelOverride?: string
+  opts: {
+    prompt?: string;
+    dialogue?: string;
+    durationSec?: number;
+    resolution?: string;
+    modelOverride?: string;
+  }
 ): JobRecord | undefined {
   const job = jobsDb.get(jobId);
   if (!job) return undefined;
@@ -334,23 +356,163 @@ export function changePrompt(
 
   if (job.type === "image") {
     const found = findImage(plan, job.refId);
-    if (found) found.img.prompt = newPrompt;
+    if (found && opts.prompt !== undefined) found.img.prompt = opts.prompt;
   } else {
     const clip = plan.clips.find((c) => c.id === job.refId);
-    if (clip) clip.video_prompt = newPrompt;
+    if (clip) {
+      if (opts.prompt !== undefined) clip.video_prompt = opts.prompt;
+      if (opts.dialogue !== undefined) clip.dialogo = opts.dialogue;
+      if (opts.durationSec !== undefined) {
+        clip.duracion_seg = snapDuration(opts.durationSec);
+      }
+      if (opts.resolution !== undefined) {
+        clip.resolucion = resolveResolution(opts.resolution);
+      }
+    }
   }
   projectsDb.update(project.id, { plan });
   // Si se eligio un modelo distinto para este job, lo guardamos como override.
-  if (modelOverride !== undefined) {
-    jobsDb.update(jobId, { modelOverride: modelOverride || null });
+  if (opts.modelOverride !== undefined) {
+    jobsDb.update(jobId, { modelOverride: opts.modelOverride || null });
   }
-  logEvent(job.projectId, "info", `Prompt actualizado para "${job.refId}".`, {
+  logEvent(job.projectId, "info", `Campos actualizados para "${job.refId}".`, {
     jobId,
   });
   return jobsDb.get(jobId);
 }
 
+/**
+ * Extiende un video YA generado, agregando EXTEND_DURATION (7s) de continuacion,
+ * y reemplaza el archivo del clip por el video extendido (concatenado).
+ * Requiere que el job de video tenga outputPath (un video existente).
+ */
+export async function extendVideoJob(jobId: string): Promise<JobRecord | undefined> {
+  const job = jobsDb.get(jobId);
+  if (!job) return undefined;
+  if (job.type !== "video") throw new Error("Solo se pueden extender videos.");
+  const project = projectsDb.get(job.projectId);
+  if (!project) return undefined;
+  const clip = project.plan.clips.find((c) => c.id === job.refId);
+  if (!clip) throw new Error(`Clip "${job.refId}" no existe en el plan.`);
+  if (!job.outputPath || !existsRel(project.id, job.outputPath)) {
+    throw new Error("No hay un video base generado para extender. Genéralo primero.");
+  }
+
+  const model = job.modelOverride || project.models.video;
+  const resolution = resolveResolution(clip.resolucion ?? project.defaultResolution);
+  const baseBytes = await readBytes(project.id, job.outputPath);
+
+  logEvent(
+    project.id,
+    "info",
+    `Extendiendo video "${clip.id}" +${EXTEND_DURATION}s (${resolution})`,
+    { jobId: job.id, model }
+  );
+
+  const extended = await getVideoProvider().extend({
+    videoBytes: baseBytes,
+    videoMimeType: "video/mp4",
+    prompt: clip.video_prompt,
+    durationSec: EXTEND_DURATION,
+    aspectRatio: ASPECT_RATIO,
+    resolution,
+    dialogue: clip.dialogo,
+    model,
+  });
+
+  // Concatenamos base + extension en un solo archivo (si hay ffmpeg). Si no, reemplazamos.
+  const rel = clipRelPath(clip.orden, clip.id);
+  const merged = await concatVideos(project.id, baseBytes, extended.bytes);
+  await saveBytes(project.id, rel, merged ?? extended.bytes);
+
+  const updated = jobsDb.update(job.id, {
+    outputPath: rel,
+    candidates: [{ file: rel, index: 1 }],
+    selectedIndex: 1,
+    status: "awaiting_approval",
+    locked: false,
+    model,
+  });
+  logEvent(project.id, "success", `Video "${clip.id}" extendido, esperando aprobacion.`, {
+    jobId: job.id,
+    model,
+  });
+  await refreshManifest(project.id);
+  return updated;
+}
+
 /* ----------------------------- manifest ------------------------------ */
+
+/**
+ * Concatena base + extension en un solo mp4 usando ffmpeg (re-encode para evitar
+ * problemas de timestamps). Devuelve los bytes del video unido, o null si no hay
+ * ffmpeg (en ese caso el caller usa solo la extension).
+ */
+async function concatVideos(
+  projectId: string,
+  baseBytes: Uint8Array,
+  extBytes: Uint8Array
+): Promise<Uint8Array | null> {
+  if (!hasFfmpeg()) return null;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "augc_ext_"));
+  const baseFile = path.join(tmpDir, "base.mp4");
+  const extFile = path.join(tmpDir, "ext.mp4");
+  const outFile = path.join(tmpDir, "out.mp4");
+  try {
+    fs.writeFileSync(baseFile, baseBytes);
+    fs.writeFileSync(extFile, extBytes);
+    // Re-encode + concat por filtro (robusto ante distintos timestamps/SAR).
+    const res = spawnSync(
+      "ffmpeg",
+      [
+        "-y",
+        "-i",
+        baseFile,
+        "-i",
+        extFile,
+        "-filter_complex",
+        "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]",
+        "-map",
+        "[outv]",
+        "-map",
+        "[outa]",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "medium",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        outFile,
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] }
+    );
+    if (res.status !== 0 || !fs.existsSync(outFile)) {
+      logEvent(
+        projectId,
+        "warn",
+        "No se pudo concatenar la extension con ffmpeg; se usa solo la continuacion."
+      );
+      return null;
+    }
+    return fs.readFileSync(outFile);
+  } catch {
+    return null;
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 export async function refreshManifest(projectId: string): Promise<void> {
   const project = projectsDb.get(projectId);

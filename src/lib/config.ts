@@ -69,6 +69,9 @@ export function resolveResolution(value?: string): VideoResolution {
 /** Duraciones validas de Veo (segundos). Se hace snap al valor mas cercano. */
 export const VALID_DURATIONS = [4, 6, 8] as const;
 
+/** Duracion fija (segundos) de una extension de video. */
+export const EXTEND_DURATION = 7;
+
 export function snapDuration(sec: number): number {
   let best = VALID_DURATIONS[0] as number;
   let bestDiff = Math.abs(sec - best);
