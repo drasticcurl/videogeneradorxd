@@ -258,40 +258,105 @@ async function runImageGeneration(
   }
 
   const variants = Math.max(1, job.variants || 1);
+
+  // Reanudacion: conservamos las variantes YA generadas que sigan en disco, asi un
+  // reintento (o un 429 en la 2da) no pierde la 1ra. Solo generamos las que faltan.
+  const existing = (job.candidates ?? []).filter((c) =>
+    existsRel(project.id, c.file)
+  );
+  const have = new Set(existing.map((c) => c.index));
+  const candidates: Candidate[] = [...existing];
+  const missing: number[] = [];
+  for (let i = 1; i <= variants; i++) if (!have.has(i)) missing.push(i);
+
+  if (missing.length === 0) {
+    jobsDb.update(job.id, {
+      candidates,
+      selectedIndex: variants === 1 ? 1 : candidates.length === 1 ? candidates[0].index : job.selectedIndex ?? null,
+      outputPath: null,
+      model,
+    });
+    return;
+  }
+
   logEvent(
     project.id,
     "info",
-    `Generando ${variants} variante(s) de imagen "${img.id}" (${img.modo}${
+    `Generando ${missing.length} variante(s) de imagen "${img.id}" (${img.modo}${
       refImages.length ? `, ${refImages.length} ref` : ""
-    })`,
+    }${existing.length ? `, ${existing.length} ya hecha/s` : ""}) · request individual por variante`,
     { jobId: job.id, model }
   );
 
-  const candidates: Candidate[] = [];
-  for (let i = 1; i <= variants; i++) {
-    const result = await getImageProvider().generate({
-      prompt: img.prompt,
-      refImages: refImages.length > 0 ? refImages : undefined,
-      negativePrompt,
-      aspectRatio: ASPECT_RATIO,
-      model,
-    });
-    const ext = result.mimeType.includes("jpeg") ? "jpg" : "png";
-    const rel = candidateRelPath(img.id, i, ext);
-    await saveBytes(project.id, rel, result.bytes);
-    candidates.push({ file: rel, index: i });
+  // Generamos UNA variante por request (no las dos a la vez). Persistimos cada exito
+  // al toque para no perderlo si la siguiente falla (429 / red).
+  let lastErr: unknown;
+  for (const i of missing) {
+    try {
+      const result = await getImageProvider().generate({
+        prompt: img.prompt,
+        refImages: refImages.length > 0 ? refImages : undefined,
+        negativePrompt,
+        aspectRatio: ASPECT_RATIO,
+        model,
+      });
+      const ext = result.mimeType.includes("jpeg") ? "jpg" : "png";
+      const rel = candidateRelPath(img.id, i, ext);
+      await saveBytes(project.id, rel, result.bytes);
+      candidates.push({ file: rel, index: i });
+      candidates.sort((a, b) => a.index - b.index);
+      // Persistimos incrementalmente (cada request individual).
+      jobsDb.update(job.id, {
+        candidates: [...candidates],
+        selectedIndex: variants === 1 ? 1 : job.selectedIndex ?? null,
+        outputPath: null,
+        model,
+      });
+      logEvent(project.id, "info", `Variante v${i} de "${img.id}" lista.`, {
+        jobId: job.id,
+        model,
+      });
+    } catch (err) {
+      lastErr = err;
+      logEvent(
+        project.id,
+        "warn",
+        `Variante v${i} de "${img.id}" fallo: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { jobId: job.id, model }
+      );
+      // No seguimos pegando si una fallo (probable 429/red): devolvemos lo que haya.
+      break;
+    }
+  }
+
+  if (candidates.length === 0) {
+    // No salio ninguna: relanzamos para que la cola maneje el reintento (429/red).
+    throw lastErr ?? new Error(`No se pudo generar ninguna variante de "${img.id}".`);
   }
 
   jobsDb.update(job.id, {
     candidates,
-    selectedIndex: variants === 1 ? 1 : null,
+    selectedIndex: variants === 1 ? 1 : candidates.length === 1 ? candidates[0].index : job.selectedIndex ?? null,
     outputPath: null,
     model,
   });
-  logEvent(project.id, "success", `Imagen "${img.id}" lista, esperando aprobacion.`, {
-    jobId: job.id,
-    model,
-  });
+  if (candidates.length < variants) {
+    logEvent(
+      project.id,
+      "warn",
+      `Imagen "${img.id}": salieron ${candidates.length}/${variants} variantes (la/s otra/s falló por cuota o red). Podés aprobar la que salió o tocar Regenerar para completar.`,
+      { jobId: job.id, model }
+    );
+  } else {
+    logEvent(
+      project.id,
+      "success",
+      `Imagen "${img.id}" lista (${candidates.length} variante/s), esperando aprobacion.`,
+      { jobId: job.id, model }
+    );
+  }
 }
 
 async function runVideoGeneration(
