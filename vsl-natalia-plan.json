@@ -9,10 +9,6 @@
     {
       "id": "natalia",
       "label": "Lic. Natalia Reyes"
-    },
-    {
-      "id": "romina",
-      "label": "Romina (testimonio)"
     }
   ],
   "assets": [
@@ -42,9 +38,8 @@
       "images": [
         {
           "id": "romina_medium",
-          "modo": "image2image",
-          "ref_image_id": "romina",
-          "prompt": "Medium close-up portrait of the SAME woman as the reference photo (Romina, a real customer). Keep identity 100% consistent with the reference, same face, same person. Argentine woman 30-45, natural and genuine, casual light top, seated talking to camera at home with a softly blurred cozy living-room background, soft natural daylight, realistic skin texture, photorealistic, friendly grateful expression. Vertical 9:16.",
+          "modo": "text2image",
+          "prompt": "Studio-quality medium close-up portrait of an invented everyday Argentine woman, 30-45 years old, a real-looking customer (not a model). She must look clearly DIFFERENT from the nutritionist: different face, different hair color and style, different features. Natural and genuine, friendly grateful expression, casual light top, seated talking to camera at home with a softly blurred cozy living-room background (warm neutral tones, a plant). Soft natural daylight, shallow depth of field, realistic skin texture, photorealistic. Vertical 9:16.",
           "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
         }
       ]
@@ -1068,7 +1063,7 @@
       "orden": 81,
       "asset_id": "romina",
       "image_id": "romina_medium",
-      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, a real customer giving a sincere, genuine testimonial to camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "video_prompt": "Animate the avatar into a realistic talking-head testimonial video. The same everyday Argentine woman (a real customer, NOT the nutritionist) talks directly to camera, giving a sincere, genuine testimonial to camera. Cozy home living-room setting, casual light top, keep the exact same face, hair and look as the reference image, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
       "dialogo": "Hola Naty. No pensé que iba a funcionar tan rápido.",
       "duracion_seg": 6,
       "etiqueta": "IA",
@@ -1079,7 +1074,7 @@
       "orden": 82,
       "asset_id": "romina",
       "image_id": "romina_medium",
-      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, a real customer giving a sincere, genuine testimonial to camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "video_prompt": "Animate the avatar into a realistic talking-head testimonial video. The same everyday Argentine woman (a real customer, NOT the nutritionist) talks directly to camera, giving a sincere, genuine testimonial to camera. Cozy home living-room setting, casual light top, keep the exact same face, hair and look as the reference image, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
       "dialogo": "Yo ya tomaba el agua de arroz, pero sentía que estaba estancada.",
       "duracion_seg": 8,
       "etiqueta": "IA",
@@ -1090,7 +1085,7 @@
       "orden": 83,
       "asset_id": "romina",
       "image_id": "romina_medium",
-      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, a real customer giving a sincere, genuine testimonial to camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "video_prompt": "Animate the avatar into a realistic talking-head testimonial video. The same everyday Argentine woman (a real customer, NOT the nutritionist) talks directly to camera, giving a sincere, genuine testimonial to camera. Cozy home living-room setting, casual light top, keep the exact same face, hair and look as the reference image, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
       "dialogo": "Con el protocolo turbo me di cuenta de que cometía errores: la cantidad, el horario, los ingredientes.",
       "duracion_seg": 8,
       "etiqueta": "IA",
@@ -1101,7 +1096,7 @@
       "orden": 84,
       "asset_id": "romina",
       "image_id": "romina_medium",
-      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, a real customer giving a heartfelt testimonial to camera, happy and relieved. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "video_prompt": "Animate the avatar into a realistic talking-head testimonial video. The same everyday Argentine woman (a real customer, NOT the nutritionist) talks directly to camera, happy and relieved, giving a heartfelt testimonial to camera. Cozy home living-room setting, casual light top, keep the exact same face, hair and look as the reference image, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
       "dialogo": "En unas semanas se me desinfló la panza y la ansiedad de la noche desapareció. Me cambió la forma de cuidarme.",
       "duracion_seg": 8,
       "etiqueta": "IA",
@@ -1230,7 +1225,8 @@
     }
   ],
   "warnings": [
-    "VSL talking-head: subi la foto real de Natalia como avatar de referencia 'natalia' y la de Romina como 'romina' antes de generar.",
+    "VSL talking-head: subi SOLO la foto real de Natalia como avatar de referencia 'natalia' antes de generar.",
+    "Romina (testimonio) NO tiene foto: se genera de cero con IA (text2image) y se mantiene su misma cara en sus 4 clips.",
     "Cada linea del guion = 1 clip (6-8s). Total: 91 de Natalia + 4 de Romina = 95 clips.",
     "Los B-ROLL son clips IA del asset 'broll' (insertos sin cara): Veo genera el inserto + la voz en off; si preferis, en VTURB poneles la voz de Natalia por encima.",
     "El clip c73 es el punto donde, en la pagina /upsell, aparece el bloque de precio/CTA.",
