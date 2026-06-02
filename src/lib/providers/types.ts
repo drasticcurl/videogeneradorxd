@@ -6,6 +6,34 @@
  */
 import type { ProjectPlan } from "../schema";
 
+/**
+ * Error HTTP de un proveedor (Vertex). Lleva el status y, si vino, el Retry-After
+ * (ms) para que la cola maneje los 429 (rate limit / cuota) con backoff largo.
+ */
+export class ProviderHttpError extends Error {
+  status: number;
+  retryAfterMs?: number;
+  constructor(message: string, status: number, retryAfterMs?: number) {
+    super(message);
+    this.name = "ProviderHttpError";
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+  get isRateLimit(): boolean {
+    return this.status === 429;
+  }
+}
+
+/** Parsea el header Retry-After (segundos o fecha HTTP) a milisegundos. */
+export function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const secs = Number(header);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const date = Date.parse(header);
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+  return undefined;
+}
+
 export interface LlmProvider {
   /** Interpreta el brief en lenguaje natural y devuelve el PlanJSON estructurado. */
   parseBrief(
