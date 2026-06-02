@@ -11,12 +11,34 @@ export const ASPECT_RATIOS = ["9:16", "16:9", "1:1", "4:3", "3:4"] as const;
 export const ImageSchema = z.object({
   id: z.string().min(1, "image.id requerido"),
   modo: z.enum(["text2image", "image2image"]),
-  /** requerido si modo=image2image; apunta a otra Image.id del proyecto */
+  /**
+   * Requerido si modo=image2image. Apunta a otra Image.id del proyecto, O a una
+   * Reference.id (foto/avatar subido por el usuario, ver ProjectPlan.references).
+   */
   ref_image_id: z.string().optional(),
+  /**
+   * Referencias MULTIPLES (VSL): permite combinar varias fotos/imagenes de identidad
+   * en una misma generacion (ej. dos personas en el mismo plano). Cada id puede ser
+   * una Image.id previa o una Reference.id (foto subida).
+   */
+  ref_image_ids: z.array(z.string()).optional(),
   /** prompt visual en ingles */
   prompt: z.string().min(1, "image.prompt requerido"),
   /** negative prompt opcional por imagen (override del global) */
   negative_prompt: z.string().optional(),
+});
+
+/**
+ * Imagen de REFERENCIA subida por el usuario (VSL): foto real de la persona/avatar
+ * que se usa como fuente de identidad para generar TODOS los planos de esa persona.
+ * `file` se completa cuando se sube el archivo al proyecto (relativo a output/<id>/).
+ */
+export const ReferenceImageSchema = z.object({
+  id: z.string().min(1, "reference.id requerido"),
+  /** etiqueta humana, ej "Natalia Reyes" */
+  label: z.string().optional(),
+  /** path relativo del archivo subido (references/<id>.png); null hasta que se sube */
+  file: z.string().optional(),
 });
 
 export const AssetSchema = z.object({
@@ -51,6 +73,8 @@ export const GlobalSchema = z.object({
 export const ProjectPlanSchema = z
   .object({
     global: GlobalSchema,
+    /** fotos/avatares de referencia subidos por el usuario (VSL). */
+    references: z.array(ReferenceImageSchema).default([]),
     assets: z.array(AssetSchema).default([]),
     clips: z.array(ClipSchema).default([]),
     /** supuestos / defaults que el parser tuvo que rellenar */
@@ -77,37 +101,76 @@ export const ProjectPlanSchema = z
       }
     }
 
+    // Indexamos las referencias subidas (VSL) y validamos que no colisionen con image ids.
+    const referenceIds = new Set<string>();
+    for (const ref of plan.references ?? []) {
+      if (referenceIds.has(ref.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `reference.id duplicado: "${ref.id}"`,
+          path: ["references"],
+        });
+      }
+      if (imageIds.has(ref.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `reference.id "${ref.id}" colisiona con una image.id; usá ids distintos.`,
+          path: ["references"],
+        });
+      }
+      referenceIds.add(ref.id);
+    }
+
+    // Devuelve todos los ids de referencia de una imagen (ref_image_id + ref_image_ids), sin duplicados.
+    const refsOf = (img: z.infer<typeof ImageSchema>): string[] => {
+      const set = new Set<string>();
+      if (img.ref_image_id) set.add(img.ref_image_id);
+      for (const r of img.ref_image_ids ?? []) set.add(r);
+      return [...set];
+    };
+
     // Validaciones de consistencia por imagen.
     for (const asset of plan.assets) {
       asset.images.forEach((img, idx) => {
         if (img.modo === "image2image") {
-          if (!img.ref_image_id) {
+          const refs = refsOf(img);
+          if (refs.length === 0) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
-              message: `Image "${img.id}" es image2image pero no tiene ref_image_id.`,
-              path: ["assets"],
-            });
-          } else if (!imageIds.has(img.ref_image_id)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: `Image "${img.id}".ref_image_id "${img.ref_image_id}" no existe en el proyecto.`,
-              path: ["assets"],
-            });
-          } else if (img.ref_image_id === img.id) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: `Image "${img.id}" no puede referenciarse a si misma.`,
+              message: `Image "${img.id}" es image2image pero no tiene ref_image_id ni ref_image_ids.`,
               path: ["assets"],
             });
           }
+          for (const r of refs) {
+            if (r === img.id) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `Image "${img.id}" no puede referenciarse a si misma.`,
+                path: ["assets"],
+              });
+            } else if (!imageIds.has(r) && !referenceIds.has(r)) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `Image "${img.id}" referencia "${r}" que no existe (ni como image ni como reference).`,
+                path: ["assets"],
+              });
+            }
+          }
         }
-        // La primera imagen de cada asset deberia ser text2image (estado base).
+        // La primera imagen de cada asset debe ser text2image (estado base),
+        // O image2image construida SOLO a partir de referencias subidas (VSL: la
+        // foto real de la persona es la fuente de identidad de su imagen base).
         if (idx === 0 && img.modo !== "text2image") {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `La primera imagen del asset "${asset.id}" deberia ser text2image (estado base).`,
-            path: ["assets"],
-          });
+          const refs = refsOf(img);
+          const allUploadedRefs =
+            refs.length > 0 && refs.every((r) => referenceIds.has(r));
+          if (!allUploadedRefs) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `La primera imagen del asset "${asset.id}" debe ser text2image, o image2image basada en una imagen de referencia subida (references).`,
+              path: ["assets"],
+            });
+          }
         }
       });
     }
@@ -142,6 +205,7 @@ export const ProjectPlanSchema = z
   });
 
 export type Image = z.infer<typeof ImageSchema>;
+export type ReferenceImage = z.infer<typeof ReferenceImageSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
 export type Clip = z.infer<typeof ClipSchema>;
 export type GlobalConfig = z.infer<typeof GlobalSchema>;

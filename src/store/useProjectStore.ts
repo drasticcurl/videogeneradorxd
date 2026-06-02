@@ -31,6 +31,20 @@ export interface ModelOption {
   label: string;
 }
 
+/**
+ * Avatar/foto de referencia que el usuario sube ANTES de generar (VSL).
+ * Se guarda en memoria del cliente (dataUrl para preview) hasta que se crea el
+ * proyecto; ahi se suben los bytes al backend (/references) y se mapean por id.
+ */
+export interface ReferenceDraft {
+  id: string;
+  label: string;
+  fileName: string;
+  mimeType: string;
+  /** data URL (base64) para previsualizar y para reconstruir el blob al subir */
+  dataUrl: string;
+}
+
 export interface AppConfig {
   providerMode: string;
   catalog: { llm: ModelOption[]; image: ModelOption[]; video: ModelOption[] };
@@ -57,6 +71,9 @@ interface ProjectState {
   imageVariants: number;
   defaultResolution: string;
 
+  /** avatares/fotos de referencia subidos por el usuario (VSL), aun en el cliente */
+  references: ReferenceDraft[];
+
   project: ProjectRecord | null;
   jobs: JobRecord[];
   manifest: Manifest | null;
@@ -66,6 +83,16 @@ interface ProjectState {
   setModel: (kind: keyof ProjectModels, id: string) => void;
   setImageVariants: (n: number) => void;
   setDefaultResolution: (r: string) => void;
+
+  // avatares de referencia (VSL)
+  addReferenceFile: (file: File) => Promise<void>;
+  updateReference: (
+    id: string,
+    patch: Partial<Pick<ReferenceDraft, "id" | "label">>
+  ) => void;
+  removeReference: (id: string) => void;
+  uploadReferences: (projectId: string) => Promise<void>;
+
   loadConfig: () => Promise<void>;
   parseBrief: () => Promise<void>;
   setPlanFromJson: (raw: unknown) => void;
@@ -105,6 +132,37 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+/** Slug simple del lado del cliente (debe coincidir con storage.slugify del backend). */
+function clientSlug(input: string): string {
+  return (
+    input
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60) || "avatar"
+  );
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [meta, b64] = dataUrl.split(",");
+  const mime = /:(.*?);/.exec(meta)?.[1] ?? "image/png";
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
 const FALLBACK_MODELS: ProjectModels = {
   llm: "gemini-2.5-flash",
   image: "gemini-2.5-flash-image",
@@ -123,6 +181,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   imageVariants: 1,
   defaultResolution: "720p",
 
+  references: [],
+
   project: null,
   jobs: [],
   manifest: null,
@@ -133,6 +193,62 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((s) => ({ selectedModels: { ...s.selectedModels, [kind]: id } })),
   setImageVariants: (n) => set({ imageVariants: Math.min(4, Math.max(1, n)) }),
   setDefaultResolution: (r) => set({ defaultResolution: r }),
+
+  addReferenceFile: async (file) => {
+    const dataUrl = await readFileAsDataUrl(file);
+    set((s) => {
+      const base = clientSlug(file.name.replace(/\.[^.]+$/, ""));
+      // aseguramos id unico entre los drafts existentes
+      let id = base;
+      let n = 2;
+      while (s.references.some((r) => r.id === id)) id = `${base}_${n++}`;
+      const draft: ReferenceDraft = {
+        id,
+        label: file.name.replace(/\.[^.]+$/, ""),
+        fileName: file.name,
+        mimeType: file.type || "image/png",
+        dataUrl,
+      };
+      return { references: [...s.references, draft] };
+    });
+  },
+
+  updateReference: (id, patch) =>
+    set((s) => ({
+      references: s.references.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              ...patch,
+              id: patch.id !== undefined ? clientSlug(patch.id) : r.id,
+            }
+          : r
+      ),
+    })),
+
+  removeReference: (id) =>
+    set((s) => ({ references: s.references.filter((r) => r.id !== id) })),
+
+  uploadReferences: async (projectId) => {
+    const { references } = get();
+    for (const ref of references) {
+      const form = new FormData();
+      form.append("referenceId", ref.id);
+      if (ref.label) form.append("label", ref.label);
+      form.append("file", dataUrlToBlob(ref.dataUrl), ref.fileName || `${ref.id}.png`);
+      const res = await fetch(`/api/projects/${projectId}/references`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          (data && (data.error as string)) ||
+            `No se pudo subir el avatar de referencia "${ref.id}"`
+        );
+      }
+    }
+  },
 
   loadConfig: async () => {
     try {
@@ -149,7 +265,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   parseBrief: async () => {
-    const { brief, selectedModels, imageVariants } = get();
+    const { brief, selectedModels, imageVariants, references } = get();
     set({ parsing: true, error: null });
     try {
       const data = await jsonFetch<{ plan: ProjectPlan; estimate: CostEstimate }>(
@@ -161,6 +277,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             brief,
             model: selectedModels.llm,
             imageVariants,
+            references: references.map((r) => ({ id: r.id, label: r.label })),
           }),
         }
       );
@@ -191,6 +308,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       plan: null,
       estimate: null,
       error: null,
+      references: [],
       project: null,
       jobs: [],
       manifest: null,
