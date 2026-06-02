@@ -243,6 +243,14 @@ function brollVideoPrompt(brollPrompt: string): string {
     `soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.`
   );
 }
+function rominaVideoPrompt(action: string): string {
+  return (
+    `Animate the avatar into a realistic talking-head testimonial video. The same everyday Argentine woman ` +
+    `(a real customer, NOT the nutritionist) talks directly to camera, ${action}. Cozy home living-room setting, ` +
+    `casual light top, keep the exact same face, hair and look as the reference image, subtle natural head and ` +
+    `hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.`
+  );
+}
 
 /* --------- build assets --------- */
 const natalia = {
@@ -275,19 +283,22 @@ const natalia = {
   ],
 };
 
+// Romina (testimonio) NO tiene foto real: se INVENTA de cero con text2image.
+// Su imagen base es la fuente de identidad de sus 4 clips (misma cara siempre).
 const romina = {
   id: "romina",
   tipo: "avatar" as const,
   images: [
     {
       id: "romina_medium",
-      modo: "image2image" as const,
-      ref_image_id: "romina",
+      modo: "text2image" as const,
       prompt:
-        "Medium close-up portrait of the SAME woman as the reference photo (Romina, a real customer). Keep identity " +
-        "100% consistent with the reference, same face, same person. Argentine woman 30-45, natural and genuine, " +
-        "casual light top, seated talking to camera at home with a softly blurred cozy living-room background, soft " +
-        "natural daylight, realistic skin texture, photorealistic, friendly grateful expression. Vertical 9:16.",
+        "Studio-quality medium close-up portrait of an invented everyday Argentine woman, 30-45 years old, a " +
+        "real-looking customer (not a model). She must look clearly DIFFERENT from the nutritionist: different face, " +
+        "different hair color and style, different features. Natural and genuine, friendly grateful expression, " +
+        "casual light top, seated talking to camera at home with a softly blurred cozy living-room background " +
+        "(warm neutral tones, a plant). Soft natural daylight, shallow depth of field, realistic skin texture, " +
+        "photorealistic. Vertical 9:16.",
       negative_prompt: NEG,
     },
   ],
@@ -347,10 +358,10 @@ ROMINA.forEach((dialogo, i) => {
     orden: orden++,
     asset_id: "romina",
     image_id: "romina_medium",
-    video_prompt: talkingHeadPrompt(
+    video_prompt: rominaVideoPrompt(
       i === ROMINA.length - 1
-        ? "a real customer giving a heartfelt testimonial to camera, happy and relieved"
-        : "a real customer giving a sincere, genuine testimonial to camera"
+        ? "happy and relieved, giving a heartfelt testimonial to camera"
+        : "giving a sincere, genuine testimonial to camera"
     ),
     dialogo,
     duracion_seg: durFor(dialogo),
@@ -373,14 +384,12 @@ const plan = {
       "Los B-ROLL son insertos sin cara: la voz de Natalia va en off por encima.",
     negative_prompt: NEG,
   },
-  references: [
-    { id: "natalia", label: "Lic. Natalia Reyes" },
-    { id: "romina", label: "Romina (testimonio)" },
-  ],
+  references: [{ id: "natalia", label: "Lic. Natalia Reyes" }],
   assets: [natalia, romina, broll],
   clips,
   warnings: [
-    "VSL talking-head: subi la foto real de Natalia como avatar de referencia 'natalia' y la de Romina como 'romina' antes de generar.",
+    "VSL talking-head: subi SOLO la foto real de Natalia como avatar de referencia 'natalia' antes de generar.",
+    "Romina (testimonio) NO tiene foto: se genera de cero con IA (text2image) y se mantiene su misma cara en sus 4 clips.",
     "Cada linea del guion = 1 clip (6-8s). Total: 91 de Natalia + 4 de Romina = 95 clips.",
     "Los B-ROLL son clips IA del asset 'broll' (insertos sin cara): Veo genera el inserto + la voz en off; si preferis, en VTURB poneles la voz de Natalia por encima.",
     "El clip c73 es el punto donde, en la pagina /upsell, aparece el bloque de precio/CTA.",
