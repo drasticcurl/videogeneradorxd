@@ -12,6 +12,7 @@
 import { config } from "../config";
 import { jobsDb, projectsDb } from "../db";
 import type { JobRecord, ProjectStatus } from "../types";
+import { ProviderHttpError } from "../providers/types";
 import { logEvent, refreshManifest, runJobGeneration } from "./pipeline";
 
 interface QueueState {
@@ -52,6 +53,10 @@ export function enqueueProject(projectId: string): void {
 export function enqueueJob(jobId: string): void {
   const job = jobsDb.get(jobId);
   if (!job) return;
+  const { rateLimitRetries, transientRetries, ...restMeta } = (job.meta ??
+    {}) as Record<string, unknown>;
+  void rateLimitRetries;
+  void transientRetries;
   jobsDb.update(jobId, {
     status: "pending",
     error: null,
@@ -61,6 +66,8 @@ export function enqueueJob(jobId: string): void {
     candidates: [],
     selectedIndex: null,
     outputPath: job.type === "image" ? null : job.outputPath,
+    // reseteamos el contador de reintentos por rate limit (presupuesto fresco)
+    meta: restMeta,
   });
   state.retryAt.delete(jobId);
   state.pausedProjects.delete(job.projectId);
@@ -193,6 +200,78 @@ function startJob(job: JobRecord): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const current = jobsDb.get(job.id);
+
+      // Errores TRANSITORIOS (no son fallas reales del job):
+      //  - 429 / rate limit (cuota): esperar largo (Retry-After o rateLimitBackoffMs).
+      //  - red ("fetch failed", timeout, conexion cortada): backoff exponencial corto.
+      // Ambos reintentan SIN consumir los maxAttempts normales (cuenta aparte).
+      const isRateLimit =
+        err instanceof ProviderHttpError
+          ? err.isRateLimit
+          : /\(429\)|RESOURCE_EXHAUSTED|rate limit|quota/i.test(message);
+      const isNetwork =
+        !isRateLimit &&
+        /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|terminated|UND_ERR|aborted|timed?\s?out|TimeoutError|AbortError/i.test(
+          message
+        );
+
+      if (isRateLimit || isNetwork) {
+        const tDone = ((current?.meta?.transientRetries as number) ?? 0) + 1;
+        const maxT = config.pipeline.rateLimitMaxAttempts;
+        if (tDone <= maxT) {
+          const retryAfter =
+            err instanceof ProviderHttpError ? err.retryAfterMs : undefined;
+          const delay = isRateLimit
+            ? (retryAfter ?? config.pipeline.rateLimitBackoffMs) +
+              Math.random() * 2000
+            : Math.min(
+                config.pipeline.networkBackoffMs * 2 ** (tDone - 1),
+                30000
+              ) +
+              Math.random() * 1000;
+          state.retryAt.set(job.id, Date.now() + delay);
+          const kind = isRateLimit ? "Rate limit (429)" : "Error de red";
+          jobsDb.update(job.id, {
+            // NO consumimos attempts normales: es transitorio, no una falla del job.
+            attempts: job.attempts,
+            status: "pending",
+            error: `${kind}. Reintento ${tDone}/${maxT} en ${Math.round(
+              delay / 1000
+            )}s...`,
+            meta: { ...(current?.meta ?? {}), transientRetries: tDone },
+          });
+          logEvent(
+            job.projectId,
+            "warn",
+            `"${job.refId}" ${
+              isRateLimit ? "rate limit (429)" : "error de red"
+            }: espero ${Math.round(delay / 1000)}s y reintento (${tDone}/${maxT})${
+              isRateLimit
+                ? ". Tip: bajá PIPELINE_CONCURRENCY o subí el tier de cuota."
+                : "."
+            }`,
+            { jobId: job.id }
+          );
+          setTimeout(() => pump(), delay + 50);
+        } else {
+          jobsDb.update(job.id, {
+            status: "failed",
+            error: `${
+              isRateLimit ? "Rate limit (429)" : "Error de red"
+            } persistente tras ${maxT} reintentos: ${message}`,
+          });
+          logEvent(
+            job.projectId,
+            "error",
+            `"${job.refId}" fallo por ${
+              isRateLimit ? "rate limit (429)" : "error de red"
+            } persistente.`,
+            { jobId: job.id }
+          );
+        }
+        return; // el finally hace cleanup + pump
+      }
+
       const attempts = current?.attempts ?? job.attempts + 1;
       if (attempts < (current?.maxAttempts ?? config.pipeline.maxAttempts)) {
         const delay = backoffDelay(attempts);

@@ -34,7 +34,11 @@ export const MODEL_CATALOG: Record<ModelKind, ModelOption[]> = {
     { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite" },
   ],
   image: [
-    { id: "gemini-2.5-flash-image", label: "Nano Banana (Gemini 2.5 Flash Image)" },
+    { id: "gemini-2.5-flash-image", label: "Nano Banana (Gemini 2.5 Flash Image) · recomendado, +cuota" },
+    // Variantes mas nuevas (usan la MISMA API generateContent). Pueden requerir que tu
+    // proyecto las tenga habilitadas y suelen tener cuota mas baja / costo mayor.
+    { id: "gemini-3.1-flash-image-preview", label: "Nano Banana 2 (Gemini 3.1 Flash Image) · probar" },
+    { id: "gemini-3-pro-image-preview", label: "Nano Banana Pro (Gemini 3 Pro Image, 4K) · -cuota, +caro" },
   ],
   video: [
     { id: "veo-3.1-generate-001", label: "Veo 3.1" },
@@ -146,6 +150,17 @@ export const config = {
     maxAttempts: Number(env("PIPELINE_MAX_ATTEMPTS", "3")),
     // Backoff base (ms). El delay real es base * 2^(intento-1) con jitter.
     backoffBaseMs: Number(env("PIPELINE_BACKOFF_MS", "1500")),
+    // Backoff ESPECIFICO para 429 / rate limit (cuota por minuto). Mucho mas largo:
+    // un 429 de RPM se resuelve esperando ~30-60s, no reintentando en 3s.
+    rateLimitBackoffMs: Number(env("PIPELINE_RATE_LIMIT_BACKOFF_MS", "35000")),
+    // Backoff base para errores de RED ("fetch failed", timeouts, conexion cortada).
+    // Crece exponencial hasta 30s. Son transitorios: conviene reintentar varias veces.
+    networkBackoffMs: Number(env("PIPELINE_NETWORK_BACKOFF_MS", "4000")),
+    // Timeout por request de imagen (ms). Si la conexion se cuelga, aborta y reintenta.
+    imageTimeoutMs: Number(env("PIPELINE_IMAGE_TIMEOUT_MS", "120000")),
+    // Reintentos extra dedicados a errores transitorios (429 + red); cuenta aparte
+    // de los maxAttempts normales.
+    rateLimitMaxAttempts: Number(env("PIPELINE_RATE_LIMIT_MAX_ATTEMPTS", "10")),
     // Polling del LRO de Veo.
     veoPollIntervalMs: Number(env("VEO_POLL_INTERVAL_MS", "10000")),
     veoPollTimeoutMs: Number(env("VEO_POLL_TIMEOUT_MS", "600000")), // 10 min
