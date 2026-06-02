@@ -10,6 +10,7 @@ import {
   assertVertexConfig,
   resolveModel,
   ASPECT_RATIO,
+  config,
 } from "../../config";
 import type { ImageGenInput, ImageGenResult, ImageProvider } from "../types";
 import { ProviderHttpError, parseRetryAfter } from "../types";
@@ -91,6 +92,9 @@ export class VertexImageProvider implements ImageProvider {
       method: "POST",
       headers: await authHeaders(),
       body: JSON.stringify(body),
+      // Si la conexion se cuelga, abortamos y dejamos que la cola reintente
+      // (en vez de bloquear un slot de concurrencia para siempre).
+      signal: AbortSignal.timeout(config.pipeline.imageTimeoutMs),
     });
     if (!res.ok) {
       const t = await res.text();

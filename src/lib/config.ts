@@ -153,7 +153,13 @@ export const config = {
     // Backoff ESPECIFICO para 429 / rate limit (cuota por minuto). Mucho mas largo:
     // un 429 de RPM se resuelve esperando ~30-60s, no reintentando en 3s.
     rateLimitBackoffMs: Number(env("PIPELINE_RATE_LIMIT_BACKOFF_MS", "35000")),
-    // Reintentos extra dedicados a 429 (no consumen los maxAttempts normales).
+    // Backoff base para errores de RED ("fetch failed", timeouts, conexion cortada).
+    // Crece exponencial hasta 30s. Son transitorios: conviene reintentar varias veces.
+    networkBackoffMs: Number(env("PIPELINE_NETWORK_BACKOFF_MS", "4000")),
+    // Timeout por request de imagen (ms). Si la conexion se cuelga, aborta y reintenta.
+    imageTimeoutMs: Number(env("PIPELINE_IMAGE_TIMEOUT_MS", "120000")),
+    // Reintentos extra dedicados a errores transitorios (429 + red); cuenta aparte
+    // de los maxAttempts normales.
     rateLimitMaxAttempts: Number(env("PIPELINE_RATE_LIMIT_MAX_ATTEMPTS", "10")),
     // Polling del LRO de Veo.
     veoPollIntervalMs: Number(env("VEO_POLL_INTERVAL_MS", "10000")),

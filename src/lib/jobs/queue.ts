@@ -53,11 +53,10 @@ export function enqueueProject(projectId: string): void {
 export function enqueueJob(jobId: string): void {
   const job = jobsDb.get(jobId);
   if (!job) return;
-  const { rateLimitRetries, ...restMeta } = (job.meta ?? {}) as Record<
-    string,
-    unknown
-  >;
+  const { rateLimitRetries, transientRetries, ...restMeta } = (job.meta ??
+    {}) as Record<string, unknown>;
   void rateLimitRetries;
+  void transientRetries;
   jobsDb.update(jobId, {
     status: "pending",
     error: null,
@@ -202,51 +201,71 @@ function startJob(job: JobRecord): void {
       const message = err instanceof Error ? err.message : String(err);
       const current = jobsDb.get(job.id);
 
-      // 429 / rate limit (cuota): NO es un error real, es que pegamos muy rapido.
-      // Esperamos largo (Retry-After si vino, si no rateLimitBackoffMs) y reintentamos
-      // SIN consumir los maxAttempts normales (cuenta aparte, rateLimitMaxAttempts).
+      // Errores TRANSITORIOS (no son fallas reales del job):
+      //  - 429 / rate limit (cuota): esperar largo (Retry-After o rateLimitBackoffMs).
+      //  - red ("fetch failed", timeout, conexion cortada): backoff exponencial corto.
+      // Ambos reintentan SIN consumir los maxAttempts normales (cuenta aparte).
       const isRateLimit =
         err instanceof ProviderHttpError
           ? err.isRateLimit
           : /\(429\)|RESOURCE_EXHAUSTED|rate limit|quota/i.test(message);
+      const isNetwork =
+        !isRateLimit &&
+        /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network|terminated|UND_ERR|aborted|timed?\s?out|TimeoutError|AbortError/i.test(
+          message
+        );
 
-      if (isRateLimit) {
-        const rlDone = ((current?.meta?.rateLimitRetries as number) ?? 0) + 1;
-        const maxRl = config.pipeline.rateLimitMaxAttempts;
-        if (rlDone <= maxRl) {
+      if (isRateLimit || isNetwork) {
+        const tDone = ((current?.meta?.transientRetries as number) ?? 0) + 1;
+        const maxT = config.pipeline.rateLimitMaxAttempts;
+        if (tDone <= maxT) {
           const retryAfter =
             err instanceof ProviderHttpError ? err.retryAfterMs : undefined;
-          const delay =
-            (retryAfter ?? config.pipeline.rateLimitBackoffMs) +
-            Math.random() * 2000;
+          const delay = isRateLimit
+            ? (retryAfter ?? config.pipeline.rateLimitBackoffMs) +
+              Math.random() * 2000
+            : Math.min(
+                config.pipeline.networkBackoffMs * 2 ** (tDone - 1),
+                30000
+              ) +
+              Math.random() * 1000;
           state.retryAt.set(job.id, Date.now() + delay);
+          const kind = isRateLimit ? "Rate limit (429)" : "Error de red";
           jobsDb.update(job.id, {
-            // Revertimos el incremento de attempts: un 429 no gasta reintentos normales.
+            // NO consumimos attempts normales: es transitorio, no una falla del job.
             attempts: job.attempts,
             status: "pending",
-            error: `Rate limit (429). Reintento ${rlDone}/${maxRl} en ${Math.round(
+            error: `${kind}. Reintento ${tDone}/${maxT} en ${Math.round(
               delay / 1000
-            )}s (esperando cuota)...`,
-            meta: { ...(current?.meta ?? {}), rateLimitRetries: rlDone },
+            )}s...`,
+            meta: { ...(current?.meta ?? {}), transientRetries: tDone },
           });
           logEvent(
             job.projectId,
             "warn",
-            `"${job.refId}" rate limit (429): espero ${Math.round(
-              delay / 1000
-            )}s y reintento (${rlDone}/${maxRl}). Tip: bajá PIPELINE_CONCURRENCY o subí el tier de cuota.`,
+            `"${job.refId}" ${
+              isRateLimit ? "rate limit (429)" : "error de red"
+            }: espero ${Math.round(delay / 1000)}s y reintento (${tDone}/${maxT})${
+              isRateLimit
+                ? ". Tip: bajá PIPELINE_CONCURRENCY o subí el tier de cuota."
+                : "."
+            }`,
             { jobId: job.id }
           );
           setTimeout(() => pump(), delay + 50);
         } else {
           jobsDb.update(job.id, {
             status: "failed",
-            error: `Rate limit (429) persistente tras ${maxRl} reintentos: ${message}`,
+            error: `${
+              isRateLimit ? "Rate limit (429)" : "Error de red"
+            } persistente tras ${maxT} reintentos: ${message}`,
           });
           logEvent(
             job.projectId,
             "error",
-            `"${job.refId}" fallo por rate limit persistente (429). Subí el tier de cuota o reintentá mas tarde.`,
+            `"${job.refId}" fallo por ${
+              isRateLimit ? "rate limit (429)" : "error de red"
+            } persistente.`,
             { jobId: job.id }
           );
         }
