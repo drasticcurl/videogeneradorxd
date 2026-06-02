@@ -139,20 +139,24 @@ export const config = {
   },
 
   pipeline: {
-    // Cuantos jobs corren en paralelo.
-    concurrency: Number(env("PIPELINE_CONCURRENCY", "2")),
-    // Generacion por LOTES: maximo de jobs del MISMO tipo "sin aprobar"
-    // (generando + esperando aprobacion) a la vez. Evita disparar los 91 videos
-    // juntos (rate limit / fallas). El usuario aprueba el lote y siguen los proximos.
-    // 0 = sin limite (comportamiento viejo).
+    // Cuantos jobs corren en PARALELO (ventana rolling). Con auto-aprobacion, esto
+    // define los "batches": p.ej. 3 videos a la vez; cuando uno termina, arranca el siguiente.
+    concurrency: Number(env("PIPELINE_CONCURRENCY", "3")),
+    // Auto-aprobacion: si true (default), cada imagen/video se aprueba SOLA al terminar
+    // (pasa a "done" y desbloquea lo que depende). Asi se puede dejar generando toda la
+    // noche sin aprobar nada. Poné PIPELINE_AUTO_APPROVE=false para volver al modo manual.
+    autoApprove:
+      env("PIPELINE_AUTO_APPROVE", "true").toLowerCase() !== "false",
+    // Generacion por LOTES (solo aplica en modo manual, autoApprove=false): maximo de
+    // jobs del mismo tipo "sin aprobar" a la vez. Con autoApprove se ignora.
     approvalBatchSize: Math.max(0, Number(env("PIPELINE_APPROVAL_BATCH", "5"))),
     // Reintentos por job antes de marcar failed.
     maxAttempts: Number(env("PIPELINE_MAX_ATTEMPTS", "3")),
     // Backoff base (ms). El delay real es base * 2^(intento-1) con jitter.
     backoffBaseMs: Number(env("PIPELINE_BACKOFF_MS", "1500")),
     // Backoff ESPECIFICO para 429 / rate limit (cuota por minuto). Mucho mas largo:
-    // un 429 de RPM se resuelve esperando ~30-60s, no reintentando en 3s.
-    rateLimitBackoffMs: Number(env("PIPELINE_RATE_LIMIT_BACKOFF_MS", "35000")),
+    // un 429 de RPM se resuelve esperando ~45s, no reintentando en 3s.
+    rateLimitBackoffMs: Number(env("PIPELINE_RATE_LIMIT_BACKOFF_MS", "45000")),
     // Backoff base para errores de RED ("fetch failed", timeouts, conexion cortada).
     // Crece exponencial hasta 30s. Son transitorios: conviene reintentar varias veces.
     networkBackoffMs: Number(env("PIPELINE_NETWORK_BACKOFF_MS", "4000")),

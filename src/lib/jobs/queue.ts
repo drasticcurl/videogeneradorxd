@@ -13,7 +13,12 @@ import { config } from "../config";
 import { jobsDb, projectsDb } from "../db";
 import type { JobRecord, ProjectStatus } from "../types";
 import { ProviderHttpError } from "../providers/types";
-import { logEvent, refreshManifest, runJobGeneration } from "./pipeline";
+import {
+  approveJob,
+  logEvent,
+  refreshManifest,
+  runJobGeneration,
+} from "./pipeline";
 
 interface QueueState {
   activeProjects: Set<string>;
@@ -100,9 +105,11 @@ export function cancelProject(projectId: string): void {
 function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   const base = depReason(job);
   if (base !== "run") return base;
-  // Gate por LOTES: no arrancamos mas de approvalBatchSize jobs del MISMO tipo
-  // que esten "sin aprobar" (generando + esperando aprobacion). Asi se generan de
-  // a N, el usuario aprueba el lote, y recien ahi siguen los proximos.
+  // Con auto-aprobacion no hay gate por lotes: la ventana de generacion la define
+  // la concurrencia (p.ej. 3 a la vez, rolling). El gate solo aplica en modo manual.
+  if (config.pipeline.autoApprove) return "run";
+  // Gate por LOTES (modo manual): no arrancamos mas de approvalBatchSize jobs del MISMO
+  // tipo que esten "sin aprobar" (generando + esperando aprobacion).
   const limit = config.pipeline.approvalBatchSize;
   if (limit > 0 && inFlightUnapproved(job.projectId, job.type) >= limit) {
     return "wait";
@@ -195,8 +202,14 @@ function startJob(job: JobRecord): void {
   void (async () => {
     try {
       await runJobGeneration(job);
-      // Tras generar, espera aprobacion del usuario.
-      jobsDb.update(job.id, { status: "awaiting_approval", error: null });
+      if (config.pipeline.autoApprove) {
+        // Auto-aprobacion: queda "done" y desbloquea lo que depende, sin esperar al usuario.
+        // (para imagenes fija el candidato elegido como archivo canonico).
+        await approveJob(job.id);
+      } else {
+        // Modo manual: espera aprobacion del usuario.
+        jobsDb.update(job.id, { status: "awaiting_approval", error: null });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const current = jobsDb.get(job.id);
