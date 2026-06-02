@@ -91,6 +91,20 @@ export function cancelProject(projectId: string): void {
 }
 
 function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
+  const base = depReason(job);
+  if (base !== "run") return base;
+  // Gate por LOTES: no arrancamos mas de approvalBatchSize jobs del MISMO tipo
+  // que esten "sin aprobar" (generando + esperando aprobacion). Asi se generan de
+  // a N, el usuario aprueba el lote, y recien ahi siguen los proximos.
+  const limit = config.pipeline.approvalBatchSize;
+  if (limit > 0 && inFlightUnapproved(job.projectId, job.type) >= limit) {
+    return "wait";
+  }
+  return "run";
+}
+
+/** Razon de ejecutabilidad SOLO por dependencias (sin el gate de lotes). */
+function depReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   if (job.status !== "pending") return "wait";
   const until = state.retryAt.get(job.id);
   if (until && Date.now() < until) return "wait";
@@ -100,6 +114,17 @@ function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   if (dep.status === "done") return "run"; // dependencia APROBADA
   if (dep.status === "failed") return "dep-failed";
   return "wait"; // dep pending/generating/awaiting_approval
+}
+
+/** Jobs del mismo tipo que estan generandose o esperando aprobacion (sin aprobar aun). */
+function inFlightUnapproved(projectId: string, type: JobRecord["type"]): number {
+  return jobsDb
+    .byProject(projectId)
+    .filter(
+      (j) =>
+        j.type === type &&
+        (j.status === "generating" || j.status === "awaiting_approval")
+    ).length;
 }
 
 function collectPending(): JobRecord[] {
@@ -215,6 +240,19 @@ function finalizeProjects(): void {
     const awaiting = jobs.some((j) => j.status === "awaiting_approval");
     if (awaiting) {
       projectsDb.update(projectId, { status: "review" });
+      // Si quedan jobs pendientes, es que el GATE por lotes freno la generacion:
+      // avisamos para que el usuario apruebe el lote y siga el resto.
+      const morePending = jobs.some((j) => j.status === "pending");
+      const awaitingCount = jobs.filter(
+        (j) => j.status === "awaiting_approval"
+      ).length;
+      if (morePending && config.pipeline.approvalBatchSize > 0) {
+        logEvent(
+          projectId,
+          "info",
+          `Lote de ${awaitingCount} listo. Aprobalos para seguir generando el resto (de a ${config.pipeline.approvalBatchSize}).`
+        );
+      }
       state.activeProjects.delete(projectId); // se re-activa al aprobar/regenerar
       void refreshManifest(projectId);
       continue;
