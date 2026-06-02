@@ -2,10 +2,12 @@
  * Cola de jobs en backend (en memoria, dentro del proceso de Next).
  *
  * - Respeta dependencias: un job corre solo si su dependencia esta APROBADA ("done").
- * - Tras generar, el job queda en "awaiting_approval" (el usuario aprueba/regenera).
- * - Concurrencia limitada, reintentos con backoff exponencial + jitter.
+ * - Con auto-aprobacion (default) cada job queda "done" al terminar; en modo manual
+ *   queda "awaiting_approval" (el usuario aprueba/regenera).
+ * - Concurrencia limitada (ventana rolling), reintentos con backoff exponencial + jitter.
  * - Pausar / reanudar / cancelar por proyecto.
  * - Idempotente: regenerar UN job no rehace el resto; lo aprobado queda lockeado.
+ * - Reconcilia jobs colgados en "generating" (ej: tras reiniciar el server).
  *
  * Singleton via globalThis para sobrevivir al HMR de Next en dev.
  */
@@ -62,6 +64,9 @@ export function enqueueJob(jobId: string): void {
     {}) as Record<string, unknown>;
   void rateLimitRetries;
   void transientRetries;
+  // Si estaba (o quedo) marcado como corriendo, liberamos el slot para poder regenerar
+  // aunque el job estuviera colgado en "generating".
+  state.running.delete(jobId);
   jobsDb.update(jobId, {
     status: "pending",
     error: null,
@@ -80,6 +85,31 @@ export function enqueueJob(jobId: string): void {
   projectsDb.update(job.projectId, { status: "running" });
   logEvent(job.projectId, "info", `Regenerando "${job.refId}"`, { jobId });
   pump();
+}
+
+/**
+ * Resetea jobs que quedaron colgados en "generating" pero que NO estan realmente
+ * corriendo (tipico tras reiniciar el server: la DB dice "generating" pero el proceso
+ * en memoria perdio el estado). Los vuelve a "pending" para que la cola los retome.
+ */
+function reconcileStuckJobs(): void {
+  for (const projectId of state.activeProjects) {
+    if (state.pausedProjects.has(projectId)) continue;
+    for (const j of jobsDb.byProject(projectId)) {
+      if (j.status === "generating" && !state.running.has(j.id)) {
+        jobsDb.update(j.id, {
+          status: "pending",
+          error: "Estaba colgado en 'generando'; se reencola automaticamente.",
+        });
+        logEvent(
+          projectId,
+          "warn",
+          `"${j.refId}" estaba colgado en 'generando'; lo reencolo.`,
+          { jobId: j.id }
+        );
+      }
+    }
+  }
 }
 
 /** Pausa / reanuda / cancela el procesamiento de un proyecto. */
@@ -154,6 +184,9 @@ function pump(): void {
   if (state.pumping) return;
   state.pumping = true;
   try {
+    // Recupera jobs colgados en "generating" (p.ej. tras reiniciar el server) antes
+    // de decidir que correr.
+    reconcileStuckJobs();
     let scheduledRetryTick = false;
     while (state.running.size < config.pipeline.concurrency) {
       const pending = collectPending();
