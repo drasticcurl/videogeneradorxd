@@ -37,6 +37,8 @@ export interface ModelOption {
  * proyecto; ahi se suben los bytes al backend (/references) y se mapean por id.
  */
 export interface ReferenceDraft {
+  /** id estable interno para React keys (no cambia aunque edites el id de la foto) */
+  uid: string;
   id: string;
   label: string;
   fileName: string;
@@ -87,10 +89,10 @@ interface ProjectState {
   // avatares de referencia (VSL)
   addReferenceFile: (file: File) => Promise<void>;
   updateReference: (
-    id: string,
+    uid: string,
     patch: Partial<Pick<ReferenceDraft, "id" | "label">>
   ) => void;
-  removeReference: (id: string) => void;
+  removeReference: (uid: string) => void;
   uploadReferences: (projectId: string) => Promise<void>;
 
   loadConfig: () => Promise<void>;
@@ -202,7 +204,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       let id = base;
       let n = 2;
       while (s.references.some((r) => r.id === id)) id = `${base}_${n++}`;
+      const uid =
+        (globalThis.crypto?.randomUUID?.() as string | undefined) ??
+        `ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const draft: ReferenceDraft = {
+        uid,
         id,
         label: file.name.replace(/\.[^.]+$/, ""),
         fileName: file.name,
@@ -213,10 +219,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
 
-  updateReference: (id, patch) =>
+  updateReference: (uid, patch) =>
     set((s) => ({
       references: s.references.map((r) =>
-        r.id === id
+        r.uid === uid
           ? {
               ...r,
               ...patch,
@@ -226,8 +232,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ),
     })),
 
-  removeReference: (id) =>
-    set((s) => ({ references: s.references.filter((r) => r.id !== id) })),
+  removeReference: (uid) =>
+    set((s) => ({ references: s.references.filter((r) => r.uid !== uid) })),
 
   uploadReferences: async (projectId) => {
     const { references } = get();

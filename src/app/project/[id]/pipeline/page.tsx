@@ -57,6 +57,15 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     await refreshJobs(projectId);
   }
 
+  async function approveBatch() {
+    await fetch(`/api/projects/${projectId}/approve-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    await refreshJobs(projectId);
+  }
+
   const imageModoById = useMemo(() => {
     const m = new Map<string, string>();
     project?.plan.assets.forEach((a) =>
@@ -197,6 +206,15 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          {progress.awaiting > 0 && (
+            <button
+              onClick={() => void approveBatch()}
+              className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+              title="Aprueba todo el lote que esta esperando y deja que se genere el proximo"
+            >
+              ✓ Aprobar lote ({progress.awaiting})
+            </button>
+          )}
           <button
             onClick={() => void control("pause")}
             className="rounded-lg border border-slate-600 px-3 py-2 text-sm hover:bg-slate-800"
