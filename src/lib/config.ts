@@ -137,6 +137,11 @@ export const config = {
   pipeline: {
     // Cuantos jobs corren en paralelo.
     concurrency: Number(env("PIPELINE_CONCURRENCY", "2")),
+    // Generacion por LOTES: maximo de jobs del MISMO tipo "sin aprobar"
+    // (generando + esperando aprobacion) a la vez. Evita disparar los 91 videos
+    // juntos (rate limit / fallas). El usuario aprueba el lote y siguen los proximos.
+    // 0 = sin limite (comportamiento viejo).
+    approvalBatchSize: Math.max(0, Number(env("PIPELINE_APPROVAL_BATCH", "5"))),
     // Reintentos por job antes de marcar failed.
     maxAttempts: Number(env("PIPELINE_MAX_ATTEMPTS", "3")),
     // Backoff base (ms). El delay real es base * 2^(intento-1) con jitter.
