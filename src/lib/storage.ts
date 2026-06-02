@@ -39,12 +39,22 @@ export function imagesDir(projectId: string): string {
 export function clipsDir(projectId: string): string {
   return path.join(projectDir(projectId), "clips");
 }
+/** Carpeta donde viven las fotos/avatares de referencia subidos (VSL). */
+export function referencesDir(projectId: string): string {
+  return path.join(projectDir(projectId), "references");
+}
 
 export async function ensureProjectDirs(projectId: string): Promise<void> {
   await fsp.mkdir(path.join(imagesDir(projectId), "_candidates"), {
     recursive: true,
   });
   await fsp.mkdir(clipsDir(projectId), { recursive: true });
+  await fsp.mkdir(referencesDir(projectId), { recursive: true });
+}
+
+/** Imagen de referencia subida (VSL): references/<slug>.<ext>. */
+export function referenceRelPath(referenceId: string, ext = "png"): string {
+  return path.posix.join("references", `${slugify(referenceId)}.${ext}`);
 }
 
 /** Imagen aprobada/canonica relativa a la carpeta del proyecto. */
@@ -153,6 +163,7 @@ export function buildManifest(
         asset_id: asset.id,
         modo: img.modo,
         ref_image_id: img.ref_image_id,
+        ref_image_ids: img.ref_image_ids,
         prompt: img.prompt,
         status: job?.status ?? "pending",
         file: job?.outputPath ?? null,
@@ -160,6 +171,19 @@ export function buildManifest(
       });
     }
   }
+
+  // Referencias subidas (VSL): existen en disco si tienen `file` y el archivo esta presente.
+  const references: Manifest["references"] = (project.plan.references ?? []).map(
+    (ref) => {
+      const exists = Boolean(ref.file) && existsRel(project.id, ref.file as string);
+      return {
+        id: ref.id,
+        label: ref.label,
+        file: exists ? (ref.file as string) : null,
+        status: exists ? "uploaded" : "missing",
+      };
+    }
+  );
 
   const clips: Manifest["clips"] = project.plan.clips
     .slice()
@@ -211,6 +235,7 @@ export function buildManifest(
     provider_mode: config.providerMode,
     models: project.models,
     global: project.plan.global,
+    references,
     images,
     clips,
     final_video: finalExists ? finalRel : null,
