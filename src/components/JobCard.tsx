@@ -86,7 +86,13 @@ export function JobCard({
 
   const isImage = job.type === "image";
   const awaiting = job.status === "awaiting_approval";
-  const approvedUrl = job.outputPath ? fileUrl(projectId, job.outputPath) : null;
+  // Cache-busting: la URL cambia cuando el job se actualiza (regenera/aprueba), asi el
+  // navegador NO muestra el video/imagen viejo cacheado (el archivo va al mismo path).
+  const ver = encodeURIComponent(job.updatedAt ?? "");
+  const withVer = (u: string) => `${u}?v=${ver}`;
+  const approvedUrl = job.outputPath
+    ? withVer(fileUrl(projectId, job.outputPath))
+    : null;
   const chosen = selected ?? job.selectedIndex ?? job.candidates[0]?.index ?? null;
 
   // El modelo efectivo de este job: override > modelo usado > modelo del proyecto.
@@ -153,7 +159,7 @@ export function JobCard({
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={fileUrl(projectId, c.file)}
+                  src={withVer(fileUrl(projectId, c.file))}
                   alt={`v${c.index}`}
                   className="aspect-[9/16] w-full object-cover"
                 />
@@ -170,9 +176,19 @@ export function JobCard({
             {approvedUrl ? (
               isImage ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={approvedUrl} alt={job.label} className="h-full w-full object-contain" />
+                <img
+                  key={approvedUrl}
+                  src={approvedUrl}
+                  alt={job.label}
+                  className="h-full w-full object-contain"
+                />
               ) : (
-                <video src={approvedUrl} controls className="h-full w-full object-contain" />
+                <video
+                  key={approvedUrl}
+                  src={approvedUrl}
+                  controls
+                  className="h-full w-full object-contain"
+                />
               )
             ) : job.status === "generating" ? (
               <span className="text-xs text-amber-300">generando…</span>
@@ -368,8 +384,8 @@ export function JobCard({
           )}
           <button
             onClick={() => onRegenerate(job.id)}
-            disabled={job.status === "generating"}
-            className="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+            title="Vuelve a generar este item. Sirve tambien para destrabar uno colgado en 'generando'."
+            className="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
           >
             ↻ Regenerar
           </button>
