@@ -20,6 +20,7 @@ import type {
   VideoGenResult,
   VideoProvider,
 } from "../types";
+import { ProviderHttpError, parseRetryAfter } from "../types";
 import { authHeaders, getAccessToken } from "./auth";
 
 interface LroStart {
@@ -85,8 +86,10 @@ export class VertexVideoProvider implements VideoProvider {
     });
     if (!startRes.ok) {
       const t = await startRes.text();
-      throw new Error(
-        `Veo (${model}) predictLongRunning fallo (${startRes.status}): ${t.slice(0, 500)}`
+      throw new ProviderHttpError(
+        `Veo (${model}) predictLongRunning fallo (${startRes.status}): ${t.slice(0, 500)}`,
+        startRes.status,
+        parseRetryAfter(startRes.headers.get("retry-after"))
       );
     }
     const start = (await startRes.json()) as LroStart;
@@ -144,8 +147,10 @@ export class VertexVideoProvider implements VideoProvider {
     });
     if (!startRes.ok) {
       const t = await startRes.text();
-      throw new Error(
-        `Veo (${model}) extend/predictLongRunning fallo (${startRes.status}): ${t.slice(0, 500)}`
+      throw new ProviderHttpError(
+        `Veo (${model}) extend/predictLongRunning fallo (${startRes.status}): ${t.slice(0, 500)}`,
+        startRes.status,
+        parseRetryAfter(startRes.headers.get("retry-after"))
       );
     }
     const start = (await startRes.json()) as LroStart;
@@ -171,8 +176,10 @@ export class VertexVideoProvider implements VideoProvider {
       });
       if (!res.ok) {
         const t = await res.text();
-        throw new Error(
-          `Veo fetchPredictOperation fallo (${res.status}): ${t.slice(0, 300)}`
+        throw new ProviderHttpError(
+          `Veo fetchPredictOperation fallo (${res.status}): ${t.slice(0, 300)}`,
+          res.status,
+          parseRetryAfter(res.headers.get("retry-after"))
         );
       }
       const poll = (await res.json()) as LroPoll;

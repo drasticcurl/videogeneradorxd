@@ -12,6 +12,7 @@
 import { config } from "../config";
 import { jobsDb, projectsDb } from "../db";
 import type { JobRecord, ProjectStatus } from "../types";
+import { ProviderHttpError } from "../providers/types";
 import { logEvent, refreshManifest, runJobGeneration } from "./pipeline";
 
 interface QueueState {
@@ -52,6 +53,11 @@ export function enqueueProject(projectId: string): void {
 export function enqueueJob(jobId: string): void {
   const job = jobsDb.get(jobId);
   if (!job) return;
+  const { rateLimitRetries, ...restMeta } = (job.meta ?? {}) as Record<
+    string,
+    unknown
+  >;
+  void rateLimitRetries;
   jobsDb.update(jobId, {
     status: "pending",
     error: null,
@@ -61,6 +67,8 @@ export function enqueueJob(jobId: string): void {
     candidates: [],
     selectedIndex: null,
     outputPath: job.type === "image" ? null : job.outputPath,
+    // reseteamos el contador de reintentos por rate limit (presupuesto fresco)
+    meta: restMeta,
   });
   state.retryAt.delete(jobId);
   state.pausedProjects.delete(job.projectId);
@@ -193,6 +201,58 @@ function startJob(job: JobRecord): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const current = jobsDb.get(job.id);
+
+      // 429 / rate limit (cuota): NO es un error real, es que pegamos muy rapido.
+      // Esperamos largo (Retry-After si vino, si no rateLimitBackoffMs) y reintentamos
+      // SIN consumir los maxAttempts normales (cuenta aparte, rateLimitMaxAttempts).
+      const isRateLimit =
+        err instanceof ProviderHttpError
+          ? err.isRateLimit
+          : /\(429\)|RESOURCE_EXHAUSTED|rate limit|quota/i.test(message);
+
+      if (isRateLimit) {
+        const rlDone = ((current?.meta?.rateLimitRetries as number) ?? 0) + 1;
+        const maxRl = config.pipeline.rateLimitMaxAttempts;
+        if (rlDone <= maxRl) {
+          const retryAfter =
+            err instanceof ProviderHttpError ? err.retryAfterMs : undefined;
+          const delay =
+            (retryAfter ?? config.pipeline.rateLimitBackoffMs) +
+            Math.random() * 2000;
+          state.retryAt.set(job.id, Date.now() + delay);
+          jobsDb.update(job.id, {
+            // Revertimos el incremento de attempts: un 429 no gasta reintentos normales.
+            attempts: job.attempts,
+            status: "pending",
+            error: `Rate limit (429). Reintento ${rlDone}/${maxRl} en ${Math.round(
+              delay / 1000
+            )}s (esperando cuota)...`,
+            meta: { ...(current?.meta ?? {}), rateLimitRetries: rlDone },
+          });
+          logEvent(
+            job.projectId,
+            "warn",
+            `"${job.refId}" rate limit (429): espero ${Math.round(
+              delay / 1000
+            )}s y reintento (${rlDone}/${maxRl}). Tip: bajá PIPELINE_CONCURRENCY o subí el tier de cuota.`,
+            { jobId: job.id }
+          );
+          setTimeout(() => pump(), delay + 50);
+        } else {
+          jobsDb.update(job.id, {
+            status: "failed",
+            error: `Rate limit (429) persistente tras ${maxRl} reintentos: ${message}`,
+          });
+          logEvent(
+            job.projectId,
+            "error",
+            `"${job.refId}" fallo por rate limit persistente (429). Subí el tier de cuota o reintentá mas tarde.`,
+            { jobId: job.id }
+          );
+        }
+        return; // el finally hace cleanup + pump
+      }
+
       const attempts = current?.attempts ?? job.attempts + 1;
       if (attempts < (current?.maxAttempts ?? config.pipeline.maxAttempts)) {
         const delay = backoffDelay(attempts);

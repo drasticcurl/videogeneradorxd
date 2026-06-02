@@ -12,6 +12,7 @@ import {
   ASPECT_RATIO,
 } from "../../config";
 import type { ImageGenInput, ImageGenResult, ImageProvider } from "../types";
+import { ProviderHttpError, parseRetryAfter } from "../types";
 import { authHeaders } from "./auth";
 
 interface GeminiImageResponse {
@@ -93,8 +94,10 @@ export class VertexImageProvider implements ImageProvider {
     });
     if (!res.ok) {
       const t = await res.text();
-      throw new Error(
-        `Nano Banana (${model}) ${isEdit ? "image2image" : "text2image"} fallo (${res.status}): ${t.slice(0, 500)}`
+      throw new ProviderHttpError(
+        `Nano Banana (${model}) ${isEdit ? "image2image" : "text2image"} fallo (${res.status}): ${t.slice(0, 500)}`,
+        res.status,
+        parseRetryAfter(res.headers.get("retry-after"))
       );
     }
     const data = (await res.json()) as GeminiImageResponse;
