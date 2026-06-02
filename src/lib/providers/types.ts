@@ -8,7 +8,24 @@ import type { ProjectPlan } from "../schema";
 
 export interface LlmProvider {
   /** Interpreta el brief en lenguaje natural y devuelve el PlanJSON estructurado. */
-  parseBrief(text: string, opts?: { model?: string }): Promise<ProjectPlan>;
+  parseBrief(
+    text: string,
+    opts?: {
+      model?: string;
+      /**
+       * Avatares/fotos de referencia que el usuario ya subió (VSL). El parser los
+       * usa como fuente de identidad: cada persona se modela como un asset cuyos
+       * planos son image2image contra su reference.id.
+       */
+      references?: { id: string; label?: string }[];
+    }
+  ): Promise<ProjectPlan>;
+}
+
+/** Una imagen de referencia (bytes + mime) para mantener identidad en image2image. */
+export interface RefImage {
+  bytes: Uint8Array;
+  mimeType?: string;
 }
 
 export interface ImageGenInput {
@@ -16,6 +33,12 @@ export interface ImageGenInput {
   /** Si viene, se hace image2image / edicion manteniendo identidad (Nano Banana). */
   refImageBytes?: Uint8Array;
   refImageMimeType?: string;
+  /**
+   * Referencias MULTIPLES (VSL): permite pasar varias fotos de identidad en una
+   * misma generacion (ej. dos personas en el mismo plano). Si viene, tiene
+   * prioridad sobre refImageBytes.
+   */
+  refImages?: RefImage[];
   negativePrompt?: string;
   aspectRatio?: string;
   /** id de modelo de imagen (Nano Banana). */

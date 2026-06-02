@@ -3,7 +3,11 @@
  * Usa generateContent con responseMimeType=application/json + responseSchema.
  */
 import { vertexBaseUrl, assertVertexConfig, resolveModel } from "../../config";
-import { PARSER_RESPONSE_SCHEMA, PARSER_SYSTEM_PROMPT } from "../../prompts";
+import {
+  PARSER_RESPONSE_SCHEMA,
+  PARSER_SYSTEM_PROMPT,
+  buildReferencesPromptBlock,
+} from "../../prompts";
 import { validatePlan, type ProjectPlan } from "../../schema";
 import type { LlmProvider } from "../types";
 import { authHeaders } from "./auth";
@@ -17,10 +21,18 @@ interface GeminiResponse {
 }
 
 export class VertexLlmProvider implements LlmProvider {
-  async parseBrief(text: string, opts?: { model?: string }): Promise<ProjectPlan> {
+  async parseBrief(
+    text: string,
+    opts?: { model?: string; references?: { id: string; label?: string }[] }
+  ): Promise<ProjectPlan> {
     assertVertexConfig();
     const model = resolveModel("llm", opts?.model);
     const url = `${vertexBaseUrl()}/${model}:generateContent`;
+
+    const refBlock = buildReferencesPromptBlock(opts?.references);
+    const userText = refBlock
+      ? `${refBlock}\n\nBRIEF:\n${text}`
+      : `BRIEF:\n${text}`;
 
     const body = {
       systemInstruction: {
@@ -30,7 +42,7 @@ export class VertexLlmProvider implements LlmProvider {
       contents: [
         {
           role: "user",
-          parts: [{ text: `BRIEF:\n${text}` }],
+          parts: [{ text: userText }],
         },
       ],
       generationConfig: {

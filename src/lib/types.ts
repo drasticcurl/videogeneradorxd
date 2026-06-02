@@ -102,10 +102,19 @@ export interface ManifestImage {
   asset_id: string;
   modo: string;
   ref_image_id?: string;
+  ref_image_ids?: string[];
   prompt: string;
   status: JobStatus;
   file: string | null; // path relativo, ej "images/avatar1_base.png"
   model: string | null;
+}
+
+/** Entrada del manifest.json por imagen de referencia subida (VSL). */
+export interface ManifestReference {
+  id: string;
+  label?: string;
+  file: string | null; // path relativo, ej "references/natalia.png"
+  status: "uploaded" | "missing";
 }
 
 /** Entrada del manifest.json por clip. */
@@ -132,6 +141,7 @@ export interface Manifest {
   provider_mode: string;
   models: ProjectModels;
   global: ProjectPlan["global"];
+  references: ManifestReference[];
   images: ManifestImage[];
   clips: ManifestClip[];
   final_video: string | null; // "final.mp4" si se hizo stitch

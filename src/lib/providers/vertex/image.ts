@@ -37,12 +37,29 @@ export class VertexImageProvider implements ImageProvider {
     const url = `${vertexBaseUrl()}/${model}:generateContent`;
 
     const aspect = input.aspectRatio ?? ASPECT_RATIO;
-    const isEdit = Boolean(input.refImageBytes);
+
+    // Reunimos las imagenes de referencia: refImages (multiple) tiene prioridad,
+    // si no, caemos a refImageBytes (single) por compatibilidad.
+    const refs =
+      input.refImages && input.refImages.length > 0
+        ? input.refImages
+        : input.refImageBytes
+        ? [{ bytes: input.refImageBytes, mimeType: input.refImageMimeType }]
+        : [];
+    const isEdit = refs.length > 0;
+    const multi = refs.length > 1;
+
+    const identityLine = multi
+      ? "IMPORTANT: keep EACH person's identity 100% consistent with their reference photo " +
+        "(same faces, same people). Combine them naturally in one shot. " +
+        "Only change what the instruction asks (pose, framing, wardrobe context). "
+      : "IMPORTANT: keep identity 100% consistent with the reference image, " +
+        "same face, same person. Only change what the instruction asks. ";
 
     const instruction = isEdit
       ? input.prompt +
-        "\n\nIMPORTANT: keep identity 100% consistent with the reference image, " +
-        "same face, same person. Only change what the instruction asks. " +
+        "\n\n" +
+        identityLine +
         `Output a single vertical ${aspect} image.` +
         (input.negativePrompt ? `\nAvoid: ${input.negativePrompt}` : "")
       : input.prompt +
@@ -50,11 +67,11 @@ export class VertexImageProvider implements ImageProvider {
         (input.negativePrompt ? `\nAvoid: ${input.negativePrompt}` : "");
 
     const parts: Array<Record<string, unknown>> = [{ text: instruction }];
-    if (isEdit) {
+    for (const ref of refs) {
       parts.push({
         inlineData: {
-          mimeType: input.refImageMimeType ?? "image/png",
-          data: Buffer.from(input.refImageBytes!).toString("base64"),
+          mimeType: ref.mimeType ?? "image/png",
+          data: Buffer.from(ref.bytes).toString("base64"),
         },
       });
     }

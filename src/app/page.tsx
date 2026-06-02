@@ -41,11 +41,16 @@ export default function HomePage() {
     selectedModels,
     imageVariants,
     defaultResolution,
+    references,
     setBrief,
     loadConfig,
     parseBrief,
     setPlan,
     setPlanFromJson,
+    addReferenceFile,
+    updateReference,
+    removeReference,
+    uploadReferences,
     reset,
   } = useProjectStore();
 
@@ -98,6 +103,12 @@ export default function HomePage() {
       const createData = await createRes.json();
       if (!createRes.ok) throw new Error(createData.error ?? "No se pudo crear el proyecto");
       const projectId = createData.project.id as string;
+
+      // Subimos las fotos/avatares de referencia (VSL) antes de generar, asi el
+      // pipeline puede usarlas como fuente de identidad de cada plano.
+      if (references.length > 0) {
+        await uploadReferences(projectId);
+      }
 
       const genRes = await fetch(`/api/projects/${projectId}/generate`, {
         method: "POST",
@@ -161,6 +172,79 @@ export default function HomePage() {
 
         {mode === "ia" ? (
           <>
+            {/* Avatares de referencia (VSL): subís las fotos de las personas y la IA
+                genera todos los planos manteniendo esa misma cara. */}
+            <div className="space-y-3 rounded-lg border border-slate-800 bg-panel p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-100">
+                    Avatares de referencia <span className="text-slate-500">(VSL · opcional)</span>
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Subí las fotos de las personas (ej. 2). La IA va a generar todos los planos
+                    manteniendo <b>la misma cara</b> en cada uno (image2image).
+                  </p>
+                </div>
+                <label className="cursor-pointer rounded-lg border border-slate-600 px-3 py-2 text-sm hover:bg-slate-800">
+                  + Agregar foto
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    multiple
+                    className="hidden"
+                    onChange={async (e) => {
+                      const files = Array.from(e.target.files ?? []);
+                      for (const f of files) await addReferenceFile(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+
+              {references.length > 0 && (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                  {references.map((r) => (
+                    <div
+                      key={r.id}
+                      className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-ink p-2"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={r.dataUrl}
+                        alt={r.label || r.id}
+                        className="aspect-[3/4] w-full rounded object-cover"
+                      />
+                      <input
+                        value={r.label}
+                        onChange={(e) => updateReference(r.id, { label: e.target.value })}
+                        placeholder="Nombre (ej. Natalia)"
+                        className="rounded border border-slate-700 bg-panel px-2 py-1 text-xs focus:border-accent focus:outline-none"
+                      />
+                      <div className="flex items-center justify-between gap-1">
+                        <code className="truncate text-[10px] text-slate-500" title={r.id}>
+                          id: {r.id}
+                        </code>
+                        <button
+                          onClick={() => removeReference(r.id)}
+                          className="rounded px-1.5 py-0.5 text-[11px] text-red-300 hover:bg-red-500/10"
+                          title="Quitar"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {references.length > 0 && (
+                <p className="text-[11px] text-slate-500">
+                  En el brief mencioná a cada persona por su nombre. La IA va a crear un avatar por
+                  cada foto y usar esa identidad en todos sus clips. El <code>id</code> es el que la IA
+                  usa internamente para referenciar la foto.
+                </p>
+              )}
+            </div>
+
             <textarea
               value={brief}
               onChange={(e) => setBrief(e.target.value)}
