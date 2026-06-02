@@ -1,0 +1,1240 @@
+{
+  "global": {
+    "idioma_dialogo": "es-AR",
+    "formato": "9:16",
+    "reglas_realismo": "Talking head profesional pero cercano: nutricionista argentina 35-42, MISMA cara/peinado/ropa (blusa clara) y mismo set (consultorio luminoso, fondo desenfocado con plantas) en TODOS los clips. Luz natural suave, piel con textura real, movimientos naturales de cabeza/manos, lip-sync preciso al audio en espanol. Los B-ROLL son insertos sin cara: la voz de Natalia va en off por encima.",
+    "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+  },
+  "references": [
+    {
+      "id": "natalia",
+      "label": "Lic. Natalia Reyes"
+    },
+    {
+      "id": "romina",
+      "label": "Romina (testimonio)"
+    }
+  ],
+  "assets": [
+    {
+      "id": "natalia",
+      "tipo": "avatar",
+      "images": [
+        {
+          "id": "natalia_medium",
+          "modo": "image2image",
+          "ref_image_id": "natalia",
+          "prompt": "Medium close-up portrait of the SAME woman as the reference photo. Keep identity 100% consistent with the reference, same face, same eyes, same nose, same mouth, same skin tone, same dark hair, clearly the same recognizable person. Argentine nutritionist 35-42, warm and trustworthy, light/beige blouse, seated talking to camera in a bright modern nutrition office with a softly blurred background (plants, wooden shelf, neutral tones). Soft natural daylight, shallow depth of field, realistic skin texture, photorealistic, friendly confident expression. Vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "natalia_closeup",
+          "modo": "image2image",
+          "ref_image_id": "natalia_medium",
+          "prompt": "Tighter close-up of the SAME woman, keep identity 100% consistent with the reference, same face, same person, same hairstyle and the same light/beige blouse, same bright nutrition office set, warm confident expression, soft natural daylight, realistic skin texture, photorealistic. Vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        }
+      ]
+    },
+    {
+      "id": "romina",
+      "tipo": "avatar",
+      "images": [
+        {
+          "id": "romina_medium",
+          "modo": "image2image",
+          "ref_image_id": "romina",
+          "prompt": "Medium close-up portrait of the SAME woman as the reference photo (Romina, a real customer). Keep identity 100% consistent with the reference, same face, same person. Argentine woman 30-45, natural and genuine, casual light top, seated talking to camera at home with a softly blurred cozy living-room background, soft natural daylight, realistic skin texture, photorealistic, friendly grateful expression. Vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        }
+      ]
+    },
+    {
+      "id": "broll",
+      "tipo": "broll",
+      "images": [
+        {
+          "id": "espejo",
+          "modo": "text2image",
+          "prompt": "A woman looking at herself in a mirror, happy and proud, bright modern bedroom, soft natural light, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "vestido_percha",
+          "modo": "text2image",
+          "prompt": "An elegant dress hanging on a clothing rack in a bright boutique, shallow depth of field, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "intestino",
+          "modo": "text2image",
+          "prompt": "Clean stylized 3D medical illustration of a healthy human gut and microbiota, soft glowing bacteria, light background, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "vaso_agua",
+          "modo": "text2image",
+          "prompt": "A glass of rice water on a bright kitchen counter, fresh and clean, condensation, soft daylight, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "reloj",
+          "modo": "text2image",
+          "prompt": "A simple clock on a bright morning kitchen counter, sense of routine and timing, soft daylight, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "ingredientes",
+          "modo": "text2image",
+          "prompt": "Natural anti-inflammatory ingredients arranged on a kitchen counter (lemon, ginger, herbs, rice), bright and fresh, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "app_plan",
+          "modo": "text2image",
+          "prompt": "A smartphone held in hand showing a clean minimal 30-day plan app interface, blurred bright background, no readable text, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "preparacion",
+          "modo": "text2image",
+          "prompt": "Close-up of hands preparing rice water in a bright kitchen, pouring and stirring in a glass, soft daylight, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "calendario",
+          "modo": "text2image",
+          "prompt": "A clean visual 30-day calendar planner with check marks on a bright desk, top-down, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "probandose_ropa",
+          "modo": "text2image",
+          "prompt": "A happy woman trying on clothes at home, clothes fitting well, smiling, bright bedroom, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "piel",
+          "modo": "text2image",
+          "prompt": "Beauty close-up of a woman's clear, luminous, healthy skin and face, soft natural light, realistic skin texture, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "precio_estetica",
+          "modo": "text2image",
+          "prompt": "A modern aesthetic clinic treatment room, premium look, soft light, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "precio_gym",
+          "modo": "text2image",
+          "prompt": "A modern gym interior with treadmills and weights, bright, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "precio_nutri",
+          "modo": "text2image",
+          "prompt": "A nutritionist consultation office with a desk and healthy food charts, bright and professional, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "precio_tachado",
+          "modo": "text2image",
+          "prompt": "A price tag showing a number crossed out with a red strike-through line, clean studio background, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "bono1",
+          "modo": "text2image",
+          "prompt": "A clean digital product cover mockup for a bonus guide (ebook on a tablet), premium minimal design, no readable text, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "bono2",
+          "modo": "text2image",
+          "prompt": "A clean digital product cover mockup for a beauty rituals bonus guide on a tablet, premium minimal design, no readable text, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "bono3",
+          "modo": "text2image",
+          "prompt": "A clean digital product cover mockup for a mindfulness program bonus on a tablet, calm premium design, no readable text, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "bonos_stack",
+          "modo": "text2image",
+          "prompt": "Three digital product cover mockups stacked together on a soft gradient background, premium look, no readable text, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "ropa_suelta",
+          "modo": "text2image",
+          "prompt": "A woman wearing looser, comfortable clothes that now fit better, happy and relaxed at home, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        },
+        {
+          "id": "mercadopago",
+          "modo": "text2image",
+          "prompt": "A smartphone showing a generic secure online payment screen in hand, blurred background, no readable text or logos, photorealistic, vertical 9:16.",
+          "negative_prompt": "beauty filter, plastic skin, over-smoothing, extra fingers, distorted hands, warped mouth, changing face between shots, text captions, watermark, cartoon, oversaturated, low quality"
+        }
+      ]
+    }
+  ],
+  "clips": [
+    {
+      "id": "c1",
+      "orden": 1,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a warm, friendly smile. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Hola, soy la licenciada Natalia Reyes. Estás en el lugar correcto.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c2",
+      "orden": 2,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, raising one hand in a gentle 'stop' gesture. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Por favor, no hagas clic en atrás ni cierres esta página: podrías generar errores en tu compra.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c3",
+      "orden": 3,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y perder el acceso que acabás de conseguir. Quiero felicitarte.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c4",
+      "orden": 4,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, nodding confidently. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Tomaste una de las mejores decisiones de tu vida al elegir el Método del Agua de Arroz.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c5",
+      "orden": 5,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling warmly. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Para deshinchar tu panza, sentirte liviana y recuperar la confianza en tu cuerpo.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c6",
+      "orden": 6,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, looking straight into the camera, sincere. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Hoy es el primer día de tu nueva vida. Acá es donde todo empieza.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c7",
+      "orden": 7,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Ahora descubriste el poder del agua de arroz para calmar tu intestino.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c8",
+      "orden": 8,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, counting points on her fingers. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Alimentar tus bacterias buenas, cortar la ansiedad por la comida y desinflamarte de forma natural.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c9",
+      "orden": 9,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, gently shaking her head while smiling. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y lo mejor: sin dejar de comer lo que te gusta y sin matarte en el gimnasio.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c10",
+      "orden": 10,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a warm, caring smile. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Todos los días recibo mensajes de mujeres como vos logrando deshinchar la panza.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c11",
+      "orden": 11,
+      "asset_id": "broll",
+      "image_id": "espejo",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A woman looking at herself in a mirror, happy and proud, bright modern bedroom, soft natural light, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Sentirse livianas y volver a mirarse al espejo con orgullo.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c12",
+      "orden": 12,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling warmly at the camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y creo que dentro de muy poquito voy a recibir tu testimonio también.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c13",
+      "orden": 13,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a firm, reassuring tone. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Pero para que esto pase, necesitás tomar el agua de arroz todos los días, como te explico. ¿De acuerdo?",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c14",
+      "orden": 14,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Tené en cuenta algo importante: cada cuerpo es distinto.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c15",
+      "orden": 15,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, counting items on her fingers. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Tu edad, tu peso, tu altura, tus embarazos… todo cambia cómo responde tu cuerpo.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c16",
+      "orden": 16,
+      "asset_id": "broll",
+      "image_id": "vestido_percha",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. An elegant dress hanging on a clothing rack in a bright boutique, shallow depth of field, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Pensalo así: es como buscar el vestido perfecto para una fiesta.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c17",
+      "orden": 17,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling warmly. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Si comprás uno ya hecho, capaz te queda bien. Pero a medida, te queda muchísimo mejor.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c18",
+      "orden": 18,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, nodding confidently. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Con el agua de arroz pasa lo mismo. Por tu cuenta vas a tener buenos resultados.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c19",
+      "orden": 19,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Pero después de los 35 o 40 se vuelve más difícil, por los cambios hormonales.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c20",
+      "orden": 20,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, moving her hand slowly, like a slow tortoise. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "La retención de líquidos y un metabolismo que se vuelve lento como una tortuga.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c21",
+      "orden": 21,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, looking confident and reassuring. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Por eso, si querés resultados rápidos y sostenidos, lo mejor es un protocolo acelerado a tu medida.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c22",
+      "orden": 22,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, speaking with emphasis, confident. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Por eso creamos algo completamente distinto. Lo llamamos Protocolo Agua de Arroz TURBO.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c23",
+      "orden": 23,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, leaning in slightly, confidential tone. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y te voy a ser sincera: es el mismo que muchas alumnas usaron como prueba interna.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c24",
+      "orden": 24,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, eyes widening with genuine surprise. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y los resultados fueron tan rápidos que nos sorprendieron a nosotras mismas.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c25",
+      "orden": 25,
+      "asset_id": "broll",
+      "image_id": "intestino",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. Clean stylized 3D medical illustration of a healthy human gut and microbiota, soft glowing bacteria, light background, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Porque activa lo que llamamos la fase turbo del intestino.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c26",
+      "orden": 26,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Una etapa donde tu cuerpo desinflama y suelta líquidos y grasa mucho más rápido.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c27",
+      "orden": 27,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, holding up three fingers. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "¿Cómo? Combinando tres ajustes que casi nadie aplica bien.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c28",
+      "orden": 28,
+      "asset_id": "broll",
+      "image_id": "vaso_agua",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A glass of rice water on a bright kitchen counter, fresh and clean, condensation, soft daylight, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Uno: la concentración exacta de almidón resistente para reactivar tu metabolismo.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c29",
+      "orden": 29,
+      "asset_id": "broll",
+      "image_id": "reloj",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A simple clock on a bright morning kitchen counter, sense of routine and timing, soft daylight, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Dos: el horario estratégico, en ayunas y antes de cenar, para maximizar el deshinchado.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c30",
+      "orden": 30,
+      "asset_id": "broll",
+      "image_id": "ingredientes",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. Natural anti-inflammatory ingredients arranged on a kitchen counter (lemon, ginger, herbs, rice), bright and fresh, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Y tres: los ingredientes potenciadores que la convierten en una bomba antiinflamatoria natural.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c31",
+      "orden": 31,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, nodding confidently. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "El resultado: mujeres que ven resultados hasta tres veces más rápido que con el agua de arroz sola.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c32",
+      "orden": 32,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling warmly. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y lo mejor es que no es nada complicado. Está pensado para que cualquier mujer lo siga fácil.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c33",
+      "orden": 33,
+      "asset_id": "broll",
+      "image_id": "app_plan",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A smartphone held in hand showing a clean minimal 30-day plan app interface, blurred bright background, no readable text, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Cuando entres, vas a recibir el protocolo completo de 30 días que activa el modo turbo.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c34",
+      "orden": 34,
+      "asset_id": "broll",
+      "image_id": "preparacion",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. Close-up of hands preparing rice water in a bright kitchen, pouring and stirring in a glass, soft daylight, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Una guía paso a paso para preparar la versión turbo del agua de arroz con los potenciadores.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c35",
+      "orden": 35,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Qué pequeños cambios de horario hacer para acelerar tu metabolismo al máximo.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c36",
+      "orden": 36,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, in a friendly advising tone. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y qué errores evitar para entrar en modo deshinchado mucho más rápido.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c37",
+      "orden": 37,
+      "asset_id": "broll",
+      "image_id": "calendario",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A clean visual 30-day calendar planner with check marks on a bright desk, top-down, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Más un calendario visual de 30 días: solo seguís el día que toca, sin pensar.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c38",
+      "orden": 38,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, holding up five fingers. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Mirás el día, seguís la indicación, cinco minutos por día, y tu cuerpo hace el resto.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c39",
+      "orden": 39,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, gently shaking her head while smiling. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Sin contar calorías, sin gimnasio, sin dejar de comer lo que te gusta.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c40",
+      "orden": 40,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a warm, caring smile. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Muchas mujeres me dicen que es lo más fácil que probaron en su vida.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c41",
+      "orden": 41,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, gazing into the distance, dreamy and hopeful. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Imaginate cómo te vas a sentir en tres o cuatro semanas.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c42",
+      "orden": 42,
+      "asset_id": "broll",
+      "image_id": "probandose_ropa",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A happy woman trying on clothes at home, clothes fitting well, smiling, bright bedroom, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Tu ropa favorita volviendo a quedarte bien y más energía durante el día.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c43",
+      "orden": 43,
+      "asset_id": "broll",
+      "image_id": "espejo",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A woman looking at herself in a mirror, happy and proud, bright modern bedroom, soft natural light, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Esa sensación de mirarte al espejo y sentir orgullo otra vez.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c44",
+      "orden": 44,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with an emotional, heartfelt expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Energía para tus hijos, para tu día, para vos. Vas a volver a sentirte vos misma.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c45",
+      "orden": 45,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a serious, measured expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Pero hay algo importante que tenés que saber.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c46",
+      "orden": 46,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "El Protocolo TURBO normalmente no se ofrece al público.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c47",
+      "orden": 47,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, leaning in slightly, confidential tone. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Se creó como un método interno para acelerar a las alumnas que ya aplicaban el método.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c48",
+      "orden": 48,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, pointing toward the camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Hoy decidimos abrirlo solo para quienes acaban de entrar, como vos.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c49",
+      "orden": 49,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, speaking with emphasis, confident. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Por eso limitamos los cupos a 25, y ahora mismo quedan 9.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c50",
+      "orden": 50,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with kind, gentle urgency. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Si querés deshincharte con el mínimo esfuerzo, asegurá tu lugar antes de que se agoten.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c51",
+      "orden": 51,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y recordá: esto va mucho más allá de la panza.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c52",
+      "orden": 52,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, counting points on her fingers. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Te ayuda a reducir la hinchazón y la retención de líquidos.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c53",
+      "orden": 53,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, continuing to count on her fingers. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "A cortar la ansiedad por lo dulce a la noche y a mejorar tu digestión.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c54",
+      "orden": 54,
+      "asset_id": "broll",
+      "image_id": "piel",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. Beauty close-up of a woman's clear, luminous, healthy skin and face, soft natural light, realistic skin texture, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "A dormir mejor y a tener la piel más limpia al desinflamar el intestino.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c55",
+      "orden": 55,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a gesture of relief, a soft exhale. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y a sacarte esa pesadez y esa sensación de globo que te acompaña todo el día.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c56",
+      "orden": 56,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, looking confident and reassuring. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Al final vas a tener todo el conocimiento para mantenerte así, sin efecto rebote.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c57",
+      "orden": 57,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a firm, reassuring tone. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Pero recordá: solo quedan 9 cupos. Cuando se cierre esta página, no vuelve.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c58",
+      "orden": 58,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, looking directly at the camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Ahora quiero que lo pienses bien. ¿Cuánto vale todo esto?",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c59",
+      "orden": 59,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "¿Cuánto vas a ahorrar en gimnasios, dietas locas y tratamientos peligrosos?",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c60",
+      "orden": 60,
+      "asset_id": "broll",
+      "image_id": "precio_estetica",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A modern aesthetic clinic treatment room, premium look, soft light, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Un tratamiento estético para la retención arranca en cientos de miles de pesos.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c61",
+      "orden": 61,
+      "asset_id": "broll",
+      "image_id": "precio_gym",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A modern gym interior with treadmills and weights, bright, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Un año de gimnasio te sale, mínimo, cuatrocientos mil pesos.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c62",
+      "orden": 62,
+      "asset_id": "broll",
+      "image_id": "precio_nutri",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A nutritionist consultation office with a desk and healthy food charts, bright and professional, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Y tres consultas con un nutricionista te salen en promedio trescientos mil.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c63",
+      "orden": 63,
+      "asset_id": "broll",
+      "image_id": "precio_tachado",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A price tag showing a number crossed out with a red strike-through line, clean studio background, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Por eso, un precio justo para el Protocolo TURBO sería treinta y nueve mil novecientos noventa.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c64",
+      "orden": 64,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, nodding confidently. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y ya es muchísimo más barato que cualquiera de esas opciones, ¿no?",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c65",
+      "orden": 65,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with an honest, sincere expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Pero voy a hacer una excepción. Y no es por la plata.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c66",
+      "orden": 66,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with an empathetic, caring expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Es porque sé lo que es vivir hinchada, incómoda con tu cuerpo y con las miradas. Yo pasé por eso.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c67",
+      "orden": 67,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, holding up three fingers. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y hay más. Si asegurás tu lugar en los próximos minutos, te sumo tres regalos.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c68",
+      "orden": 68,
+      "asset_id": "broll",
+      "image_id": "bono1",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A clean digital product cover mockup for a bonus guide (ebook on a tablet), premium minimal design, no readable text, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Regalo uno: los ingredientes potenciadores secretos para multiplicar el efecto del agua de arroz.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c69",
+      "orden": 69,
+      "asset_id": "broll",
+      "image_id": "ingredientes",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. Natural anti-inflammatory ingredients arranged on a kitchen counter (lemon, ginger, herbs, rice), bright and fresh, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "El ingrediente dorado de la mañana, el tónico para la ansiedad nocturna y el batido desinflamante.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c70",
+      "orden": 70,
+      "asset_id": "broll",
+      "image_id": "bono2",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A clean digital product cover mockup for a beauty rituals bonus guide on a tablet, premium minimal design, no readable text, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Regalo dos: los rituales de las famosas para cuidar el cuerpo y la piel después de los 40.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c71",
+      "orden": 71,
+      "asset_id": "broll",
+      "image_id": "bono3",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A clean digital product cover mockup for a mindfulness program bonus on a tablet, calm premium design, no readable text, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Regalo tres: el programa Mente y Panza, para bajar la ansiedad y el estrés que inflaman el intestino.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c72",
+      "orden": 72,
+      "asset_id": "broll",
+      "image_id": "bonos_stack",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. Three digital product cover mockups stacked together on a soft gradient background, premium look, no readable text, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Son casi veinticinco mil pesos en regalos, totalmente gratis.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c73",
+      "orden": 73,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Pero te lo voy a poner aún más fácil, porque estás protegida por mi garantía de 30 días.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c74",
+      "orden": 74,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling warmly. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Así no tenés ni que decir que sí ahora. Solo tenés que decir \"tal vez\".",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c75",
+      "orden": 75,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a warm, caring smile. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Probá el protocolo, aplicalo unos días y sentí cómo tu cuerpo responde.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c76",
+      "orden": 76,
+      "asset_id": "broll",
+      "image_id": "ropa_suelta",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A woman wearing looser, comfortable clothes that now fit better, happy and relaxed at home, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "La hinchazón baja, la ansiedad se calma, la ropa empieza a quedarte más suelta.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c77",
+      "orden": 77,
+      "asset_id": "broll",
+      "image_id": "mercadopago",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A smartphone showing a generic secure online payment screen in hand, blurred background, no readable text or logos, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Si no estás conforme, pedís el reembolso por Mercado Pago y te devolvemos cada peso.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c78",
+      "orden": 78,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, nodding confidently. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Sin preguntas. Y los regalos te los quedás igual.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c79",
+      "orden": 79,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, looking confident and reassuring. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "¿Y sabés por qué hago esto? Porque estoy segura de que funciona.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c80",
+      "orden": 80,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling, transitioning to a customer testimonial. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Mirá lo que me contó Romina, desde Buenos Aires.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "t1",
+      "orden": 81,
+      "asset_id": "romina",
+      "image_id": "romina_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, a real customer giving a sincere, genuine testimonial to camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Hola Naty. No pensé que iba a funcionar tan rápido.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "t2",
+      "orden": 82,
+      "asset_id": "romina",
+      "image_id": "romina_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, a real customer giving a sincere, genuine testimonial to camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Yo ya tomaba el agua de arroz, pero sentía que estaba estancada.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "t3",
+      "orden": 83,
+      "asset_id": "romina",
+      "image_id": "romina_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, a real customer giving a sincere, genuine testimonial to camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Con el protocolo turbo me di cuenta de que cometía errores: la cantidad, el horario, los ingredientes.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "t4",
+      "orden": 84,
+      "asset_id": "romina",
+      "image_id": "romina_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, a real customer giving a heartfelt testimonial to camera, happy and relieved. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "En unas semanas se me desinfló la panza y la ansiedad de la noche desapareció. Me cambió la forma de cuidarme.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c81",
+      "orden": 85,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, warm, talking directly to camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y como Romina hay muchísimas. Todos los días recibo mensajes así.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c82",
+      "orden": 86,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling warmly at the camera. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y creo que el próximo va a ser el tuyo.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c83",
+      "orden": 87,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, pointing downward toward the button below. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Así que no pierdas tiempo. Tocá el botón de acá abajo.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c84",
+      "orden": 88,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, talking directly to camera with a natural, warm expression. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y comprobá si todavía quedan cupos para el Protocolo Agua de Arroz TURBO.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c85",
+      "orden": 89,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, with a warm, caring smile. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Estás a un solo clic de resolver tu insatisfacción con tu panza, tu energía y tu digestión.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c86",
+      "orden": 90,
+      "asset_id": "broll",
+      "image_id": "app_plan",
+      "video_prompt": "B-roll insert, no person and no talking face on screen. A smartphone held in hand showing a clean minimal 30-day plan app interface, blurred bright background, no readable text, photorealistic, vertical 9:16. Gentle slow camera movement, soft natural light, photorealistic. The Spanish line plays as voiceover narration over the insert. Vertical 9:16.",
+      "dialogo": "Imaginate un protocolo simple, claro y a tu medida, para activar la fase turbo del intestino.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c87",
+      "orden": 91,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, holding up three fingers. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y recordá: si asegurás tu lugar ahora, te llevás los tres regalos gratis.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c88",
+      "orden": 92,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, nodding confidently. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Y estás protegida por la garantía de 30 días. No corrés ningún riesgo.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c89",
+      "orden": 93,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling warmly. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Probás, y solo después decidís si te lo quedás.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c90",
+      "orden": 94,
+      "asset_id": "natalia",
+      "image_id": "natalia_medium",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, pointing downward toward the button below. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "La decisión es tuya. Tocá el botón de abajo y asegurá tu lugar.",
+      "duracion_seg": 8,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    },
+    {
+      "id": "c91",
+      "orden": 95,
+      "asset_id": "natalia",
+      "image_id": "natalia_closeup",
+      "video_prompt": "Animate the avatar into a realistic talking-head video. The same Argentine nutritionist (35-42) talks directly to camera, smiling warmly as a heartfelt goodbye. Bright modern nutrition office, light/beige blouse, keep the exact same face, wardrobe, hairstyle and set as the reference, subtle natural head and hand movements, realistic skin texture, accurate lip-sync to the Spanish audio. Vertical 9:16.",
+      "dialogo": "Estoy deseando conocer tu historia de éxito.",
+      "duracion_seg": 6,
+      "etiqueta": "IA",
+      "on_screen_text": ""
+    }
+  ],
+  "warnings": [
+    "VSL talking-head: subi la foto real de Natalia como avatar de referencia 'natalia' y la de Romina como 'romina' antes de generar.",
+    "Cada linea del guion = 1 clip (6-8s). Total: 91 de Natalia + 4 de Romina = 95 clips.",
+    "Los B-ROLL son clips IA del asset 'broll' (insertos sin cara): Veo genera el inserto + la voz en off; si preferis, en VTURB poneles la voz de Natalia por encima.",
+    "El clip c73 es el punto donde, en la pagina /upsell, aparece el bloque de precio/CTA.",
+    "Duracion auto: lineas cortas 6s, el resto 8s (unicas duraciones validas de Veo: 4/6/8).",
+    "natalia_closeup deriva de natalia_medium (aprobá primero la base). Los demas planos usan medium/closeup segun el encuadre."
+  ]
+}
