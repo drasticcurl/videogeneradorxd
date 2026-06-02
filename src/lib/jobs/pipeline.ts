@@ -50,6 +50,26 @@ function findImage(plan: ProjectPlan, imageId: string) {
   return null;
 }
 
+/** Devuelve todos los ids de referencia de una imagen (ref_image_id + ref_image_ids), sin duplicados. */
+function imageRefIds(img: {
+  ref_image_id?: string;
+  ref_image_ids?: string[];
+}): string[] {
+  const set = new Set<string>();
+  if (img.ref_image_id) set.add(img.ref_image_id);
+  for (const r of img.ref_image_ids ?? []) set.add(r);
+  return [...set];
+}
+
+/** Mime type aproximado a partir de la extension del archivo. */
+function guessImageMime(rel: string): string {
+  const lower = rel.toLowerCase();
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return "image/png";
+}
+
 /* ------------------------------ logging ------------------------------ */
 
 export function logEvent(
@@ -107,12 +127,22 @@ export function buildJobs(project: ProjectRecord): JobRecord[] {
   });
 
   // Jobs de imagen.
+  // Set de ids de imagenes GENERADAS del proyecto (para distinguirlas de las referencias subidas).
+  const generatedImageIds = new Set<string>();
+  for (const asset of project.plan.assets) {
+    for (const img of asset.images) generatedImageIds.add(img.id);
+  }
+
   for (const asset of project.plan.assets) {
     for (const img of asset.images) {
       const id = imageJobId(project.id, img.id);
+      // La dependencia solo aplica a referencias que son OTRA imagen generada del
+      // proyecto. Si las referencias son fotos subidas (VSL), no hay dependencia:
+      // estan en disco y el job puede correr de una.
+      const genRef = imageRefIds(img).find((r) => generatedImageIds.has(r));
       const dependsOn =
-        img.modo === "image2image" && img.ref_image_id
-          ? imageJobId(project.id, img.ref_image_id)
+        img.modo === "image2image" && genRef
+          ? imageJobId(project.id, genRef)
           : null;
       const prev = existing.get(id);
       // Preservamos lo ya aprobado/bloqueado.
@@ -192,22 +222,48 @@ async function runImageGeneration(
   const negativePrompt =
     img.negative_prompt || project.plan.global.negative_prompt || undefined;
 
-  let refImageBytes: Uint8Array | undefined;
-  if (img.modo === "image2image" && img.ref_image_id) {
-    const refJob = jobsDb.get(imageJobId(project.id, img.ref_image_id));
-    if (!refJob || refJob.status !== "done" || !refJob.outputPath) {
-      throw new Error(
-        `La imagen de referencia "${img.ref_image_id}" todavia no esta aprobada.`
-      );
+  // Reunimos las imagenes de referencia para mantener identidad. Pueden venir de:
+  //  - referencias subidas por el usuario (VSL): plan.references[].file en disco.
+  //  - otra imagen generada y APROBADA del proyecto.
+  const refImages: { bytes: Uint8Array; mimeType?: string }[] = [];
+  if (img.modo === "image2image") {
+    const referenceById = new Map(
+      (project.plan.references ?? []).map((r) => [r.id, r])
+    );
+    for (const rid of imageRefIds(img)) {
+      const uploaded = referenceById.get(rid);
+      if (uploaded) {
+        if (!uploaded.file || !existsRel(project.id, uploaded.file)) {
+          throw new Error(
+            `La foto de referencia "${rid}" todavia no se subio al proyecto. Subila antes de generar.`
+          );
+        }
+        refImages.push({
+          bytes: await readBytes(project.id, uploaded.file),
+          mimeType: guessImageMime(uploaded.file),
+        });
+      } else {
+        const refJob = jobsDb.get(imageJobId(project.id, rid));
+        if (!refJob || refJob.status !== "done" || !refJob.outputPath) {
+          throw new Error(
+            `La imagen de referencia "${rid}" todavia no esta aprobada.`
+          );
+        }
+        refImages.push({
+          bytes: await readBytes(project.id, refJob.outputPath),
+          mimeType: guessImageMime(refJob.outputPath),
+        });
+      }
     }
-    refImageBytes = await readBytes(project.id, refJob.outputPath);
   }
 
   const variants = Math.max(1, job.variants || 1);
   logEvent(
     project.id,
     "info",
-    `Generando ${variants} variante(s) de imagen "${img.id}" (${img.modo})`,
+    `Generando ${variants} variante(s) de imagen "${img.id}" (${img.modo}${
+      refImages.length ? `, ${refImages.length} ref` : ""
+    })`,
     { jobId: job.id, model }
   );
 
@@ -215,8 +271,7 @@ async function runImageGeneration(
   for (let i = 1; i <= variants; i++) {
     const result = await getImageProvider().generate({
       prompt: img.prompt,
-      refImageBytes,
-      refImageMimeType: "image/png",
+      refImages: refImages.length > 0 ? refImages : undefined,
       negativePrompt,
       aspectRatio: ASPECT_RATIO,
       model,
