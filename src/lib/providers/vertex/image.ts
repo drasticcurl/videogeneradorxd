@@ -14,6 +14,7 @@ import {
 } from "../../config";
 import type { ImageGenInput, ImageGenResult, ImageProvider } from "../types";
 import { ProviderHttpError, parseRetryAfter } from "../types";
+import { buildImageInstruction } from "../../prompts";
 import { authHeaders } from "./auth";
 
 interface GeminiImageResponse {
@@ -49,24 +50,14 @@ export class VertexImageProvider implements ImageProvider {
         ? [{ bytes: input.refImageBytes, mimeType: input.refImageMimeType }]
         : [];
     const isEdit = refs.length > 0;
-    const multi = refs.length > 1;
 
-    const identityLine = multi
-      ? "IMPORTANT: keep EACH person's identity 100% consistent with their reference photo " +
-        "(same faces, same people). Combine them naturally in one shot. " +
-        "Only change what the instruction asks (pose, framing, wardrobe context). "
-      : "IMPORTANT: keep identity 100% consistent with the reference image, " +
-        "same face, same person. Only change what the instruction asks. ";
-
-    const instruction = isEdit
-      ? input.prompt +
-        "\n\n" +
-        identityLine +
-        `Output a single vertical ${aspect} image.` +
-        (input.negativePrompt ? `\nAvoid: ${input.negativePrompt}` : "")
-      : input.prompt +
-        `\n\nOutput a single photorealistic vertical ${aspect} image.` +
-        (input.negativePrompt ? `\nAvoid: ${input.negativePrompt}` : "");
+    // Instruccion compartida con el preview (mismo texto que se ejecuta).
+    const instruction = buildImageInstruction({
+      prompt: input.prompt,
+      refCount: refs.length,
+      aspectRatio: aspect,
+      negativePrompt: input.negativePrompt,
+    });
 
     const parts: Array<Record<string, unknown>> = [{ text: instruction }];
     for (const ref of refs) {
