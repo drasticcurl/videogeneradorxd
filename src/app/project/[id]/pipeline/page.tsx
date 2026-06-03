@@ -14,7 +14,7 @@ import { LogPanel } from "@/components/LogPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import type { JobRecord } from "@/lib/types";
 
-type View = "storyboard" | "flow";
+type View = "storyboard" | "flow" | "fix";
 
 export default function PipelinePage({ params }: { params: { id: string } }) {
   const projectId = params.id;
@@ -33,9 +33,10 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     control,
     setClipResolution,
     extendJob,
+    regenerateMany,
   } = useProjectStore();
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [view, setView] = useState<View>("storyboard");
+  const [manualView, setManualView] = useState<View | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -133,6 +134,10 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     );
     return { t2i, i2i, vids };
   }, [jobs, imageModoById, ordenByClip]);
+
+  // Vista efectiva: si el usuario eligio una, se respeta; si no, con muchos clips
+  // arrancamos en la vista liviana "fix" (no monta 95 <video> -> no lagea la PC).
+  const view: View = manualView ?? (groups.vids.length > 24 ? "fix" : "storyboard");
 
   const progress = useMemo(() => {
     if (jobs.length === 0) return { done: 0, total: 0, pct: 0, awaiting: 0 };
@@ -250,9 +255,9 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
       </div>
 
       {/* Toggle de vista */}
-      <div className="flex gap-1 rounded-lg border border-slate-800 bg-panel p-1 text-sm">
+      <div className="flex flex-wrap gap-1 rounded-lg border border-slate-800 bg-panel p-1 text-sm">
         <button
-          onClick={() => setView("storyboard")}
+          onClick={() => setManualView("storyboard")}
           className={`rounded-md px-4 py-1.5 ${
             view === "storyboard" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
           }`}
@@ -260,7 +265,16 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           🎬 Storyboard
         </button>
         <button
-          onClick={() => setView("flow")}
+          onClick={() => setManualView("fix")}
+          className={`rounded-md px-4 py-1.5 ${
+            view === "fix" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
+          }`}
+          title="Vista liviana (sin cargar todos los videos): marcá los que están mal y regeneralos"
+        >
+          🔧 Revisar / Arreglar
+        </button>
+        <button
+          onClick={() => setManualView("flow")}
           className={`rounded-md px-4 py-1.5 ${
             view === "flow" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
           }`}
@@ -280,7 +294,16 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
       )}
 
       {/* Cuerpo */}
-      {view === "storyboard" ? (
+      {view === "fix" ? (
+        <FixView
+          jobs={groups.vids}
+          projectId={projectId}
+          ordenByClip={ordenByClip}
+          dialogueByRef={dialogueByRef}
+          onRegenerateMany={(ids) => void regenerateMany(ids)}
+          onRegenerate={(id) => void regenerateJob(id)}
+        />
+      ) : view === "storyboard" ? (
         <div className="space-y-5">
           <Group title="Imagenes base (text2image)" jobs={groups.t2i} projectId={projectId} handlers={handlers} meta={imageMeta} />
           <Group title="Imagenes derivadas (image2image · misma identidad)" jobs={groups.i2i} projectId={projectId} handlers={handlers} meta={imageMeta} />
@@ -423,5 +446,260 @@ function Filmstrip({
         </div>
       )}
     </section>
+  );
+}
+
+
+/* ----------------------- Vista "Revisar / Arreglar" ---------------------- */
+/**
+ * Vista LIVIANA: lista compacta de clips (NO carga todos los <video> -> no lagea).
+ * Marcás los que estan mal (o pegás sus numeros) y regeneras SOLO esos.
+ * El video de cada fila se carga ON-DEMAND al tocar "Ver".
+ */
+function FixView({
+  jobs,
+  projectId,
+  ordenByClip,
+  dialogueByRef,
+  onRegenerateMany,
+  onRegenerate,
+}: {
+  jobs: JobRecord[];
+  projectId: string;
+  ordenByClip: Map<string, number>;
+  dialogueByRef: Map<string, string>;
+  onRegenerateMany: (jobIds: string[]) => void;
+  onRegenerate: (jobId: string) => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [numbersText, setNumbersText] = useState("");
+
+  const rows = useMemo(
+    () =>
+      [...jobs].sort(
+        (a, b) => (ordenByClip.get(a.refId) ?? 0) - (ordenByClip.get(b.refId) ?? 0)
+      ),
+    [jobs, ordenByClip]
+  );
+
+  function toggle(set: Set<string>, id: string): Set<string> {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  }
+
+  function selectByNumbers() {
+    const nums = new Set(
+      numbersText
+        .split(/[^0-9]+/)
+        .filter(Boolean)
+        .map((n) => Number(n))
+    );
+    if (nums.size === 0) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const j of rows) {
+        const o = ordenByClip.get(j.refId);
+        if (o != null && nums.has(o)) next.add(j.id);
+      }
+      return next;
+    });
+  }
+
+  const sel = selected.size;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-800 bg-panel p-3">
+        <div className="min-w-[220px] flex-1">
+          <label className="mb-1 block text-xs text-slate-400">
+            Pegá los números de los clips malos (ej: 12, 45, 78)
+          </label>
+          <div className="flex gap-2">
+            <input
+              value={numbersText}
+              onChange={(e) => setNumbersText(e.target.value)}
+              placeholder="12, 45, 78…"
+              className="flex-1 rounded border border-slate-700 bg-ink px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+            />
+            <button
+              onClick={selectByNumbers}
+              className="rounded-md border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+            >
+              Marcar
+            </button>
+          </div>
+        </div>
+        <button
+          onClick={() =>
+            setSelected(
+              new Set(rows.filter((j) => j.status === "failed").map((j) => j.id))
+            )
+          }
+          className="rounded-md border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+        >
+          Marcar fallidos
+        </button>
+        <button
+          onClick={() => setSelected(new Set())}
+          className="rounded-md border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+        >
+          Limpiar
+        </button>
+        <button
+          onClick={() => {
+            onRegenerateMany([...selected]);
+            setSelected(new Set());
+          }}
+          disabled={sel === 0}
+          className="ml-auto rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+        >
+          ↻ Regenerar seleccionados ({sel})
+        </button>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-slate-800">
+        <table className="w-full text-sm">
+          <thead className="bg-panel text-left text-xs uppercase text-slate-500">
+            <tr>
+              <th className="w-10 px-2 py-2"></th>
+              <th className="w-12 px-2 py-2">#</th>
+              <th className="px-2 py-2">Clip</th>
+              <th className="w-28 px-2 py-2">Estado</th>
+              <th className="px-2 py-2">Diálogo</th>
+              <th className="w-24 px-2 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((j) => (
+              <FixRow
+                key={j.id}
+                job={j}
+                orden={ordenByClip.get(j.refId) ?? 0}
+                dialogo={dialogueByRef.get(j.refId) ?? ""}
+                selected={selected.has(j.id)}
+                expanded={expanded.has(j.id)}
+                projectId={projectId}
+                onToggleSel={() => setSelected((s) => toggle(s, j.id))}
+                onToggleExp={() => setExpanded((s) => toggle(s, j.id))}
+                onRegenerate={() => onRegenerate(j.id)}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-slate-500">
+        Tip: tocá <b>Ver</b> para cargar solo ese video (los demás no se cargan, por eso no
+        lagea). Marcá los malos y <b>Regenerar seleccionados</b> rehace solo esos; con
+        auto-aprobación quedan listos solos cuando terminan.
+      </p>
+    </div>
+  );
+}
+
+function statusPill(status: JobRecord["status"]): { txt: string; cls: string } {
+  switch (status) {
+    case "done":
+      return { txt: "aprobado", cls: "bg-emerald-500/15 text-emerald-300" };
+    case "generating":
+      return { txt: "generando…", cls: "bg-indigo-500/15 text-indigo-300" };
+    case "awaiting_approval":
+      return { txt: "esperando", cls: "bg-amber-500/15 text-amber-300" };
+    case "failed":
+      return { txt: "falló", cls: "bg-red-500/15 text-red-300" };
+    case "pending":
+      return { txt: "en cola", cls: "bg-slate-500/15 text-slate-300" };
+    default:
+      return { txt: status, cls: "bg-slate-500/15 text-slate-300" };
+  }
+}
+
+function FixRow({
+  job,
+  orden,
+  dialogo,
+  selected,
+  expanded,
+  projectId,
+  onToggleSel,
+  onToggleExp,
+  onRegenerate,
+}: {
+  job: JobRecord;
+  orden: number;
+  dialogo: string;
+  selected: boolean;
+  expanded: boolean;
+  projectId: string;
+  onToggleSel: () => void;
+  onToggleExp: () => void;
+  onRegenerate: () => void;
+}) {
+  const pill = statusPill(job.status);
+  const ver = encodeURIComponent(job.updatedAt ?? "");
+  const videoUrl = job.outputPath
+    ? `/api/files/${projectId}/${job.outputPath}?v=${ver}`
+    : null;
+  return (
+    <>
+      <tr className={`border-t border-slate-800 ${selected ? "bg-emerald-500/5" : ""}`}>
+        <td className="px-2 py-2 align-top">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSel}
+            className="h-4 w-4"
+          />
+        </td>
+        <td className="px-2 py-2 align-top font-mono text-slate-400">{orden}</td>
+        <td className="px-2 py-2 align-top">
+          <div className="font-medium text-slate-200">{job.label}</div>
+          {job.error && <div className="text-[11px] text-red-300">{job.error}</div>}
+        </td>
+        <td className="px-2 py-2 align-top">
+          <span className={`rounded px-1.5 py-0.5 text-[11px] ${pill.cls}`}>{pill.txt}</span>
+        </td>
+        <td className="px-2 py-2 align-top text-xs text-slate-400">{dialogo}</td>
+        <td className="px-2 py-2 align-top">
+          <div className="flex gap-1">
+            <button
+              onClick={onToggleExp}
+              className="rounded border border-slate-600 px-2 py-1 text-xs hover:bg-slate-800"
+            >
+              {expanded ? "Ocultar" : "Ver"}
+            </button>
+            <button
+              onClick={onRegenerate}
+              title="Regenerar solo este clip"
+              className="rounded border border-slate-600 px-2 py-1 text-xs hover:bg-slate-800"
+            >
+              ↻
+            </button>
+          </div>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="bg-ink/40">
+          <td></td>
+          <td colSpan={5} className="px-2 pb-3">
+            {videoUrl ? (
+              <video
+                key={videoUrl}
+                src={videoUrl}
+                controls
+                preload="none"
+                className="max-h-[60vh] w-auto rounded border border-slate-700"
+              />
+            ) : (
+              <span className="text-xs text-slate-500">
+                {job.status === "generating" ? "generando…" : "(sin video todavía)"}
+              </span>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
