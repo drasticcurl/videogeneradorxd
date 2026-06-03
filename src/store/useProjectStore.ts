@@ -108,6 +108,7 @@ interface ProjectState {
   // acciones de pipeline
   approveJob: (jobId: string, index?: number) => Promise<void>;
   regenerateJob: (jobId: string) => Promise<void>;
+  regenerateMany: (jobIds: string[]) => Promise<void>;
   changePromptJob: (
     jobId: string,
     payload: {
@@ -370,6 +371,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await fetch(`/api/jobs/${jobId}/retry`, { method: "POST" });
     const id = get().project?.id;
     if (id) await get().refreshJobs(id);
+  },
+
+  regenerateMany: async (jobIds) => {
+    const id = get().project?.id;
+    if (!id || jobIds.length === 0) return;
+    await fetch(`/api/projects/${id}/regenerate-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobIds }),
+    });
+    await get().refreshJobs(id);
   },
 
   changePromptJob: async (jobId, payload) => {

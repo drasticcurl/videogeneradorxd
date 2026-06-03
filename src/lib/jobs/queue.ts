@@ -72,10 +72,12 @@ export function enqueueJob(jobId: string): void {
     error: null,
     attempts: 0,
     locked: false,
-    // limpiamos candidatos/seleccion para imagenes (se regeneran)
+    // Limpiamos candidatos/seleccion y TAMBIEN el outputPath (imagen y video): asi al
+    // regenerar se "saca" el aprobado, se muestra "generando", y cuando termina aparece
+    // el NUEVO archivo (antes el video viejo quedaba pegado encima del que se generaba).
     candidates: [],
     selectedIndex: null,
-    outputPath: job.type === "image" ? null : job.outputPath,
+    outputPath: null,
     // reseteamos el contador de reintentos por rate limit (presupuesto fresco)
     meta: restMeta,
   });
