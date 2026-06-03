@@ -95,6 +95,11 @@ export interface VideoGenInput {
   dialogue?: string;
   /** id de modelo de video (Veo 3.1). */
   model?: string;
+  /**
+   * OVERRIDE del prompt final. Si viene con contenido, se manda TAL CUAL a Veo y se
+   * ignora el armado automatico (estilo UGC/selfie, lip-sync, voz/acento).
+   */
+  promptOverride?: string;
 }
 
 export interface VideoGenResult {
@@ -116,6 +121,8 @@ export interface VideoExtendInput {
   resolution?: string;
   dialogue?: string;
   model?: string;
+  /** OVERRIDE del prompt final (se manda tal cual, sin armado automatico). */
+  promptOverride?: string;
 }
 
 export interface VideoProvider {

@@ -4,7 +4,10 @@
  * Por defecto regenera; si regenerate=false SOLO guarda los cambios (sin generar),
  * util para ajustar texto/tiempo/dialogo antes de generar en batch.
  * Body: { prompt?: string, dialogue?: string, durationSec?: number,
- *         resolution?: string, model?: string, regenerate?: boolean }
+ *         resolution?: string, model?: string, finalPrompt?: string, regenerate?: boolean }
+ *
+ * finalPrompt: override del prompt final que se ejecuta en Veo. Si trae contenido, se
+ * usa TAL CUAL (ignora el armado automatico UGC/lip-sync). "" lo borra (vuelve al auto).
  */
 import { jobsDb } from "@/lib/db";
 import { changePrompt } from "@/lib/jobs/pipeline";
@@ -28,6 +31,7 @@ export async function POST(
       durationSec?: number;
       resolution?: string;
       model?: string;
+      finalPrompt?: string;
       regenerate?: boolean;
     };
     const prompt = body.prompt !== undefined ? body.prompt.trim() : undefined;
@@ -41,6 +45,7 @@ export async function POST(
       durationSec: body.durationSec,
       resolution: body.resolution,
       modelOverride: body.model,
+      finalPrompt: body.finalPrompt,
     });
 
     // regenerate=false => solo guarda los cambios (sin volver a generar).
