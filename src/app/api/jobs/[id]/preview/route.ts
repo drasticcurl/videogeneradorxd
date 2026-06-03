@@ -2,6 +2,8 @@
  * GET /api/jobs/:id/preview
  * Devuelve TODO lo que se va a ejecutar para ese job, para revisarlo antes de regenerar:
  *  - executedPrompt: el prompt EXACTO que se manda al modelo (Veo o Nano Banana).
+ *  - autoPrompt (solo video): el prompt que armaria el sistema automaticamente (sin override).
+ *  - promptOverride / hasPromptOverride (solo video): override manual del prompt final, si hay.
  *  - inputImage / refs: la/s imagen/es de entrada (frame inicial del video o referencias).
  *  - json: el objeto del plan (clip o imagen) entero.
  *  - model, duracion, resolucion, etc.
@@ -53,18 +55,26 @@ export async function GET(
       if (!clip) return notFound("Clip no encontrado en el plan");
       const found = findImage(project, clip.image_id);
       const imgJob = jobsDb.imageJob(project.id, clip.image_id);
-      const executedPrompt = buildVeoVideoPrompt({
+      // autoPrompt: el prompt que armaria el sistema (sin override). Sirve para
+      // precargar el editor cuando el usuario quiere pasar a editar el prompt final.
+      const autoPrompt = buildVeoVideoPrompt({
         videoPrompt: clip.video_prompt,
         dialogue: clip.dialogo,
         durationSec: clip.duracion_seg,
         aspectRatio: ASPECT_RATIO,
       });
+      const override = clip.final_prompt?.trim() ? clip.final_prompt : null;
+      // executedPrompt: lo que REALMENTE se manda a Veo (override si existe, si no el auto).
+      const executedPrompt = override ?? autoPrompt;
       return ok({
         ...common,
         model: job.modelOverride || project.models.video,
         durationSec: clip.duracion_seg,
         resolution: resolveResolution(clip.resolucion ?? project.defaultResolution),
         executedPrompt,
+        autoPrompt,
+        promptOverride: override,
+        hasPromptOverride: Boolean(override),
         inputImage: {
           id: clip.image_id,
           file: imgJob?.outputPath ?? null,

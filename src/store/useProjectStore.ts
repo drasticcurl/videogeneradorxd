@@ -117,6 +117,7 @@ interface ProjectState {
       durationSec?: number;
       resolution?: string;
       model?: string;
+      finalPrompt?: string;
       regenerate?: boolean;
     }
   ) => Promise<void>;

@@ -13,6 +13,7 @@
  */
 import { useState } from "react";
 import { StatusBadge } from "./StatusBadge";
+import { buildVeoVideoPrompt } from "@/lib/prompts";
 import type { JobRecord } from "@/lib/types";
 
 interface ModelOption {
@@ -29,6 +30,8 @@ interface Props {
   currentDialogue?: string;
   /** duracion actual del clip en segundos (solo videos) */
   currentDuration?: number;
+  /** override del prompt final actual del clip (solo videos); "" si no hay override */
+  currentFinalPrompt?: string;
   /** opciones de modelo para el selector (catalogo de imagen o de video segun el tipo) */
   modelOptions: ModelOption[];
   /** modelo del proyecto para este tipo (default si no hay override) */
@@ -43,6 +46,7 @@ interface Props {
       durationSec?: number;
       resolution?: string;
       model?: string;
+      finalPrompt?: string;
       regenerate?: boolean;
     }
   ) => void;
@@ -66,6 +70,7 @@ export function JobCard({
   currentPrompt,
   currentDialogue,
   currentDuration,
+  currentFinalPrompt,
   modelOptions,
   projectModel,
   onApprove,
@@ -83,6 +88,9 @@ export function JobCard({
   const [durationChoice, setDurationChoice] = useState<number>(8);
   const [resChoice, setResChoice] = useState<string>("720p");
   const [modelChoice, setModelChoice] = useState("");
+  // Override del prompt final (avanzado): si esta activo, se manda TAL CUAL a Veo.
+  const [overrideOn, setOverrideOn] = useState(false);
+  const [finalPromptText, setFinalPromptText] = useState("");
 
   const isImage = job.type === "image";
   const awaiting = job.status === "awaiting_approval";
@@ -105,12 +113,38 @@ export function JobCard({
     setDurationChoice(currentDuration ?? 8);
     setResChoice(resolution ?? "720p");
     setModelChoice(effectiveModel);
+    // Override del prompt final: si el clip ya tiene uno, arrancamos con el editor abierto.
+    const existingOverride = (currentFinalPrompt ?? "").trim();
+    setOverrideOn(Boolean(existingOverride));
+    setFinalPromptText(existingOverride);
     setEditing(true);
+  }
+
+  /** Arma el prompt final "automatico" (lo que mandaria el sistema sin override). */
+  function computeAutoFinalPrompt(): string {
+    return buildVeoVideoPrompt({
+      videoPrompt: promptText,
+      dialogue: dialogueText,
+      durationSec: durationChoice,
+      aspectRatio: "9:16",
+    });
+  }
+
+  // Al activar el override por primera vez, precargamos el prompt automatico actual
+  // para que el usuario lo edite/recorte (ej. sacar la parte de "persona hablando").
+  function toggleOverride(on: boolean) {
+    setOverrideOn(on);
+    if (on && !finalPromptText.trim()) {
+      setFinalPromptText(computeAutoFinalPrompt());
+    }
   }
 
   // Guarda los cambios del editor. Si regenerate=false SOLO persiste (no genera),
   // util para ajustar texto/tiempo/dialogo antes de generar en batch.
   function submitEdits(regenerate: boolean) {
+    // finalPrompt: si el override esta activo y tiene contenido, se manda; si no, ""
+    // lo BORRA en el backend (vuelve al armado automatico). undefined = no aplica a imagenes.
+    const finalPrompt = overrideOn ? finalPromptText : "";
     const payload = isImage
       ? { prompt: promptText.trim(), model: modelChoice, regenerate }
       : {
@@ -119,6 +153,7 @@ export function JobCard({
           durationSec: durationChoice,
           resolution: resChoice,
           model: modelChoice,
+          finalPrompt,
           regenerate,
         };
     if (payload.prompt) onChangePrompt(job.id, payload);
@@ -299,6 +334,60 @@ export function JobCard({
                     ))}
                   </select>
                 </div>
+              </div>
+            )}
+
+            {/* Solo videos: OVERRIDE del prompt final que se ejecuta en Veo (avanzado). */}
+            {!isImage && (
+              <div className="flex flex-col gap-2 rounded-lg border border-amber-600/40 bg-amber-500/5 p-3">
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-amber-100">
+                  <input
+                    type="checkbox"
+                    checked={overrideOn}
+                    onChange={(e) => toggleOverride(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Editar manualmente el prompt final que se ejecuta (avanzado)
+                </label>
+                {overrideOn ? (
+                  <>
+                    <p className="text-[11px] leading-relaxed text-amber-200/80">
+                      Esto se manda <b>TAL CUAL</b> a Veo: ignora el armado automático
+                      (estilo UGC/selfie, lip-sync, voz/acento). Útil para b-roll que NO
+                      debe mostrar a una persona hablando. Si querés que se escuche el
+                      diálogo, incluilo acá vos mismo.
+                    </p>
+                    <textarea
+                      value={finalPromptText}
+                      onChange={(e) => setFinalPromptText(e.target.value)}
+                      placeholder="Prompt final exacto que se le manda a Veo…"
+                      spellCheck={false}
+                      className="code min-h-[200px] w-full resize-y whitespace-pre-wrap break-words rounded-lg border border-amber-600/50 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-slate-500">
+                        {finalPromptText.length} caracteres
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setFinalPromptText(computeAutoFinalPrompt())}
+                        className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800"
+                        title="Reemplaza el texto por el prompt automático actual (visual + voz/acento + diálogo) para editarlo desde ahí"
+                      >
+                        ↺ Cargar prompt automático
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <details className="rounded border border-slate-700 bg-ink/50">
+                    <summary className="cursor-pointer px-2 py-1 text-[11px] uppercase text-slate-500">
+                      Ver prompt final automático (lo que se ejecuta si no lo editás)
+                    </summary>
+                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap px-2 py-2 text-[11px] text-slate-300">
+                      {computeAutoFinalPrompt()}
+                    </pre>
+                  </details>
+                )}
               </div>
             )}
 

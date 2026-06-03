@@ -51,11 +51,13 @@ export class VertexVideoProvider implements VideoProvider {
     const startUrl = `${vertexBaseUrl()}/${model}:predictLongRunning`;
 
     // Prompt final con estilo UGC/selfie + acento rioplatense argentino (siempre que haya dialogo).
+    // Si el clip trae un override, se manda EXACTAMENTE ese texto (sin armado automatico).
     const prompt = buildVeoVideoPrompt({
       videoPrompt: input.prompt,
       dialogue: input.dialogue,
       durationSec: input.durationSec,
       aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
+      override: input.promptOverride,
     });
 
     const body = {
@@ -110,14 +112,19 @@ export class VertexVideoProvider implements VideoProvider {
     const model = resolveModel("video", input.model);
     const startUrl = `${vertexBaseUrl()}/${model}:predictLongRunning`;
 
+    const continuation =
+      " Continue seamlessly from the provided video, keeping the same person, " +
+      "wardrobe, lighting and setting consistent.";
     const prompt = buildVeoVideoPrompt({
-      videoPrompt:
-        input.prompt +
-        " Continue seamlessly from the provided video, keeping the same person, " +
-        "wardrobe, lighting and setting consistent.",
+      videoPrompt: input.prompt + continuation,
       dialogue: input.dialogue,
       durationSec: input.durationSec,
       aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
+      // Si hay override, lo respetamos pero le sumamos la instruccion de continuidad
+      // para que la extension empalme con el video base.
+      override: input.promptOverride
+        ? input.promptOverride.trim() + continuation
+        : undefined,
     });
 
     const body = {
