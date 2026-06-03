@@ -22,6 +22,7 @@ interface SavePayload {
   prompt?: string;
   dialogue?: string;
   durationSec?: number;
+  model?: string;
   regenerate?: boolean;
 }
 
@@ -309,6 +310,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           projectId={projectId}
           ordenByClip={ordenByClip}
           dialogueByRef={dialogueByRef}
+          videoModels={videoModels}
           onRegenerateMany={(ids) => void regenerateMany(ids)}
           onRegenerate={(id) => void regenerateJob(id)}
           onSave={(id, payload) => void changePromptJob(id, payload)}
@@ -471,6 +473,7 @@ function FixView({
   projectId,
   ordenByClip,
   dialogueByRef,
+  videoModels,
   onRegenerateMany,
   onRegenerate,
   onSave,
@@ -479,6 +482,7 @@ function FixView({
   projectId: string;
   ordenByClip: Map<string, number>;
   dialogueByRef: Map<string, string>;
+  videoModels: { id: string; label: string }[];
   onRegenerateMany: (jobIds: string[]) => void;
   onRegenerate: (jobId: string) => void;
   onSave: (jobId: string, payload: SavePayload) => void;
@@ -531,6 +535,7 @@ function FixView({
         jobs={selectedJobs}
         projectId={projectId}
         ordenByClip={ordenByClip}
+        videoModels={videoModels}
         onRegenerateAll={(ids) => onRegenerateMany(ids)}
         onSave={onSave}
         onClose={() => setReviewing(false)}
@@ -752,6 +757,7 @@ function ReviewStoryboard({
   jobs,
   projectId,
   ordenByClip,
+  videoModels,
   onRegenerateAll,
   onSave,
   onClose,
@@ -759,6 +765,7 @@ function ReviewStoryboard({
   jobs: JobRecord[];
   projectId: string;
   ordenByClip: Map<string, number>;
+  videoModels: { id: string; label: string }[];
   onRegenerateAll: (ids: string[]) => void;
   onSave: (jobId: string, payload: SavePayload) => void;
   onClose: () => void;
@@ -788,6 +795,7 @@ function ReviewStoryboard({
             job={j}
             projectId={projectId}
             orden={ordenByClip.get(j.refId) ?? 0}
+            videoModels={videoModels}
             onSave={onSave}
           />
         ))}
@@ -804,11 +812,13 @@ function ReviewCard({
   job,
   projectId,
   orden,
+  videoModels,
   onSave,
 }: {
   job: JobRecord;
   projectId: string;
   orden: number;
+  videoModels: { id: string; label: string }[];
   onSave: (jobId: string, payload: SavePayload) => void;
 }) {
   const [data, setData] = useState<PreviewData | null>(null);
@@ -820,6 +830,7 @@ function ReviewCard({
   const [vprompt, setVprompt] = useState("");
   const [dialog, setDialog] = useState("");
   const [duration, setDuration] = useState<number>(8);
+  const [selectedModel, setSelectedModel] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -834,6 +845,7 @@ function ReviewCard({
           setVprompt(String(j.video_prompt ?? ""));
           setDialog(String(j.dialogo ?? ""));
           setDuration(Number(j.duracion_seg ?? 8) || 8);
+          setSelectedModel(pd.model ?? "");
         } else {
           setVprompt(String(j.prompt ?? ""));
         }
@@ -866,6 +878,7 @@ function ReviewCard({
     if (isVideo) {
       payload.dialogue = dialog;
       payload.durationSec = duration;
+      if (selectedModel) payload.model = selectedModel;
     }
     onSave(job.id, payload);
   }
@@ -984,19 +997,37 @@ function ReviewCard({
                   className="h-20 w-full resize-y rounded border border-slate-700 bg-ink p-2 text-xs leading-relaxed focus:border-accent focus:outline-none"
                 />
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-[11px] uppercase text-slate-500">Duración</label>
-                <select
-                  value={duration}
-                  onChange={(e) => setDuration(Number(e.target.value))}
-                  className="rounded border border-slate-700 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none"
-                >
-                  {[4, 6, 8].map((d) => (
-                    <option key={d} value={d}>
-                      {d}s
-                    </option>
-                  ))}
-                </select>
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] uppercase text-slate-500">Duración</label>
+                  <select
+                    value={duration}
+                    onChange={(e) => setDuration(Number(e.target.value))}
+                    className="rounded border border-slate-700 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none"
+                  >
+                    {[4, 6, 8].map((d) => (
+                      <option key={d} value={d}>
+                        {d}s
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {videoModels.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-[11px] uppercase text-slate-500">Modelo</label>
+                    <select
+                      value={selectedModel}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      className="max-w-[220px] rounded border border-slate-700 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none"
+                    >
+                      {videoModels.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             </>
           )}

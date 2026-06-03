@@ -60,8 +60,18 @@ Zod en `scripts/generate-vsl-plan.ts`.
   modo manual: `PIPELINE_AUTO_APPROVE=false` + `PIPELINE_APPROVAL_BATCH=5` + botón "Aprobar lote".
 - **PRs**: uno por feature/fix, siempre desde `main` actualizado. Título corto, body en español
   con secciones "Qué hace" / "Cambios" / "Tested" / "Notas".
-- **Tests/build**: typecheck/build son lentos en este sandbox; el usuario suele pedir
-  **saltearlos** y testear localmente. Confirmar antes de correrlos.
+- **Tests/build**: typecheck/build son lentos en este sandbox. El usuario los testea
+  localmente. **NUNCA correr `typecheck` ni `build` salvo que el usuario lo pida
+  explícitamente.** Verificar cambios con `grep` rápido si hace falta, nada más.
+- **Git / PRs**: para hacer commits, push y abrir PRs **SIEMPRE usar `execute_bash`**
+  (no `run_command`, no `control_bash_process`, no subagentes para esto). Ejemplo:
+  ```bash
+  cd /projects/sandbox/videogeneradorxd
+  git checkout -b mi-branch
+  git add archivo
+  git commit -m "mensaje"
+  ```
+  Luego `mcp_sandbox_github_push_to_remote` y `mcp_sandbox_github_create_pull_request`.
 - **Preferencia**: cambios chicos y enfocados, con commits descriptivos en español. Nunca
   borrar funcionalidad existente sin avisar.
 
