@@ -2,7 +2,7 @@
 /**
  * Pantalla "Pipeline": estado en vivo con TRES vistas:
  *   - Storyboard: frames ordenados (imagenes + clips en orden).
- *   - Revisar / Arreglar: vista liviana para marcar clips malos y regenerarlos.
+ *   - Revisar / Arreglar: vista liviana para marcar clips malos, EDITAR sus prompts y regenerarlos.
  *   - Flujo: grafo agentico por etapas.
  * Incluye mini-log y controles pausar/reanudar/cancelar.
  */
@@ -16,6 +16,14 @@ import { StatusBadge } from "@/components/StatusBadge";
 import type { JobRecord } from "@/lib/types";
 
 type View = "storyboard" | "flow" | "fix";
+
+/** payload para guardar/regenerar un job desde la vista de revision. */
+interface SavePayload {
+  prompt?: string;
+  dialogue?: string;
+  durationSec?: number;
+  regenerate?: boolean;
+}
 
 export default function PipelinePage({ params }: { params: { id: string } }) {
   const projectId = params.id;
@@ -270,7 +278,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           className={`rounded-md px-4 py-1.5 ${
             view === "fix" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
           }`}
-          title="Vista liviana (sin cargar todos los videos): marcá los que están mal y regeneralos"
+          title="Vista liviana (sin cargar todos los videos): marcá los que están mal, editá y regeneralos"
         >
           🔧 Revisar / Arreglar
         </button>
@@ -303,6 +311,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           dialogueByRef={dialogueByRef}
           onRegenerateMany={(ids) => void regenerateMany(ids)}
           onRegenerate={(id) => void regenerateJob(id)}
+          onSave={(id, payload) => void changePromptJob(id, payload)}
         />
       ) : view === "storyboard" ? (
         <div className="space-y-5">
@@ -455,8 +464,7 @@ function Filmstrip({
 /**
  * Vista LIVIANA: lista compacta de clips (NO carga todos los <video> -> no lagea).
  * Marcás los que estan mal (o pegás sus numeros) y "Revisar seleccionados" abre un
- * storyboard SOLO con esos, mostrando: imagen de entrada + prompt EXACTO + JSON entero.
- * El video de cada fila se carga ON-DEMAND al tocar "Ver".
+ * storyboard SOLO con esos, donde podés EDITAR el prompt/dialogo y "Guardar y regenerar".
  */
 function FixView({
   jobs,
@@ -465,6 +473,7 @@ function FixView({
   dialogueByRef,
   onRegenerateMany,
   onRegenerate,
+  onSave,
 }: {
   jobs: JobRecord[];
   projectId: string;
@@ -472,6 +481,7 @@ function FixView({
   dialogueByRef: Map<string, string>;
   onRegenerateMany: (jobIds: string[]) => void;
   onRegenerate: (jobId: string) => void;
+  onSave: (jobId: string, payload: SavePayload) => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -514,15 +524,15 @@ function FixView({
   const sel = selected.size;
   const selectedJobs = rows.filter((j) => selected.has(j.id));
 
-  // Storyboard de revision: solo los seleccionados, con prompt + imagen input + JSON.
+  // Storyboard de revision: solo los seleccionados, con prompt EDITABLE + imagen input + JSON.
   if (reviewing && selectedJobs.length > 0) {
     return (
       <ReviewStoryboard
         jobs={selectedJobs}
         projectId={projectId}
         ordenByClip={ordenByClip}
-        onRegenerate={onRegenerate}
         onRegenerateAll={(ids) => onRegenerateMany(ids)}
+        onSave={onSave}
         onClose={() => setReviewing(false)}
       />
     );
@@ -571,7 +581,7 @@ function FixView({
           disabled={sel === 0}
           className="ml-auto rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
         >
-          🔍 Revisar seleccionados ({sel})
+          🔍 Revisar / editar seleccionados ({sel})
         </button>
       </div>
 
@@ -607,8 +617,9 @@ function FixView({
       </div>
       <p className="text-xs text-slate-500">
         Tip: tocá <b>Ver</b> para cargar solo ese video (los demás no se cargan, por eso no
-        lagea). Marcá los malos y <b>Revisar seleccionados</b> abre un storyboard solo con esos
-        (con el prompt exacto + imagen de entrada + JSON) para revisarlos y regenerarlos.
+        lagea). Marcá los malos y <b>Revisar / editar seleccionados</b> abre un storyboard solo
+        con esos, donde podés <b>editar el prompt/diálogo</b> y <b>Guardar y regenerar</b> (queda
+        guardado en el plan para el export a ffmpeg).
       </p>
     </div>
   );
@@ -687,7 +698,7 @@ function FixRow({
             </button>
             <button
               onClick={onRegenerate}
-              title="Regenerar solo este clip"
+              title="Regenerar solo este clip (sin editar)"
               className="rounded border border-slate-600 px-2 py-1 text-xs hover:bg-slate-800"
             >
               ↻
@@ -719,7 +730,7 @@ function FixRow({
   );
 }
 
-/* --------------------- Storyboard de revisión (focalizado) --------------------- */
+/* --------------------- Storyboard de revisión (editable) --------------------- */
 
 interface PreviewData {
   type: "image" | "video";
@@ -741,15 +752,15 @@ function ReviewStoryboard({
   jobs,
   projectId,
   ordenByClip,
-  onRegenerate,
   onRegenerateAll,
+  onSave,
   onClose,
 }: {
   jobs: JobRecord[];
   projectId: string;
   ordenByClip: Map<string, number>;
-  onRegenerate: (id: string) => void;
   onRegenerateAll: (ids: string[]) => void;
+  onSave: (jobId: string, payload: SavePayload) => void;
   onClose: () => void;
 }) {
   return (
@@ -764,9 +775,10 @@ function ReviewStoryboard({
         <span className="text-sm text-slate-400">{jobs.length} clip(s) para revisar</span>
         <button
           onClick={() => onRegenerateAll(jobs.map((j) => j.id))}
-          className="ml-auto rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500"
+          className="ml-auto rounded-md border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+          title="Regenera todos los seleccionados con lo que ya esté guardado en el plan"
         >
-          ↻ Regenerar todos ({jobs.length})
+          ↻ Regenerar todos sin editar ({jobs.length})
         </button>
       </div>
       <div className="space-y-4">
@@ -776,7 +788,7 @@ function ReviewStoryboard({
             job={j}
             projectId={projectId}
             orden={ordenByClip.get(j.refId) ?? 0}
-            onRegenerate={() => onRegenerate(j.id)}
+            onSave={onSave}
           />
         ))}
       </div>
@@ -784,29 +796,47 @@ function ReviewStoryboard({
   );
 }
 
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+}
+
 function ReviewCard({
   job,
   projectId,
   orden,
-  onRegenerate,
+  onSave,
 }: {
   job: JobRecord;
   projectId: string;
   orden: number;
-  onRegenerate: () => void;
+  onSave: (jobId: string, payload: SavePayload) => void;
 }) {
   const [data, setData] = useState<PreviewData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showVideo, setShowVideo] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Campos editables (se inicializan desde el JSON del plan al cargar el preview).
+  const [vprompt, setVprompt] = useState("");
+  const [dialog, setDialog] = useState("");
+  const [duration, setDuration] = useState<number>(8);
+
   useEffect(() => {
     let alive = true;
-    setData(null);
     fetch(`/api/jobs/${job.id}/preview`)
       .then((r) => r.json())
       .then((d) => {
-        if (alive) setData(d as PreviewData);
+        if (!alive) return;
+        const pd = d as PreviewData;
+        setData(pd);
+        const j = asRecord(pd.json);
+        if (pd.type === "video") {
+          setVprompt(String(j.video_prompt ?? ""));
+          setDialog(String(j.dialogo ?? ""));
+          setDuration(Number(j.duracion_seg ?? 8) || 8);
+        } else {
+          setVprompt(String(j.prompt ?? ""));
+        }
       })
       .catch((e) => {
         if (alive) setErr(e instanceof Error ? e.message : String(e));
@@ -821,6 +851,7 @@ function ReviewCard({
   const inputImg = data?.inputImage?.file ?? null;
   const outUrl = job.outputPath ? fileUrl(job.outputPath) : null;
   const pill = statusPill(job.status);
+  const isVideo = data?.type === "video";
 
   function copyPrompt() {
     if (data?.executedPrompt) {
@@ -830,6 +861,15 @@ function ReviewCard({
     }
   }
 
+  function save(regenerate: boolean) {
+    const payload: SavePayload = { prompt: vprompt, regenerate };
+    if (isVideo) {
+      payload.dialogue = dialog;
+      payload.durationSec = duration;
+    }
+    onSave(job.id, payload);
+  }
+
   return (
     <section className="rounded-lg border border-slate-800 bg-panel p-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -837,15 +877,22 @@ function ReviewCard({
         <span className="font-semibold text-slate-100">{job.label}</span>
         <span className={`rounded px-1.5 py-0.5 text-[11px] ${pill.cls}`}>{pill.txt}</span>
         {data?.model && <span className="text-[11px] text-slate-500">{data.model}</span>}
-        {data?.type === "video" && data?.durationSec && (
-          <span className="text-[11px] text-slate-500">{data.durationSec}s · {data.resolution}</span>
-        )}
-        <button
-          onClick={onRegenerate}
-          className="ml-auto rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
-        >
-          ↻ Regenerar este
-        </button>
+        <div className="ml-auto flex gap-2">
+          <button
+            onClick={() => save(false)}
+            className="rounded-md border border-slate-600 px-3 py-1.5 text-xs hover:bg-slate-800"
+            title="Guarda los cambios en el plan SIN regenerar (se usan en el próximo render/export)"
+          >
+            💾 Guardar
+          </button>
+          <button
+            onClick={() => save(true)}
+            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+            title="Guarda los cambios y regenera este clip con lo editado"
+          >
+            ↻ Guardar y regenerar
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-3 lg:grid-cols-2">
@@ -911,40 +958,79 @@ function ReviewCard({
           </div>
         </div>
 
-        {/* Derecha: prompt exacto + JSON */}
+        {/* Derecha: campos EDITABLES + prompt final + JSON */}
         <div className="space-y-2">
           <div>
-            <div className="mb-1 flex items-center gap-2 text-[11px] uppercase text-slate-500">
-              Prompt que se ejecuta
+            <label className="mb-1 block text-[11px] uppercase text-slate-500">
+              {isVideo ? "Prompt visual del video (editable)" : "Prompt de la imagen (editable)"}
+            </label>
+            <textarea
+              value={vprompt}
+              onChange={(e) => setVprompt(e.target.value)}
+              spellCheck={false}
+              className="h-28 w-full resize-y rounded border border-slate-700 bg-ink p-2 text-xs leading-relaxed focus:border-accent focus:outline-none"
+            />
+          </div>
+
+          {isVideo && (
+            <>
+              <div>
+                <label className="mb-1 block text-[11px] uppercase text-slate-500">
+                  Diálogo (es-AR, lo que dice la persona)
+                </label>
+                <textarea
+                  value={dialog}
+                  onChange={(e) => setDialog(e.target.value)}
+                  className="h-20 w-full resize-y rounded border border-slate-700 bg-ink p-2 text-xs leading-relaxed focus:border-accent focus:outline-none"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[11px] uppercase text-slate-500">Duración</label>
+                <select
+                  value={duration}
+                  onChange={(e) => setDuration(Number(e.target.value))}
+                  className="rounded border border-slate-700 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none"
+                >
+                  {[4, 6, 8].map((d) => (
+                    <option key={d} value={d}>
+                      {d}s
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
+
+          <details className="rounded border border-slate-800 bg-ink/50">
+            <summary className="cursor-pointer px-2 py-1 text-[11px] uppercase text-slate-500">
+              Ver prompt FINAL que se ejecuta {isVideo ? "(visual + voz/acento + diálogo)" : ""}
               <button
-                onClick={copyPrompt}
-                className="rounded border border-slate-600 px-1.5 py-0.5 text-[10px] normal-case hover:bg-slate-800"
+                onClick={(e) => {
+                  e.preventDefault();
+                  copyPrompt();
+                }}
+                className="ml-2 rounded border border-slate-600 px-1.5 py-0.5 text-[10px] normal-case hover:bg-slate-800"
               >
                 {copied ? "✓ copiado" : "copiar"}
               </button>
-            </div>
-            <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded border border-slate-700 bg-ink p-2 text-[11px] text-slate-200">
+            </summary>
+            <pre className="max-h-52 overflow-auto whitespace-pre-wrap px-2 py-2 text-[11px] text-slate-300">
               {data ? data.executedPrompt : "cargando…"}
             </pre>
-          </div>
-          <div>
-            <div className="mb-1 text-[11px] uppercase text-slate-500">
-              JSON del {data?.type === "video" ? "clip" : "imagen"}
-            </div>
-            <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded border border-slate-700 bg-ink p-2 text-[11px] text-slate-400">
+            <p className="px-2 pb-2 text-[10px] text-slate-500">
+              Este prompt final se recalcula al guardar. Editá los campos de arriba (no este texto).
+            </p>
+          </details>
+
+          <details className="rounded border border-slate-800 bg-ink/50">
+            <summary className="cursor-pointer px-2 py-1 text-[11px] uppercase text-slate-500">
+              Ver JSON del {isVideo ? "clip" : "imagen"}
+            </summary>
+            <pre className="max-h-52 overflow-auto whitespace-pre-wrap px-2 py-2 text-[11px] text-slate-400">
               {data ? JSON.stringify(data.json, null, 2) : "cargando…"}
             </pre>
-          </div>
-          {data?.inputImage?.json != null && (
-            <div>
-              <div className="mb-1 text-[11px] uppercase text-slate-500">
-                JSON de la imagen de entrada
-              </div>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded border border-slate-700 bg-ink p-2 text-[11px] text-slate-400">
-                {JSON.stringify(data.inputImage.json, null, 2)}
-              </pre>
-            </div>
-          )}
+          </details>
+
           {err && <p className="text-xs text-red-300">{err}</p>}
         </div>
       </div>
