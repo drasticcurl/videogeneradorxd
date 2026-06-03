@@ -23,6 +23,7 @@ interface SavePayload {
   dialogue?: string;
   durationSec?: number;
   model?: string;
+  finalPrompt?: string;
   regenerate?: boolean;
 }
 
@@ -108,6 +109,13 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     return m;
   }, [project]);
 
+  // Override del prompt final por clip.id ("" si no hay) para precargar al editar.
+  const finalPromptByRef = useMemo(() => {
+    const m = new Map<string, string>();
+    project?.plan.clips.forEach((c) => m.set(c.id, c.final_prompt ?? ""));
+    return m;
+  }, [project]);
+
   // Duracion actual por clip.id (para precargar el selector 4/6/8).
   const durationByRef = useMemo(() => {
     const m = new Map<string, number>();
@@ -167,6 +175,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
         durationSec?: number;
         resolution?: string;
         model?: string;
+        finalPrompt?: string;
         regenerate?: boolean;
       }
     ) => void changePromptJob(id, payload),
@@ -178,6 +187,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     promptByRef,
     dialogueByRef,
     durationByRef,
+    finalPromptByRef,
     modelOptions: imageModels,
     projectModel: projectImageModel,
   };
@@ -185,6 +195,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     promptByRef,
     dialogueByRef,
     durationByRef,
+    finalPromptByRef,
     modelOptions: videoModels,
     projectModel: projectVideoModel,
   };
@@ -345,6 +356,7 @@ interface GroupHandlers {
       durationSec?: number;
       resolution?: string;
       model?: string;
+      finalPrompt?: string;
       regenerate?: boolean;
     }
   ) => void;
@@ -355,6 +367,7 @@ interface JobMeta {
   promptByRef: Map<string, string>;
   dialogueByRef: Map<string, string>;
   durationByRef: Map<string, number>;
+  finalPromptByRef: Map<string, string>;
   modelOptions: { id: string; label: string }[];
   projectModel: string;
 }
@@ -397,6 +410,7 @@ function Group({
               currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
               currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
               currentDuration={meta.durationByRef.get(j.refId)}
+              currentFinalPrompt={meta.finalPromptByRef.get(j.refId) ?? ""}
               modelOptions={meta.modelOptions}
               projectModel={meta.projectModel}
               {...handlers}
@@ -445,6 +459,7 @@ function Filmstrip({
                   currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
                   currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
                   currentDuration={meta.durationByRef.get(j.refId)}
+                  currentFinalPrompt={meta.finalPromptByRef.get(j.refId) ?? ""}
                   modelOptions={meta.modelOptions}
                   projectModel={meta.projectModel}
                   {...handlers}
@@ -746,6 +761,9 @@ interface PreviewData {
   resolution?: string;
   modo?: string;
   executedPrompt: string;
+  autoPrompt?: string;
+  promptOverride?: string | null;
+  hasPromptOverride?: boolean;
   json: unknown;
   updatedAt?: string;
   outputPath?: string | null;
@@ -831,6 +849,9 @@ function ReviewCard({
   const [dialog, setDialog] = useState("");
   const [duration, setDuration] = useState<number>(8);
   const [selectedModel, setSelectedModel] = useState("");
+  // Override del prompt final (avanzado).
+  const [overrideOn, setOverrideOn] = useState(false);
+  const [finalPromptText, setFinalPromptText] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -846,6 +867,10 @@ function ReviewCard({
           setDialog(String(j.dialogo ?? ""));
           setDuration(Number(j.duracion_seg ?? 8) || 8);
           setSelectedModel(pd.model ?? "");
+          // Si el clip ya tiene override del prompt final, lo precargamos activo.
+          const ov = (pd.promptOverride ?? "").trim();
+          setOverrideOn(Boolean(ov));
+          setFinalPromptText(ov || pd.autoPrompt || pd.executedPrompt || "");
         } else {
           setVprompt(String(j.prompt ?? ""));
         }
@@ -879,6 +904,8 @@ function ReviewCard({
       payload.dialogue = dialog;
       payload.durationSec = duration;
       if (selectedModel) payload.model = selectedModel;
+      // finalPrompt: override activo con contenido => se manda; si no, "" lo borra (auto).
+      payload.finalPrompt = overrideOn ? finalPromptText : "";
     }
     onSave(job.id, payload);
   }
@@ -1032,26 +1059,91 @@ function ReviewCard({
             </>
           )}
 
-          <details className="rounded border border-slate-800 bg-ink/50">
-            <summary className="cursor-pointer px-2 py-1 text-[11px] uppercase text-slate-500">
-              Ver prompt FINAL que se ejecuta {isVideo ? "(visual + voz/acento + diálogo)" : ""}
-              <button
-                onClick={(e) => {
-                  e.preventDefault();
-                  copyPrompt();
-                }}
-                className="ml-2 rounded border border-slate-600 px-1.5 py-0.5 text-[10px] normal-case hover:bg-slate-800"
-              >
-                {copied ? "✓ copiado" : "copiar"}
-              </button>
-            </summary>
-            <pre className="max-h-52 overflow-auto whitespace-pre-wrap px-2 py-2 text-[11px] text-slate-300">
-              {data ? data.executedPrompt : "cargando…"}
-            </pre>
-            <p className="px-2 pb-2 text-[10px] text-slate-500">
-              Este prompt final se recalcula al guardar. Editá los campos de arriba (no este texto).
-            </p>
-          </details>
+          {isVideo ? (
+            <div className="flex flex-col gap-2 rounded border border-amber-600/40 bg-amber-500/5 p-2">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-amber-100">
+                <input
+                  type="checkbox"
+                  checked={overrideOn}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setOverrideOn(on);
+                    if (on && !finalPromptText.trim()) {
+                      setFinalPromptText(data?.autoPrompt ?? data?.executedPrompt ?? "");
+                    }
+                  }}
+                  className="h-4 w-4"
+                />
+                Editar manualmente el prompt FINAL (se manda tal cual a Veo)
+              </label>
+              {overrideOn ? (
+                <>
+                  <p className="text-[10px] leading-relaxed text-amber-200/80">
+                    Ignora el armado automático (UGC/selfie, lip-sync, voz/acento). Para
+                    b-roll que NO debe mostrar a una persona hablando. Si querés diálogo
+                    hablado, incluilo vos. Se guarda al tocar «Guardar».
+                  </p>
+                  <textarea
+                    value={finalPromptText}
+                    onChange={(e) => setFinalPromptText(e.target.value)}
+                    spellCheck={false}
+                    className="h-40 w-full resize-y whitespace-pre-wrap rounded border border-amber-600/50 bg-ink p-2 text-[11px] leading-relaxed focus:border-accent focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFinalPromptText(data?.autoPrompt ?? data?.executedPrompt ?? "")
+                    }
+                    className="self-start rounded border border-slate-600 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-800"
+                  >
+                    ↺ Cargar prompt automático
+                  </button>
+                </>
+              ) : (
+                <details className="rounded border border-slate-800 bg-ink/50">
+                  <summary className="cursor-pointer px-2 py-1 text-[11px] uppercase text-slate-500">
+                    Ver prompt final automático
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        copyPrompt();
+                      }}
+                      className="ml-2 rounded border border-slate-600 px-1.5 py-0.5 text-[10px] normal-case hover:bg-slate-800"
+                    >
+                      {copied ? "✓ copiado" : "copiar"}
+                    </button>
+                  </summary>
+                  <pre className="max-h-52 overflow-auto whitespace-pre-wrap px-2 py-2 text-[11px] text-slate-300">
+                    {data ? data.executedPrompt : "cargando…"}
+                  </pre>
+                  <p className="px-2 pb-2 text-[10px] text-slate-500">
+                    Se recalcula al guardar a partir del prompt visual + diálogo de arriba.
+                  </p>
+                </details>
+              )}
+            </div>
+          ) : (
+            <details className="rounded border border-slate-800 bg-ink/50">
+              <summary className="cursor-pointer px-2 py-1 text-[11px] uppercase text-slate-500">
+                Ver prompt FINAL que se ejecuta
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    copyPrompt();
+                  }}
+                  className="ml-2 rounded border border-slate-600 px-1.5 py-0.5 text-[10px] normal-case hover:bg-slate-800"
+                >
+                  {copied ? "✓ copiado" : "copiar"}
+                </button>
+              </summary>
+              <pre className="max-h-52 overflow-auto whitespace-pre-wrap px-2 py-2 text-[11px] text-slate-300">
+                {data ? data.executedPrompt : "cargando…"}
+              </pre>
+              <p className="px-2 pb-2 text-[10px] text-slate-500">
+                Este prompt final se recalcula al guardar. Editá los campos de arriba (no este texto).
+              </p>
+            </details>
+          )}
 
           <details className="rounded border border-slate-800 bg-ink/50">
             <summary className="cursor-pointer px-2 py-1 text-[11px] uppercase text-slate-500">

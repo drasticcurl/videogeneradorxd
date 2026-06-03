@@ -61,6 +61,13 @@ export const ClipSchema = z.object({
   on_screen_text: z.string().optional(),
   /** resolucion del video para este clip; si falta, usa el default del proyecto */
   resolucion: z.enum(["720p", "1080p"]).optional(),
+  /**
+   * OVERRIDE del prompt final que se manda a Veo. Si tiene contenido, se usa TAL CUAL
+   * (ignora el armado automatico con estilo UGC/selfie + lip-sync + voz/acento). Sirve
+   * para clips donde el armado por defecto no aplica (ej. b-roll que no debe mostrar una
+   * persona hablando). Si esta vacio/ausente, el prompt se arma automaticamente como siempre.
+   */
+  final_prompt: z.string().optional(),
 });
 
 export const GlobalSchema = z.object({

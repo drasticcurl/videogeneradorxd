@@ -390,6 +390,7 @@ async function runVideoGeneration(
     resolution,
     dialogue: clip.dialogo,
     model,
+    promptOverride: clip.final_prompt,
   });
 
   const rel = clipRelPath(clip.orden, clip.id);
@@ -466,6 +467,12 @@ export function changePrompt(
     durationSec?: number;
     resolution?: string;
     modelOverride?: string;
+    /**
+     * Override del prompt final (solo videos). Si es un string con contenido, se guarda
+     * como clip.final_prompt y se usa TAL CUAL en la generacion. Si es "" (string vacio),
+     * se BORRA el override y vuelve al armado automatico. undefined = no se toca.
+     */
+    finalPrompt?: string;
   }
 ): JobRecord | undefined {
   const job = jobsDb.get(jobId);
@@ -487,6 +494,11 @@ export function changePrompt(
       }
       if (opts.resolution !== undefined) {
         clip.resolucion = resolveResolution(opts.resolution);
+      }
+      if (opts.finalPrompt !== undefined) {
+        const fp = opts.finalPrompt.trim();
+        if (fp) clip.final_prompt = fp;
+        else delete clip.final_prompt; // "" => borra el override (vuelve al auto)
       }
     }
   }
@@ -538,6 +550,7 @@ export async function extendVideoJob(jobId: string): Promise<JobRecord | undefin
     resolution,
     dialogue: clip.dialogo,
     model,
+    promptOverride: clip.final_prompt,
   });
 
   // Concatenamos base + extension en un solo archivo (si hay ffmpeg). Si no, reemplazamos.

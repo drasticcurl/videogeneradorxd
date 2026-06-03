@@ -297,13 +297,26 @@ export interface VeoPromptInput {
   aspectRatio?: string;
   /** texto en pantalla a evitar quemar en el video (lo agrega el usuario aparte). */
   noOnScreenText?: boolean;
+  /**
+   * OVERRIDE del prompt final. Si viene con contenido, se devuelve TAL CUAL y se ignora
+   * todo el armado automatico (estilo UGC/selfie, lip-sync, voz/acento, etc.). Permite que
+   * el usuario controle exactamente lo que se le manda a Veo (ej. b-roll sin persona hablando).
+   */
+  override?: string;
 }
 
 /**
  * Arma el prompt final que se manda a Veo, combinando la cinematografia del clip
  * con el estilo UGC/selfie y el bloque de acento argentino (cuando hay dialogo).
+ *
+ * Si `input.override` tiene contenido, se devuelve EXACTAMENTE ese texto (sin armado
+ * automatico): el usuario tiene control total sobre lo que se ejecuta.
  */
 export function buildVeoVideoPrompt(input: VeoPromptInput): string {
+  // Override manual: se usa tal cual, sin ningun agregado.
+  const override = input.override?.trim();
+  if (override) return override;
+
   const dur = Math.max(1, Math.round(input.durationSec));
   const aspect = input.aspectRatio ?? "9:16";
   const hasDialogue = Boolean(input.dialogue && input.dialogue.trim().length > 0);
