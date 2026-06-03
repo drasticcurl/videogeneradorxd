@@ -187,6 +187,7 @@ export function JobCard({
                   key={approvedUrl}
                   src={approvedUrl}
                   controls
+                  preload="metadata"
                   className="h-full w-full object-contain"
                 />
               )
