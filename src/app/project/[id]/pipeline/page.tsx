@@ -1,9 +1,10 @@
 "use client";
 /**
- * Pantalla "Pipeline": estado en vivo con DOS vistas:
+ * Pantalla "Pipeline": estado en vivo con TRES vistas:
  *   - Storyboard: frames ordenados (imagenes + clips en orden).
+ *   - Revisar / Arreglar: vista liviana para marcar clips malos y regenerarlos.
  *   - Flujo: grafo agentico por etapas.
- * Cada imagen/video pide APROBACION. Incluye mini-log y controles pausar/reanudar/cancelar.
+ * Incluye mini-log y controles pausar/reanudar/cancelar.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "@/store/useProjectStore";
@@ -453,7 +454,8 @@ function Filmstrip({
 /* ----------------------- Vista "Revisar / Arreglar" ---------------------- */
 /**
  * Vista LIVIANA: lista compacta de clips (NO carga todos los <video> -> no lagea).
- * Marcás los que estan mal (o pegás sus numeros) y regeneras SOLO esos.
+ * Marcás los que estan mal (o pegás sus numeros) y "Revisar seleccionados" abre un
+ * storyboard SOLO con esos, mostrando: imagen de entrada + prompt EXACTO + JSON entero.
  * El video de cada fila se carga ON-DEMAND al tocar "Ver".
  */
 function FixView({
@@ -474,6 +476,7 @@ function FixView({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [numbersText, setNumbersText] = useState("");
+  const [reviewing, setReviewing] = useState(false);
 
   const rows = useMemo(
     () =>
@@ -509,6 +512,21 @@ function FixView({
   }
 
   const sel = selected.size;
+  const selectedJobs = rows.filter((j) => selected.has(j.id));
+
+  // Storyboard de revision: solo los seleccionados, con prompt + imagen input + JSON.
+  if (reviewing && selectedJobs.length > 0) {
+    return (
+      <ReviewStoryboard
+        jobs={selectedJobs}
+        projectId={projectId}
+        ordenByClip={ordenByClip}
+        onRegenerate={onRegenerate}
+        onRegenerateAll={(ids) => onRegenerateMany(ids)}
+        onClose={() => setReviewing(false)}
+      />
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -549,14 +567,11 @@ function FixView({
           Limpiar
         </button>
         <button
-          onClick={() => {
-            onRegenerateMany([...selected]);
-            setSelected(new Set());
-          }}
+          onClick={() => setReviewing(true)}
           disabled={sel === 0}
           className="ml-auto rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
         >
-          ↻ Regenerar seleccionados ({sel})
+          🔍 Revisar seleccionados ({sel})
         </button>
       </div>
 
@@ -592,8 +607,8 @@ function FixView({
       </div>
       <p className="text-xs text-slate-500">
         Tip: tocá <b>Ver</b> para cargar solo ese video (los demás no se cargan, por eso no
-        lagea). Marcá los malos y <b>Regenerar seleccionados</b> rehace solo esos; con
-        auto-aprobación quedan listos solos cuando terminan.
+        lagea). Marcá los malos y <b>Revisar seleccionados</b> abre un storyboard solo con esos
+        (con el prompt exacto + imagen de entrada + JSON) para revisarlos y regenerarlos.
       </p>
     </div>
   );
@@ -701,5 +716,238 @@ function FixRow({
         </tr>
       )}
     </>
+  );
+}
+
+/* --------------------- Storyboard de revisión (focalizado) --------------------- */
+
+interface PreviewData {
+  type: "image" | "video";
+  label: string;
+  status: JobRecord["status"];
+  model?: string;
+  durationSec?: number;
+  resolution?: string;
+  modo?: string;
+  executedPrompt: string;
+  json: unknown;
+  updatedAt?: string;
+  outputPath?: string | null;
+  inputImage?: { id: string; file: string | null; status: string; json: unknown };
+  refs?: { id: string; kind: string; file: string | null }[];
+}
+
+function ReviewStoryboard({
+  jobs,
+  projectId,
+  ordenByClip,
+  onRegenerate,
+  onRegenerateAll,
+  onClose,
+}: {
+  jobs: JobRecord[];
+  projectId: string;
+  ordenByClip: Map<string, number>;
+  onRegenerate: (id: string) => void;
+  onRegenerateAll: (ids: string[]) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-panel p-3">
+        <button
+          onClick={onClose}
+          className="rounded-md border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+        >
+          ← Volver a la lista
+        </button>
+        <span className="text-sm text-slate-400">{jobs.length} clip(s) para revisar</span>
+        <button
+          onClick={() => onRegenerateAll(jobs.map((j) => j.id))}
+          className="ml-auto rounded-md bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500"
+        >
+          ↻ Regenerar todos ({jobs.length})
+        </button>
+      </div>
+      <div className="space-y-4">
+        {jobs.map((j) => (
+          <ReviewCard
+            key={j.id}
+            job={j}
+            projectId={projectId}
+            orden={ordenByClip.get(j.refId) ?? 0}
+            onRegenerate={() => onRegenerate(j.id)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReviewCard({
+  job,
+  projectId,
+  orden,
+  onRegenerate,
+}: {
+  job: JobRecord;
+  projectId: string;
+  orden: number;
+  onRegenerate: () => void;
+}) {
+  const [data, setData] = useState<PreviewData | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [showVideo, setShowVideo] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setData(null);
+    fetch(`/api/jobs/${job.id}/preview`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (alive) setData(d as PreviewData);
+      })
+      .catch((e) => {
+        if (alive) setErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [job.id, job.updatedAt]);
+
+  const ver = encodeURIComponent(job.updatedAt ?? "");
+  const fileUrl = (p: string) => `/api/files/${projectId}/${p}?v=${ver}`;
+  const inputImg = data?.inputImage?.file ?? null;
+  const outUrl = job.outputPath ? fileUrl(job.outputPath) : null;
+  const pill = statusPill(job.status);
+
+  function copyPrompt() {
+    if (data?.executedPrompt) {
+      navigator.clipboard?.writeText(data.executedPrompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-slate-800 bg-panel p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="font-mono text-slate-400">#{orden}</span>
+        <span className="font-semibold text-slate-100">{job.label}</span>
+        <span className={`rounded px-1.5 py-0.5 text-[11px] ${pill.cls}`}>{pill.txt}</span>
+        {data?.model && <span className="text-[11px] text-slate-500">{data.model}</span>}
+        {data?.type === "video" && data?.durationSec && (
+          <span className="text-[11px] text-slate-500">{data.durationSec}s · {data.resolution}</span>
+        )}
+        <button
+          onClick={onRegenerate}
+          className="ml-auto rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+        >
+          ↻ Regenerar este
+        </button>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {/* Izquierda: imagen de entrada + resultado actual */}
+        <div className="space-y-2">
+          <div>
+            <div className="mb-1 text-[11px] uppercase text-slate-500">
+              Imagen de entrada (input)
+            </div>
+            {inputImg ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={fileUrl(inputImg)}
+                alt="input"
+                className="max-h-72 rounded border border-slate-700"
+              />
+            ) : data?.refs && data.refs.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {data.refs.map((r) =>
+                  r.file ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={r.id}
+                      src={fileUrl(r.file)}
+                      alt={r.id}
+                      className="max-h-48 rounded border border-slate-700"
+                    />
+                  ) : (
+                    <span key={r.id} className="text-xs text-slate-500">
+                      {r.id} (sin archivo)
+                    </span>
+                  )
+                )}
+              </div>
+            ) : (
+              <span className="text-xs text-slate-500">(sin imagen de entrada)</span>
+            )}
+          </div>
+          <div>
+            <div className="mb-1 text-[11px] uppercase text-slate-500">Resultado actual</div>
+            {outUrl ? (
+              showVideo ? (
+                <video
+                  key={outUrl}
+                  src={outUrl}
+                  controls
+                  preload="none"
+                  className="max-h-72 rounded border border-slate-700"
+                />
+              ) : (
+                <button
+                  onClick={() => setShowVideo(true)}
+                  className="rounded-md border border-slate-600 px-3 py-1.5 text-xs hover:bg-slate-800"
+                >
+                  ▶ Ver resultado actual
+                </button>
+              )
+            ) : (
+              <span className="text-xs text-slate-500">
+                {job.status === "generating" ? "generando…" : "(sin resultado)"}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Derecha: prompt exacto + JSON */}
+        <div className="space-y-2">
+          <div>
+            <div className="mb-1 flex items-center gap-2 text-[11px] uppercase text-slate-500">
+              Prompt que se ejecuta
+              <button
+                onClick={copyPrompt}
+                className="rounded border border-slate-600 px-1.5 py-0.5 text-[10px] normal-case hover:bg-slate-800"
+              >
+                {copied ? "✓ copiado" : "copiar"}
+              </button>
+            </div>
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded border border-slate-700 bg-ink p-2 text-[11px] text-slate-200">
+              {data ? data.executedPrompt : "cargando…"}
+            </pre>
+          </div>
+          <div>
+            <div className="mb-1 text-[11px] uppercase text-slate-500">
+              JSON del {data?.type === "video" ? "clip" : "imagen"}
+            </div>
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded border border-slate-700 bg-ink p-2 text-[11px] text-slate-400">
+              {data ? JSON.stringify(data.json, null, 2) : "cargando…"}
+            </pre>
+          </div>
+          {data?.inputImage?.json != null && (
+            <div>
+              <div className="mb-1 text-[11px] uppercase text-slate-500">
+                JSON de la imagen de entrada
+              </div>
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded border border-slate-700 bg-ink p-2 text-[11px] text-slate-400">
+                {JSON.stringify(data.inputImage.json, null, 2)}
+              </pre>
+            </div>
+          )}
+          {err && <p className="text-xs text-red-300">{err}</p>}
+        </div>
+      </div>
+    </section>
   );
 }

@@ -337,3 +337,42 @@ export function buildVeoVideoPrompt(input: VeoPromptInput): string {
 
   return parts.join("\n\n");
 }
+
+
+
+/* ========================================================================
+ * Construccion de la instruccion de IMAGEN (Nano Banana).
+ * Se comparte entre el provider (lo que realmente se ejecuta) y el preview
+ * (lo que se le muestra al usuario), para que sean IDENTICOS.
+ * ===================================================================== */
+
+export interface ImageInstructionInput {
+  /** prompt visual de la imagen (en ingles). */
+  prompt: string;
+  /** cuantas imagenes de referencia se adjuntan (0 = text2image). */
+  refCount: number;
+  aspectRatio?: string;
+  negativePrompt?: string;
+}
+
+/** Arma la instruccion de texto que se manda a Nano Banana (text2image o image2image). */
+export function buildImageInstruction(input: ImageInstructionInput): string {
+  const aspect = input.aspectRatio ?? "9:16";
+  const isEdit = input.refCount > 0;
+  const multi = input.refCount > 1;
+  const identityLine = multi
+    ? "IMPORTANT: keep EACH person's identity 100% consistent with their reference photo " +
+      "(same faces, same people). Combine them naturally in one shot. " +
+      "Only change what the instruction asks (pose, framing, wardrobe context). "
+    : "IMPORTANT: keep identity 100% consistent with the reference image, " +
+      "same face, same person. Only change what the instruction asks. ";
+  return isEdit
+    ? input.prompt +
+        "\n\n" +
+        identityLine +
+        `Output a single vertical ${aspect} image.` +
+        (input.negativePrompt ? `\nAvoid: ${input.negativePrompt}` : "")
+    : input.prompt +
+        `\n\nOutput a single photorealistic vertical ${aspect} image.` +
+        (input.negativePrompt ? `\nAvoid: ${input.negativePrompt}` : "");
+}
