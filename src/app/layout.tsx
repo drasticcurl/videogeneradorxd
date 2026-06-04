@@ -28,6 +28,9 @@ export default function RootLayout({
               <Link href="/" className="hover:text-white">
                 Nuevo proyecto
               </Link>
+              <Link href="/transcribe" className="hover:text-white">
+                Transcribir
+              </Link>
               <a
                 href="https://cloud.google.com/vertex-ai/generative-ai/docs"
                 target="_blank"

@@ -5,6 +5,7 @@
  */
 import { config, MODEL_CATALOG, VIDEO_RESOLUTIONS, DEFAULT_RESOLUTION } from "@/lib/config";
 import { hasFfmpeg } from "@/lib/providers/placeholder";
+import { hasWhisper } from "@/lib/transcribe";
 import { ok } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -23,5 +24,11 @@ export async function GET() {
     outputDir: config.storage.outputDir,
     dataDir: config.storage.dataDir,
     ffmpeg: hasFfmpeg(),
+    whisper: {
+      available: hasWhisper(),
+      bin: config.whisper.bin,
+      model: config.whisper.model,
+      language: config.whisper.language,
+    },
   });
 }
