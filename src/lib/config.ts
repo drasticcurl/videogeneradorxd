@@ -178,6 +178,30 @@ export const config = {
     videoPerSecUsd: Number(env("PRICE_VIDEO_PER_SEC_USD", "0.5")),
     llmCallUsd: Number(env("PRICE_LLM_CALL_USD", "0.02")),
   },
+
+  /**
+   * Transcripcion LOCAL con Whisper (gratis, sin API). Corre el binario `whisper`
+   * (openai-whisper) como subproceso. Necesita Python con whisper instalado
+   * (`pip install -U openai-whisper`) y ffmpeg en el PATH.
+   * Por defecto transcribe SIEMPRE en español con el modelo `small`.
+   */
+  whisper: {
+    // Comando/binario a ejecutar. Default "whisper" (el CLI de openai-whisper).
+    // Si usás otra implementacion (ej. whisper-ctranslate2) pisalo por env.
+    bin: env("WHISPER_BIN", "whisper"),
+    // Modelo: tiny | base | small | medium | large-v3. Default small.
+    model: env("WHISPER_MODEL", "small"),
+    // Idioma forzado. Default Spanish (el usuario siempre transcribe en español).
+    language: env("WHISPER_LANGUAGE", "Spanish"),
+    // transcribe (mismo idioma) | translate (traduce a ingles). Default transcribe.
+    task: env("WHISPER_TASK", "transcribe"),
+    // Args extra opcionales para el CLI (separados por espacios). Ej "--fp16 False".
+    extraArgs: env("WHISPER_EXTRA_ARGS", "")
+      .split(/\s+/)
+      .filter(Boolean),
+    // Carpeta donde quedan los .txt transcriptos (y, si falla, el media para debug).
+    outputDir: resolveFromCwd(env("TRANSCRIBE_DIR", "./output/_transcribe")),
+  },
 } as const;
 
 /** Valida que un id de modelo pertenezca al catalogo del tipo dado. Si no, usa el default. */
