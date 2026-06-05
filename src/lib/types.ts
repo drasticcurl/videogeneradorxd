@@ -80,6 +80,14 @@ export interface ProjectRecord {
   imageVariants: number;
   /** resolucion de video por defecto del proyecto (720p / 1080p) */
   defaultResolution: string;
+  /**
+   * Override del auto-approve por PROYECTO. Si es undefined, se usa el default
+   * global (config.pipeline.autoApprove). Permite que cada proyecto elija:
+   * - true  -> cada imagen/video se aprueba sola al terminar (modo "dejar correr").
+   * - false -> cada job queda en awaiting_approval esperando al usuario.
+   * Tipico: VSL con muchos clips => true; videos normales => false.
+   */
+  autoApprove?: boolean;
   /** path absoluto a la carpeta de salida del proyecto */
   outputDir: string;
   createdAt: string;

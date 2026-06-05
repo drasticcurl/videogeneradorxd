@@ -72,6 +72,15 @@ interface ProjectState {
   selectedModels: ProjectModels;
   imageVariants: number;
   defaultResolution: string;
+  /**
+   * Si true, cada imagen/video se aprueba sola al terminar (modo "dejar correr").
+   * Si false, cada job queda en awaiting_approval esperando confirmacion manual.
+   * Lo elige el usuario al crear el proyecto. Default sugerido: true para VSL
+   * (cuando hay avatares de referencia subidos), false para videos normales.
+   */
+  autoApprove: boolean;
+  /** true cuando el usuario toco el toggle a mano: deja de ajustarse al subir refs. */
+  autoApproveUserSet: boolean;
 
   /** avatares/fotos de referencia subidos por el usuario (VSL), aun en el cliente */
   references: ReferenceDraft[];
@@ -85,6 +94,8 @@ interface ProjectState {
   setModel: (kind: keyof ProjectModels, id: string) => void;
   setImageVariants: (n: number) => void;
   setDefaultResolution: (r: string) => void;
+  /** Toggle explicito del usuario (marca autoApproveUserSet = true). */
+  setAutoApprove: (v: boolean) => void;
 
   // avatares de referencia (VSL)
   addReferenceFile: (file: File) => Promise<void>;
@@ -184,6 +195,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   selectedModels: { ...FALLBACK_MODELS },
   imageVariants: 1,
   defaultResolution: "720p",
+  // Default OFF para videos "normales" (el usuario aprueba cada uno). En la pagina
+  // se ajusta a ON automaticamente cuando se suben avatares de referencia (VSL),
+  // a menos que el usuario haya tocado el toggle.
+  autoApprove: false,
+  autoApproveUserSet: false,
 
   references: [],
 
@@ -197,6 +213,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((s) => ({ selectedModels: { ...s.selectedModels, [kind]: id } })),
   setImageVariants: (n) => set({ imageVariants: Math.min(4, Math.max(1, n)) }),
   setDefaultResolution: (r) => set({ defaultResolution: r }),
+  setAutoApprove: (v) => set({ autoApprove: v, autoApproveUserSet: true }),
 
   addReferenceFile: async (file) => {
     const dataUrl = await readFileAsDataUrl(file);
@@ -217,7 +234,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         mimeType: file.type || "image/png",
         dataUrl,
       };
-      return { references: [...s.references, draft] };
+      // Default inteligente: al subir el primer avatar (VSL) prendemos auto-approve.
+      // Si el usuario ya toco el toggle a mano, respetamos su eleccion.
+      const autoApprove = s.autoApproveUserSet ? s.autoApprove : true;
+      return {
+        references: [...s.references, draft],
+        autoApprove,
+      };
     });
   },
 
@@ -235,7 +258,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     })),
 
   removeReference: (uid) =>
-    set((s) => ({ references: s.references.filter((r) => r.uid !== uid) })),
+    set((s) => {
+      const refs = s.references.filter((r) => r.uid !== uid);
+      // Si quitamos la ultima referencia y el usuario no toco el toggle a mano,
+      // volvemos al default "manual" (videos normales).
+      const autoApprove =
+        s.autoApproveUserSet ? s.autoApprove : refs.length > 0;
+      return { references: refs, autoApprove };
+    }),
 
   uploadReferences: async (projectId) => {
     const { references } = get();
@@ -321,6 +351,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       jobs: [],
       manifest: null,
       logs: [],
+      autoApprove: false,
+      autoApproveUserSet: false,
     }),
 
   loadProject: async (id) => {

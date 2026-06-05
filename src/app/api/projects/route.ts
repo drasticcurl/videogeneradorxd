@@ -35,6 +35,7 @@ export async function POST(req: Request) {
       models?: { llm?: string; image?: string; video?: string };
       imageVariants?: number;
       defaultResolution?: string;
+      autoApprove?: boolean;
     };
 
     const validation = validatePlan(body.plan);
@@ -64,6 +65,10 @@ export async function POST(req: Request) {
         Math.max(1, body.imageVariants ?? config.defaultImageVariants)
       ),
       defaultResolution: resolveResolution(body.defaultResolution),
+      // Override per-proyecto del auto-approve. Si el cliente no manda nada,
+      // dejamos undefined y la cola usa el default global (config.pipeline.autoApprove).
+      autoApprove:
+        typeof body.autoApprove === "boolean" ? body.autoApprove : undefined,
       outputDir: projectDir(id),
       createdAt: now,
       updatedAt: now,

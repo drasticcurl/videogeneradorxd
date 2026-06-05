@@ -42,6 +42,8 @@ export default function HomePage() {
     imageVariants,
     defaultResolution,
     references,
+    autoApprove,
+    setAutoApprove,
     setBrief,
     loadConfig,
     parseBrief,
@@ -98,6 +100,7 @@ export default function HomePage() {
           models: selectedModels,
           imageVariants,
           defaultResolution,
+          autoApprove,
         }),
       });
       const createData = await createRes.json();
@@ -142,6 +145,40 @@ export default function HomePage() {
           placeholder="Nombre del proyecto (opcional)"
           className="w-full rounded-lg border border-slate-700 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
         />
+
+        {/* Switch de auto-aprobacion del proyecto.
+            - OFF (videos normales): cada imagen/video queda en "esperando aprobacion"
+              y vos clickeas Aprobar antes de que arranque el siguiente paso.
+            - ON  (VSL / dejar correr): cada job se aprueba solo al terminar.
+            Default inteligente: se prende solo cuando subis avatares (VSL); si tocas
+            el toggle a mano, mandamos lo que vos elegiste y no se ajusta mas. */}
+        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-800 bg-panel p-3 text-sm">
+          <input
+            type="checkbox"
+            checked={autoApprove}
+            onChange={(e) => setAutoApprove(e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-accent"
+          />
+          <span className="flex-1">
+            <span className="font-medium text-slate-100">
+              Auto-aprobar todo al terminar
+            </span>
+            <span className="block text-xs text-slate-400">
+              {autoApprove ? (
+                <>
+                  Modo <b>dejar correr</b>: cada imagen y video se aprueba sola y
+                  arranca el siguiente. Recomendado para VSL con muchos clips.
+                </>
+              ) : (
+                <>
+                  Modo <b>aprobacion manual</b>: cada imagen y cada video te van a
+                  pedir aprobacion antes de seguir. Ideal para videos normales con
+                  pocas tomas.
+                </>
+              )}
+            </span>
+          </span>
+        </label>
 
         {/* Toggle de modo */}
         <div className="flex gap-1 rounded-lg border border-slate-800 bg-panel p-1 text-sm">
@@ -344,8 +381,19 @@ export default function HomePage() {
                 </p>
               )}
               <p className="text-xs text-slate-500">
-                Cada imagen y cada video van a pedirte <b>aprobación</b> antes de seguir.
-                Todo se guarda en <code className="text-slate-300">output/&lt;project_id&gt;/</code>.
+                {autoApprove ? (
+                  <>
+                    Auto-aprobacion <b>activa</b>: las imagenes y videos se
+                    aprueban solos al terminar.
+                  </>
+                ) : (
+                  <>
+                    Cada imagen y cada video van a pedirte <b>aprobacion</b>{" "}
+                    antes de seguir.
+                  </>
+                )}{" "}
+                Todo se guarda en{" "}
+                <code className="text-slate-300">output/&lt;project_id&gt;/</code>.
               </p>
             </div>
           </div>
