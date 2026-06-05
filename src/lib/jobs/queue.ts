@@ -48,6 +48,19 @@ function backoffDelay(attempt: number): number {
   return Math.min(exp + jitter, 60_000);
 }
 
+/**
+ * Auto-approve EFECTIVO para un proyecto: si el proyecto guardo override
+ * (autoApprove: true|false) lo usa; si no, cae al default global de config.
+ * Asi cada proyecto decide al crearse si quiere aprobar a mano o no.
+ */
+function isProjectAutoApprove(projectId: string): boolean {
+  const project = projectsDb.get(projectId);
+  if (project && typeof project.autoApprove === "boolean") {
+    return project.autoApprove;
+  }
+  return config.pipeline.autoApprove;
+}
+
 /** Marca el proyecto para procesar y arranca el bombeo. */
 export function enqueueProject(projectId: string): void {
   state.pausedProjects.delete(projectId);
@@ -139,7 +152,7 @@ function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   if (base !== "run") return base;
   // Con auto-aprobacion no hay gate por lotes: la ventana de generacion la define
   // la concurrencia (p.ej. 3 a la vez, rolling). El gate solo aplica en modo manual.
-  if (config.pipeline.autoApprove) return "run";
+  if (isProjectAutoApprove(job.projectId)) return "run";
   // Gate por LOTES (modo manual): no arrancamos mas de approvalBatchSize jobs del MISMO
   // tipo que esten "sin aprobar" (generando + esperando aprobacion).
   const limit = config.pipeline.approvalBatchSize;
@@ -237,7 +250,7 @@ function startJob(job: JobRecord): void {
   void (async () => {
     try {
       await runJobGeneration(job);
-      if (config.pipeline.autoApprove) {
+      if (isProjectAutoApprove(job.projectId)) {
         // Auto-aprobacion: queda "done" y desbloquea lo que depende, sin esperar al usuario.
         // (para imagenes fija el candidato elegido como archivo canonico).
         await approveJob(job.id);
