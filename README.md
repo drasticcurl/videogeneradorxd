@@ -5,8 +5,10 @@ tipo *talking-head*) de punta a punta. Pegás un brief o un PlanJSON, opcionalme
 fotos de los avatares, y la app genera **imágenes + videos** manteniendo la **misma cara** en
 cada plano, con auto-aprobación y manejo robusto de cuota/red para dejarlo corriendo solo.
 
-> Pensada para correr **localmente en tu PC**. No usa Supabase ni storage externo: el estado
-> vive en `./data/db.json` y los archivos generados en `./output/`.
+> Corre **localmente en tu PC** (`npm run dev`) o en **Google Cloud (Cloud Run)** con el
+> bucket montado como disco. El estado vive en `DATA_DIR` (`./data/db.json` local) y los
+> archivos en `OUTPUT_DIR` (`./output/` local o el bucket montado en la nube).
+> Para desplegar, ver **[DEPLOY.md](./DEPLOY.md)**.
 
 ---
 
@@ -20,7 +22,7 @@ Lo que YA está mergeado en `main` (PRs #1–#16):
 | Modelos | catálogo verificado de Gemini/Nano Banana/Veo, selector de **resolución por video** | #2 |
 | Voz/estilo | builder de prompt **UGC/selfie + acento rioplatense argentino** forzado en Veo | #3 |
 | Edición | precarga del prompt actual + selector de modelo por ítem | #4 |
-| Stitch | `final.mp4` **conserva audio y NO pierde calidad** (720p/1080p reales, CRF 18) + modal grande para editar prompt | #5 |
+| Stitch | el video final se arma **local**: botón "Descargar proyecto (ZIP)" con `stitch.sh`/`stitch.bat` (ffmpeg en tu PC). El servidor ya no encodea video | #5 |
 | Edición pro | editar campo por campo (prompt/diálogo/duración 4-6-8/resolución/modelo) + **Extender +7s** | #6 |
 | Docs | README completo | #7 |
 | Edición | botón "Editar" con **Guardar sin regenerar** y **Guardar y regenerar** | #8 |
@@ -55,6 +57,22 @@ cp .env.example .env.local
 # 3. Levantar
 npm run dev   # http://localhost:3000
 ```
+
+---
+
+## Novedades: nube + descarga + modelos dinámicos
+
+- **Deploy a Google Cloud (Cloud Run)** con bucket montado como disco y **deploy automático
+  desde GitHub**. Guía completa en **[DEPLOY.md](./DEPLOY.md)**. La auth a Vertex es por la
+  service account del servicio (sin `gcloud login` ni claves).
+- **Stitch local (sin ffmpeg en el servidor)**: en **Resultado → "Descargar proyecto (ZIP)"**
+  bajás todo el proyecto + `stitch.sh`/`stitch.bat`/`concat-list.txt`/`LEEME.txt`. Armás el
+  `final.mp4` en tu PC con ffmpeg. "Extender +7s" guarda la continuación como **segmento
+  separado** (`__extK.mp4`) que el script local une en orden.
+- **Modelos dinámicos**: los selectores se pueblan con un `GET /api/models` que lista los
+  modelos disponibles en **Vertex AI** (Model Garden). Botón "↻ modelos" para refrescar,
+  indicador de fuente (Vertex/catálogo) y opción "✎ otro ID…" para tipear un id manual. Si
+  Vertex falla o estás en `mock`, cae al catálogo curado.
 
 Scripts (`package.json`):
 
@@ -134,14 +152,14 @@ Con muchos clips la pipeline arranca directo en **🔧 Revisar / Arreglar** (no 
    - **Resultado actual** on-demand (▶ Ver).
 3. Para cada uno:
    - **💾 Guardar** → persiste cambios en el plan **sin regenerar** (útil para ajustar texto/tiempo
-     a mano y que se reflejen en el export a ffmpeg).
+     a mano y que se reflejen en el ZIP de descarga).
    - **↻ Guardar y regenerar** → guarda **y** regenera con lo editado.
    - **↻ Regenerar todos sin editar** → re-corre el lote tal cual quedó.
-4. Cuando estás listo, **Resultado** → unir clips → `final.mp4` con ffmpeg (usa los valores
-   actualizados del plan).
+4. Cuando estás listo, **Resultado** → **"Descargar proyecto (ZIP)"** → en tu PC corré
+   `stitch.sh` / `stitch.bat` para armar el `final.mp4` con ffmpeg local.
 
-> El plan es la fuente de verdad del export, así que cualquier edición que hagas ahí impacta
-> al `final.mp4`.
+> El plan es la fuente de verdad, así que cualquier edición que hagas ahí impacta los clips
+> que entran al `final.mp4`.
 
 ---
 
