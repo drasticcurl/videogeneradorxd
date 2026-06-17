@@ -11,6 +11,7 @@
 import { jobsDb, projectsDb } from "@/lib/db";
 import { ASPECT_RATIO, resolveResolution } from "@/lib/config";
 import { buildVeoVideoPrompt, buildImageInstruction } from "@/lib/prompts";
+import { loadVeoPromptTemplateText } from "@/lib/promptTemplate.server";
 import { notFound, ok, serverError } from "@/lib/http";
 import type { Image } from "@/lib/schema";
 
@@ -63,6 +64,7 @@ export async function GET(
         videoPrompt: clip.video_prompt,
         dialogue: clip.dialogo,
         assetType,
+        template: loadVeoPromptTemplateText(),
         durationSec: clip.duracion_seg,
         aspectRatio: ASPECT_RATIO,
       });

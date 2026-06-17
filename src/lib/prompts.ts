@@ -4,6 +4,11 @@
  * El objetivo: convertir un brief en lenguaje natural (formato libre, con marcas
  * [visual]/[audio] o prosa) en un PlanJSON estructurado y consistente.
  */
+import {
+  DEFAULT_VEO_PROMPT_TEMPLATE,
+  parsePromptTemplate,
+  renderVeoPromptFromTemplate,
+} from "./promptTemplate";
 
 export const PARSER_SYSTEM_PROMPT = `Sos un director de arte y productor tecnico de anuncios UGC (user generated content) para funnels de quiz.
 Tu trabajo es leer un brief en lenguaje natural (espanol, formato libre) y devolver UN UNICO objeto JSON valido
@@ -280,13 +285,18 @@ ESTE ES EL BRIEF:
 /* ========================================================================
  * Construccion del prompt de VIDEO para Veo.
  *
- * Basado en un prompt probado por el usuario: animacion selfie/UGC realista,
- * movimiento natural, lip-sync, sin texto en pantalla, 9:16, y un bloque de
- * VOZ & ACENTO que fuerza espanol RIOPLATENSE ARGENTINO (Buenos Aires) SIEMPRE.
+ * El TEXTO del prompt vive en una plantilla Markdown editable/descargable
+ * (`prompts/veo-video-prompt.md`). Aca solo queda la logica de seleccion de
+ * bloques. Ver `src/lib/promptTemplate.ts` (armador isomorfico) y
+ * `src/lib/promptTemplate.server.ts` (lectura del .md en server).
  * ===================================================================== */
 
-/** Bloque de voz/acento argentino. Se agrega SIEMPRE que haya dialogo. */
-export const ARGENTINE_VOICE_BLOCK = `VOICE & ACCENT (very important): the person speaks in RIOPLATENSE ARGENTINE SPANISH (Buenos Aires / porteno accent), NOT Mexican, NOT Castilian, NOT neutral Latin American Spanish. Use the characteristic Argentine intonation, "voseo" (vos / tenes / mande / mira), the typical "sh" sound for "ll" and "y" (yo = "sho", ya = "sha", llave = "shave"), and a relaxed, melodic portena cadence. Natural adult voice, warm and conversational, casual everyday delivery.`;
+/**
+ * Bloque de voz/acento argentino, derivado de la plantilla por defecto.
+ * Se mantiene exportado por compatibilidad.
+ */
+export const ARGENTINE_VOICE_BLOCK =
+  parsePromptTemplate(DEFAULT_VEO_PROMPT_TEMPLATE).voice_accent ?? "";
 
 export interface VeoPromptInput {
   /** Descripcion visual/cinematografica del clip (en ingles). */
@@ -299,25 +309,30 @@ export interface VeoPromptInput {
   noOnScreenText?: boolean;
   /**
    * Tipo de asset del clip:
-   *  - "avatar" (default): persona/talking-head. Si hay dialogo, se arma estilo UGC/selfie
-   *    con lip-sync (la persona habla a camara).
+   *  - "avatar" (default): persona/talking-head. Si hay dialogo, se arma estilo UGC
+   *    self-recorded con lip-sync (la persona habla a camara, sostenida a mano O en tripode).
    *  - "broll": inserto sin cara hablando. Si hay dialogo, se trata como VOZ EN OFF
-   *    (voiceover, sin lip-sync): NUNCA se mete el bloque selfie de "persona hablando a camara".
+   *    (voiceover, sin lip-sync): NUNCA se mete el bloque de "persona hablando a camara".
    * Si no se especifica, se asume "avatar" para conservar el comportamiento anterior.
    */
   assetType?: "avatar" | "broll";
   /**
+   * Texto de la plantilla (Markdown con bloques). Si no se pasa, se usa el DEFAULT
+   * embebido. El server pasa aca el contenido leido de `prompts/veo-video-prompt.md`
+   * (via promptTemplate.server) para que editar ese .md cambie los prompts.
+   */
+  template?: string;
+  /**
    * OVERRIDE del prompt final. Si viene con contenido, se devuelve TAL CUAL y se ignora
-   * todo el armado automatico (estilo UGC/selfie, lip-sync, voz/acento, etc.). Permite que
+   * todo el armado automatico (plantilla, lip-sync, voz/acento, etc.). Permite que
    * el usuario controle exactamente lo que se le manda a Veo (ej. b-roll sin persona hablando).
    */
   override?: string;
 }
 
 /**
- * Arma el prompt final que se manda a Veo, combinando la cinematografia del clip
- * con el estilo correcto segun el tipo de asset:
- *  - avatar (talking-head) + dialogo  -> estilo UGC/selfie + lip-sync + bloque de acento argentino.
+ * Arma el prompt final que se manda a Veo a partir de la plantilla Markdown:
+ *  - avatar (talking-head) + dialogo  -> estilo UGC self-recorded + lip-sync + acento argentino.
  *  - b-roll + dialogo                 -> inserto sin cara hablando + VOZ EN OFF (voiceover) + acento.
  *  - sin dialogo                      -> movimiento natural, sin dialogo.
  *
@@ -329,56 +344,13 @@ export function buildVeoVideoPrompt(input: VeoPromptInput): string {
   const override = input.override?.trim();
   if (override) return override;
 
-  const dur = Math.max(1, Math.round(input.durationSec));
-  const aspect = input.aspectRatio ?? "9:16";
-  const hasDialogue = Boolean(input.dialogue && input.dialogue.trim().length > 0);
-  // Solo es talking-head (persona hablando a camara) si NO es b-roll. Para b-roll
-  // el dialogo, si existe, va como voz en off (narracion), nunca como cara hablando.
-  const isBroll = input.assetType === "broll";
-
-  const parts: string[] = [];
-  parts.push(
-    `Animate the attached image into a realistic ${dur}-second vertical ${aspect} video.`
-  );
-  if (input.videoPrompt && input.videoPrompt.trim()) {
-    parts.push(input.videoPrompt.trim());
-  }
-
-  if (hasDialogue && !isBroll) {
-    // Talking-head / avatar: persona habla directo a camara con lip-sync.
-    parts.push(
-      "UGC selfie style: the person holds their phone at arm's length and talks directly to camera, " +
-        "natural casual head and hand movement, warm hopeful conversational tone, subtle handheld shake, " +
-        "accurate lip-sync to the spoken line. No on-screen text. " +
-        aspect +
-        "."
-    );
-    parts.push(ARGENTINE_VOICE_BLOCK);
-    parts.push(`[DIALOGO] (speak exactly this, in Rioplatense Argentine Spanish): "${input.dialogue!.trim()}"`);
-  } else if (hasDialogue && isBroll) {
-    // B-roll con voz en off: NO hay cara hablando ni lip-sync; la linea es narracion off-screen.
-    parts.push(
-      "B-roll insert: NO person talking to camera and NO visible talking face or lip-sync. " +
-        "Show only the scene and action described above, with smooth natural camera movement and realistic lighting. " +
-        "The line below plays as OFF-SCREEN VOICEOVER narration over the footage (nobody mouths it on screen). " +
-        "No on-screen text. " +
-        aspect +
-        "."
-    );
-    parts.push(ARGENTINE_VOICE_BLOCK);
-    parts.push(
-      `[VOZ EN OFF / VOICEOVER] (off-screen narration, speak exactly this in Rioplatense Argentine Spanish): "${input.dialogue!.trim()}"`
-    );
-  } else {
-    parts.push(
-      "Smooth natural motion with subtle camera movement and realistic lighting. " +
-        "No spoken dialogue. No on-screen text. " +
-        aspect +
-        "."
-    );
-  }
-
-  return parts.join("\n\n");
+  return renderVeoPromptFromTemplate(input.template ?? DEFAULT_VEO_PROMPT_TEMPLATE, {
+    videoPrompt: input.videoPrompt,
+    dialogue: input.dialogue,
+    durationSec: input.durationSec,
+    aspectRatio: input.aspectRatio,
+    assetType: input.assetType,
+  });
 }
 
 

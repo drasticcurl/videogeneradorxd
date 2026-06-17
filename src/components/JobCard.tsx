@@ -11,9 +11,10 @@
  *        poder revisarlos y controlarlos ANTES de generar en batch (no consume cuota).
  *      · "Guardar y regenerar": guarda y vuelve a generar ese item puntual.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { StatusBadge } from "./StatusBadge";
 import { buildVeoVideoPrompt } from "@/lib/prompts";
+import { DEFAULT_VEO_PROMPT_TEMPLATE } from "@/lib/promptTemplate";
 import type { JobRecord } from "@/lib/types";
 
 interface ModelOption {
@@ -94,6 +95,28 @@ export function JobCard({
   // Override del prompt final (avanzado): si esta activo, se manda TAL CUAL a Veo.
   const [overrideOn, setOverrideOn] = useState(false);
   const [finalPromptText, setFinalPromptText] = useState("");
+  // Texto de la plantilla del prompt (prompts/veo-video-prompt.md). Arranca con el
+  // DEFAULT embebido y se actualiza con el .md real para que el preview del editor
+  // coincida con lo que ejecuta el server.
+  const [templateText, setTemplateText] = useState<string>(DEFAULT_VEO_PROMPT_TEMPLATE);
+
+  useEffect(() => {
+    if (job.type === "image") return; // la plantilla solo aplica a videos
+    let alive = true;
+    fetch("/api/prompt-template")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (alive && d && typeof d.content === "string" && d.content.trim()) {
+          setTemplateText(d.content);
+        }
+      })
+      .catch(() => {
+        /* si falla, queda el DEFAULT embebido */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [job.type]);
 
   const isImage = job.type === "image";
   const awaiting = job.status === "awaiting_approval";
@@ -129,6 +152,7 @@ export function JobCard({
       videoPrompt: promptText,
       dialogue: dialogueText,
       assetType,
+      template: templateText,
       durationSec: durationChoice,
       aspectRatio: "9:16",
     });
@@ -357,7 +381,7 @@ export function JobCard({
                   <>
                     <p className="text-[11px] leading-relaxed text-amber-200/80">
                       Esto se manda <b>TAL CUAL</b> a Veo: ignora el armado automático
-                      (estilo UGC/selfie, lip-sync, voz/acento). Útil para b-roll que NO
+                      (estilo de grabación, lip-sync, voz/acento). Útil para b-roll que NO
                       debe mostrar a una persona hablando. Si querés que se escuche el
                       diálogo, incluilo acá vos mismo.
                     </p>
@@ -392,6 +416,18 @@ export function JobCard({
                     </pre>
                   </details>
                 )}
+                <p className="text-[10px] leading-relaxed text-slate-500">
+                  El texto base del prompt (estilo de grabación, voz/acento, voz en off
+                  de b-roll) vive en la plantilla{" "}
+                  <code className="text-slate-400">prompts/veo-video-prompt.md</code>.
+                  Editá ese archivo para cambiar el estilo de todos los clips.{" "}
+                  <a
+                    href="/api/prompt-template?download=1"
+                    className="text-accent underline hover:opacity-80"
+                  >
+                    ↓ Descargar plantilla (MD)
+                  </a>
+                </p>
               </div>
             )}
 
