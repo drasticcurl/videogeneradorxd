@@ -50,6 +50,11 @@ function findImage(plan: ProjectPlan, imageId: string) {
   return null;
 }
 
+/** Tipo de asset de un clip ("avatar" | "broll"). Default "avatar" si no se encuentra. */
+function clipAssetType(plan: ProjectPlan, assetId: string): "avatar" | "broll" {
+  return plan.assets.find((a) => a.id === assetId)?.tipo ?? "avatar";
+}
+
 /** Devuelve todos los ids de referencia de una imagen (ref_image_id + ref_image_ids), sin duplicados. */
 function imageRefIds(img: {
   ref_image_id?: string;
@@ -389,6 +394,7 @@ async function runVideoGeneration(
     aspectRatio: ASPECT_RATIO,
     resolution,
     dialogue: clip.dialogo,
+    assetType: clipAssetType(project.plan, clip.asset_id),
     model,
     promptOverride: clip.final_prompt,
   });
@@ -549,6 +555,7 @@ export async function extendVideoJob(jobId: string): Promise<JobRecord | undefin
     aspectRatio: ASPECT_RATIO,
     resolution,
     dialogue: clip.dialogo,
+    assetType: clipAssetType(project.plan, clip.asset_id),
     model,
     promptOverride: clip.final_prompt,
   });

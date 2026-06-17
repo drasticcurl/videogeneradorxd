@@ -55,6 +55,7 @@ export class VertexVideoProvider implements VideoProvider {
     const prompt = buildVeoVideoPrompt({
       videoPrompt: input.prompt,
       dialogue: input.dialogue,
+      assetType: input.assetType,
       durationSec: input.durationSec,
       aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
       override: input.promptOverride,
@@ -118,6 +119,7 @@ export class VertexVideoProvider implements VideoProvider {
     const prompt = buildVeoVideoPrompt({
       videoPrompt: input.prompt + continuation,
       dialogue: input.dialogue,
+      assetType: input.assetType,
       durationSec: input.durationSec,
       aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
       // Si hay override, lo respetamos pero le sumamos la instruccion de continuidad

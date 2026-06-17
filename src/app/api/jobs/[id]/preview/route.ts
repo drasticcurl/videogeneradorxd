@@ -57,9 +57,12 @@ export async function GET(
       const imgJob = jobsDb.imageJob(project.id, clip.image_id);
       // autoPrompt: el prompt que armaria el sistema (sin override). Sirve para
       // precargar el editor cuando el usuario quiere pasar a editar el prompt final.
+      const assetType =
+        project.plan.assets.find((a) => a.id === clip.asset_id)?.tipo ?? "avatar";
       const autoPrompt = buildVeoVideoPrompt({
         videoPrompt: clip.video_prompt,
         dialogue: clip.dialogo,
+        assetType,
         durationSec: clip.duracion_seg,
         aspectRatio: ASPECT_RATIO,
       });
