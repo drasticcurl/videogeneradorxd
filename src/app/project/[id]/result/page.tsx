@@ -15,8 +15,6 @@ export default function ResultPage({ params }: { params: { id: string } }) {
   const { project, manifest, config, loadProject, loadConfig, refreshJobs } =
     useProjectStore();
   const [busy, setBusy] = useState<string | null>(null);
-  const [stitchMsg, setStitchMsg] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     loadConfig();
@@ -41,25 +39,6 @@ export default function ResultPage({ params }: { params: { id: string } }) {
     }
   }
 
-  async function handleStitch() {
-    setBusy("stitch");
-    setStitchMsg(null);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/stitch`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (data.ok) {
-        setStitchMsg("final.mp4 generado correctamente.");
-        await loadProject(projectId);
-      } else {
-        setStitchMsg(data.reason ?? "No se pudo unir.");
-      }
-    } finally {
-      setBusy(null);
-    }
-  }
-
   const outputPath = project
     ? `${config?.outputDir ?? "./output"}/${project.id}`
     : "";
@@ -78,37 +57,31 @@ export default function ResultPage({ params }: { params: { id: string } }) {
           )}
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => void handleStitch()}
-            disabled={busy === "stitch" || !config?.ffmpeg}
-            title={config?.ffmpeg ? "" : "ffmpeg no detectado"}
-            className="rounded-lg border border-slate-600 px-4 py-2 text-sm hover:bg-slate-800 disabled:opacity-40"
+          <a
+            href={`/api/projects/${projectId}/download`}
+            className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
           >
-            {busy === "stitch" ? "Uniendo…" : "Unir en final.mp4 (ffmpeg)"}
-          </button>
+            ⬇ Descargar proyecto (ZIP)
+          </a>
         </div>
       </div>
 
-      {/* Carpeta de salida */}
+      {/* Descarga / salida */}
       <div className="rounded-lg border border-slate-700 bg-panel p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="text-sm font-semibold text-slate-200">
-              Carpeta de salida (local)
+              Descargar proyecto + unir local
             </div>
             <code className="text-xs text-slate-400">{outputPath}</code>
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={() => {
-                navigator.clipboard?.writeText(outputPath);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-              className="rounded-md border border-slate-600 px-3 py-1.5 text-xs hover:bg-slate-800"
+            <a
+              href={`/api/projects/${projectId}/download`}
+              className="rounded-md border border-emerald-600/60 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-500/10"
             >
-              {copied ? "✓ copiado" : "Copiar ruta"}
-            </button>
+              ⬇ Descargar ZIP
+            </a>
             <a
               href={`/api/files/${projectId}/manifest.json`}
               target="_blank"
@@ -120,27 +93,13 @@ export default function ResultPage({ params }: { params: { id: string } }) {
           </div>
         </div>
         <p className="mt-2 text-xs text-slate-500">
-          Ahí quedaron las imagenes (<code>images/</code>), los clips (<code>clips/</code>) y el{" "}
-          <code>manifest.json</code>. Abrila desde tu explorador de archivos.
+          El ZIP trae las imágenes (<code>images/</code>), los clips (<code>clips/</code>,
+          incluidas las extensiones <code>__extK</code>), el <code>manifest.json</code> y un{" "}
+          <code>stitch.sh</code>/<code>stitch.bat</code>. El video final se arma en tu PC con
+          ffmpeg (corré <code>stitch.sh</code> o <code>stitch.bat</code>) — así la nube solo
+          genera y no gasta poder uniendo video.
         </p>
-        {stitchMsg && (
-          <p className="mt-2 text-xs text-amber-300">{stitchMsg}</p>
-        )}
       </div>
-
-      {/* final.mp4 */}
-      {manifest?.final_video && (
-        <div className="rounded-lg border border-emerald-700/50 bg-emerald-500/5 p-4">
-          <div className="mb-2 text-sm font-semibold text-emerald-300">
-            Video final unido (final.mp4)
-          </div>
-          <video
-            src={`/api/files/${projectId}/${manifest.final_video}`}
-            controls
-            className="max-h-[480px] rounded-md"
-          />
-        </div>
-      )}
 
       {/* Timeline de clips */}
       <section className="space-y-3">

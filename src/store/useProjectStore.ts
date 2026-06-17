@@ -59,6 +59,8 @@ export interface AppConfig {
   outputDir: string;
   dataDir: string;
   ffmpeg: boolean;
+  /** De dónde salió el catálogo de modelos: "vertex" (listado dinámico) o "catalog" (estático). */
+  catalogSource?: string;
 }
 
 interface ProjectState {
@@ -107,6 +109,8 @@ interface ProjectState {
   uploadReferences: (projectId: string) => Promise<void>;
 
   loadConfig: () => Promise<void>;
+  /** Re-consulta /api/models (modelos disponibles en Vertex) y refresca el catálogo. */
+  refreshModels: () => Promise<void>;
   parseBrief: () => Promise<void>;
   setPlanFromJson: (raw: unknown) => void;
   setPlan: (p: ProjectPlan) => void;
@@ -297,8 +301,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         imageVariants: cfg.defaultImageVariants,
         defaultResolution: cfg.defaultResolution,
       });
+      // Catálogo dinámico desde Vertex (no bloquea: si falla queda el de /api/config).
+      void get().refreshModels();
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+
+  refreshModels: async () => {
+    try {
+      const data = await jsonFetch<{
+        catalog: AppConfig["catalog"];
+        source: string;
+        error?: string;
+      }>("/api/models");
+      set((s) =>
+        s.config
+          ? { config: { ...s.config, catalog: data.catalog, catalogSource: data.source } }
+          : {}
+      );
+    } catch {
+      /* si falla, queda el catálogo que vino en /api/config */
     }
   },
 

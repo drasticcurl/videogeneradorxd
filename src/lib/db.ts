@@ -5,6 +5,11 @@
  * Persistencia sincronica: como Node corre single-thread y nuestras escrituras
  * son sync, no hay races dentro del proceso. Se usa un singleton via globalThis
  * para sobrevivir al HMR de Next en dev.
+ *
+ * La ruta sale 100% de `config.storage.dataDir` (env DATA_DIR), asi que apuntando
+ * esa carpeta a un bucket montado (Cloud Storage FUSE en Cloud Run) la persistencia
+ * va directo al bucket sin tocar este codigo. `persist()` tiene un fallback para
+ * filesystems montados donde el rename atomico puede no estar disponible.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -44,10 +49,26 @@ function load(): DbShape {
 
 function persist(db: DbShape): void {
   fs.mkdirSync(config.storage.dataDir, { recursive: true });
-  // Escritura atomica: tmp + rename.
+  const data = JSON.stringify(db, null, 2);
   const tmp = `${DB_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2), "utf8");
-  fs.renameSync(tmp, DB_FILE);
+  try {
+    // Camino normal en disco real: escritura atomica tmp + rename.
+    fs.writeFileSync(tmp, data, "utf8");
+    fs.renameSync(tmp, DB_FILE);
+  } catch (err) {
+    // En filesystems montados (ej. Cloud Storage FUSE en Cloud Run) el rename puede
+    // fallar o no ser atomico. Fallback: escribir directo al archivo final.
+    try {
+      fs.writeFileSync(DB_FILE, data, "utf8");
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* el tmp puede no existir */
+      }
+    } catch (err2) {
+      console.error("[db] No se pudo persistir db.json:", err2);
+    }
+  }
 }
 
 // Singleton resiliente al HMR.
