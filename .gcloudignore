@@ -1,0 +1,15 @@
+# Que NO se sube a Cloud Build al hacer `gcloud run deploy --source` / `gcloud builds submit`.
+# (El Dockerfile, cloudbuild.yaml y prompts/ SI deben subir: no los ignoramos.)
+node_modules
+.next
+out
+build
+.git
+data
+output
+*.tsbuildinfo
+.env
+.env.local
+.env*.local
+npm-debug.log*
+vsl-natalia-plan.json

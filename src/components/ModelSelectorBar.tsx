@@ -14,6 +14,7 @@ export function ModelSelectorBar({ disabled = false }: { disabled?: boolean }) {
     setImageVariants,
     defaultResolution,
     setDefaultResolution,
+    refreshModels,
   } = useProjectStore();
 
   if (!config) return null;
@@ -78,7 +79,21 @@ export function ModelSelectorBar({ disabled = false }: { disabled?: boolean }) {
           modo <b className="text-slate-100">{config.providerMode}</b>
         </span>
         <span>· 9:16</span>
-        <span>· ffmpeg: {config.ffmpeg ? "si" : "no"}</span>
+        <span>
+          · modelos:{" "}
+          <b className="text-slate-100">
+            {config.catalogSource === "vertex" ? "Vertex" : "catálogo"}
+          </b>
+        </span>
+        <button
+          type="button"
+          onClick={() => void refreshModels()}
+          disabled={disabled}
+          title="Volver a consultar los modelos disponibles en Vertex AI"
+          className="rounded border border-slate-600 px-2 py-0.5 text-[11px] hover:bg-slate-800 disabled:opacity-40"
+        >
+          ↻ modelos
+        </button>
       </div>
     </div>
   );
@@ -103,7 +118,15 @@ function Select({
       <select
         disabled={disabled}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === "__manual__") {
+            const manual = window.prompt("Escribí el ID exacto del modelo:", value);
+            if (manual && manual.trim()) onChange(manual.trim());
+            return;
+          }
+          onChange(v);
+        }}
         className="rounded-md border border-slate-600 bg-ink px-2 py-1.5 text-sm focus:border-accent focus:outline-none disabled:opacity-50"
       >
         {options.map((o) => (
@@ -115,6 +138,8 @@ function Select({
         {!options.some((o) => o.id === value) && (
           <option value={value}>{value}</option>
         )}
+        {/* permite tipear un ID que no este en la lista */}
+        <option value="__manual__">✎ otro ID…</option>
       </select>
     </div>
   );
