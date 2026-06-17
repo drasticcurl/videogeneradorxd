@@ -117,6 +117,11 @@ Triggers → Connect repository). Cada push buildea y deploya.
 | `OUTPUT_DIR` | `/mnt/gcs/output` | carpeta de salida = subpath del bucket montado |
 | `DATA_DIR` | `/mnt/gcs/data` | estado (db.json) = subpath del bucket montado |
 | `PIPELINE_AUTO_APPROVE` | `true`/`false` | aprobar jobs solos (opcional) |
+| `APP_PASSWORD` | tu contraseña | activa el login de la app (ver §4) |
+| `APP_AUTH_SECRET` | hex aleatorio largo | firma de la sesión (ver §4) |
+
+> `APP_PASSWORD`/`APP_AUTH_SECRET` son secretos: seteálos en el servicio (Cloud Run → Variables
+> & Secrets) o vía Secret Manager, **no** los pongas en `cloudbuild.yaml`.
 
 (Los modelos por defecto y demás knobs siguen en `.env.example`.)
 
@@ -124,18 +129,36 @@ Triggers → Connect repository). Cada push buildea y deploya.
 
 ## 4. Control de acceso ⚠️ (importante por costo)
 
-La app **dispara generaciones que cuestan dinero** (Veo/Gemini). El `cloudbuild.yaml` y la
-Opción B usan `--allow-unauthenticated`, lo que deja la app **pública en internet**.
+La app **dispara generaciones que cuestan dinero** (Veo/Gemini). Recomendado: dejá Cloud Run
+accesible (`--allow-unauthenticated`, para poder entrar desde el navegador) pero activá el
+**login de la app** para que no la use un intruso.
 
-Para una app **privada** (recomendado):
+### Login de la app (recomendado)
 
-- Deploy con `--no-allow-unauthenticated`, y entrá vía:
-  ```bash
-  gcloud run services proxy "$SERVICE" --region="$REGION"   # túnel local autenticado
-  ```
-- O poné **IAP / Load Balancer** delante para restringir por identidad de Google.
+Seteá estas dos env vars en el servicio (si falta una, el login queda desactivado):
 
-Si la dejás pública, al menos sumá auth a nivel app o un secreto en una env var.
+```bash
+# secret aleatorio largo:
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+| Variable | Valor |
+|---|---|
+| `APP_PASSWORD` | la contraseña de acceso |
+| `APP_AUTH_SECRET` | hex aleatorio largo (firma de la sesión) |
+
+Con eso, **toda** ruta/API exige una sesión válida (cookie firmada HMAC, HttpOnly+Secure):
+sin login, las páginas redirigen a `/login` y las APIs devuelven 401 (nadie puede disparar
+generaciones). Logout en `/api/auth/logout`.
+
+### Alternativa: cerrar a nivel infra
+
+Si preferís ni exponerla: deploy con `--no-allow-unauthenticated` y entrá con un túnel
+autenticado, o poné IAP / Load Balancer delante:
+
+```bash
+gcloud run services proxy "$SERVICE" --region="$REGION"   # túnel local autenticado
+```
 
 ---
 

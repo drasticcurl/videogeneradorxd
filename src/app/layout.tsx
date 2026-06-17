@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { cookies } from "next/headers";
+import { AUTH_COOKIE } from "@/lib/auth";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,6 +15,8 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // Mostramos "Salir" solo si hay una cookie de sesión (auth activa y logueado).
+  const hasSession = Boolean(cookies().get(AUTH_COOKIE)?.value);
   return (
     <html lang="es">
       <body className="min-h-screen">
@@ -39,6 +43,11 @@ export default function RootLayout({
               >
                 Docs Vertex AI
               </a>
+              {hasSession && (
+                <a href="/api/auth/logout" className="hover:text-white" title="Cerrar sesión">
+                  Salir
+                </a>
+              )}
             </nav>
           </div>
         </header>
