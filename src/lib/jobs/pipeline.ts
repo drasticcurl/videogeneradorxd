@@ -8,9 +8,6 @@
  *   - clips FILMAR_REAL no generan job (placeholders para subir a mano).
  */
 import path from "node:path";
-import { spawnSync } from "node:child_process";
-import os from "node:os";
-import fs from "node:fs";
 import {
   config,
   ASPECT_RATIO,
@@ -31,7 +28,6 @@ import {
   saveBytes,
   writeManifest,
 } from "../storage";
-import { hasFfmpeg } from "../providers/placeholder";
 import type { ProjectPlan } from "../schema";
 import type { Candidate, JobRecord, LogEntry, LogLevel, ProjectRecord } from "../types";
 
@@ -553,99 +549,31 @@ export async function extendVideoJob(jobId: string): Promise<JobRecord | undefin
     promptOverride: clip.final_prompt,
   });
 
-  // Concatenamos base + extension en un solo archivo (si hay ffmpeg). Si no, reemplazamos.
-  const rel = clipRelPath(clip.orden, clip.id);
-  const merged = await concatVideos(project.id, baseBytes, extended.bytes);
-  await saveBytes(project.id, rel, merged ?? extended.bytes);
+  // Sin ffmpeg en el servidor: NO concatenamos. Guardamos la continuacion como un
+  // SEGMENTO SEPARADO (clips/NN_<slug>__extK.mp4) que el stitch local unira en orden.
+  // Asi no se pierde la base y la nube no gasta CPU encodeando.
+  const baseRel = job.outputPath;
+  const extRelFor = (i: number) => baseRel.replace(/\.mp4$/i, `__ext${i}.mp4`);
+  let k = 1;
+  while (existsRel(project.id, extRelFor(k))) k++;
+  const extRel = extRelFor(k);
+  await saveBytes(project.id, extRel, extended.bytes);
 
   const updated = jobsDb.update(job.id, {
-    outputPath: rel,
-    candidates: [{ file: rel, index: 1 }],
-    selectedIndex: 1,
-    status: "awaiting_approval",
-    locked: false,
     model,
   });
-  logEvent(project.id, "success", `Video "${clip.id}" extendido, esperando aprobacion.`, {
-    jobId: job.id,
-    model,
-  });
+  logEvent(
+    project.id,
+    "success",
+    `Extension de "${clip.id}" guardada como segmento separado (${extRel}). ` +
+      `Se unira al hacer el stitch local (se incluye en el ZIP de descarga).`,
+    { jobId: job.id, model }
+  );
   await refreshManifest(project.id);
   return updated;
 }
 
 /* ----------------------------- manifest ------------------------------ */
-
-/**
- * Concatena base + extension en un solo mp4 usando ffmpeg (re-encode para evitar
- * problemas de timestamps). Devuelve los bytes del video unido, o null si no hay
- * ffmpeg (en ese caso el caller usa solo la extension).
- */
-async function concatVideos(
-  projectId: string,
-  baseBytes: Uint8Array,
-  extBytes: Uint8Array
-): Promise<Uint8Array | null> {
-  if (!hasFfmpeg()) return null;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "augc_ext_"));
-  const baseFile = path.join(tmpDir, "base.mp4");
-  const extFile = path.join(tmpDir, "ext.mp4");
-  const outFile = path.join(tmpDir, "out.mp4");
-  try {
-    fs.writeFileSync(baseFile, baseBytes);
-    fs.writeFileSync(extFile, extBytes);
-    // Re-encode + concat por filtro (robusto ante distintos timestamps/SAR).
-    const res = spawnSync(
-      "ffmpeg",
-      [
-        "-y",
-        "-i",
-        baseFile,
-        "-i",
-        extFile,
-        "-filter_complex",
-        "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]",
-        "-map",
-        "[outv]",
-        "-map",
-        "[outa]",
-        "-c:v",
-        "libx264",
-        "-crf",
-        "18",
-        "-preset",
-        "medium",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-movflags",
-        "+faststart",
-        outFile,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] }
-    );
-    if (res.status !== 0 || !fs.existsSync(outFile)) {
-      logEvent(
-        projectId,
-        "warn",
-        "No se pudo concatenar la extension con ffmpeg; se usa solo la continuacion."
-      );
-      return null;
-    }
-    return fs.readFileSync(outFile);
-  } catch {
-    return null;
-  } finally {
-    try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  }
-}
 
 export async function refreshManifest(projectId: string): Promise<void> {
   const project = projectsDb.get(projectId);
