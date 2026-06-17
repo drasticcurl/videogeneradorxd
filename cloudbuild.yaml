@@ -1,0 +1,74 @@
+# ============================================================================
+# Pipeline de Cloud Build: build de la imagen -> push a Artifact Registry ->
+# deploy a Cloud Run (1 instancia siempre encendida + bucket montado por FUSE).
+#
+# Uso manual:
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_BUCKET=mi-bucket,_REGION=us-central1
+#
+# CI/CD desde GitHub: crear un trigger de Cloud Build apuntando a este archivo
+# (Cloud Build > Triggers > Connect repository). Cada push a la rama buildea y deploya.
+#
+# Ajustá las _SUBSTITUTIONS (sobre todo _BUCKET) a tu proyecto.
+# ============================================================================
+substitutions:
+  _REGION: us-central1            # region de Cloud Run / Artifact Registry
+  _SERVICE: augc-pipeline         # nombre del servicio Cloud Run
+  _REPO: augc                     # repo de Artifact Registry (docker)
+  _BUCKET: CAMBIAME-bucket-gcs    # bucket de Cloud Storage a montar (storage del proyecto)
+  _VERTEX_LOCATION: us-central1   # region de Vertex AI (GOOGLE_CLOUD_LOCATION)
+
+steps:
+  # 1) Build de la imagen.
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
+      - .
+
+  # 2) Push a Artifact Registry.
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}
+
+  # 3) Deploy a Cloud Run.
+  #    - 1 sola instancia (la cola de jobs vive en memoria del proceso).
+  #    - CPU siempre asignada (--no-cpu-throttling) para que el "pump" siga corriendo.
+  #    - Volumen GCS montado en /mnt/gcs -> OUTPUT_DIR/DATA_DIR apuntan ahi.
+  #    - Auth de Vertex: automatica via la service account del servicio (ADC).
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --min-instances=1
+      - --max-instances=1
+      - --cpu=1
+      - --memory=2Gi
+      - --no-cpu-throttling
+      - --port=8080
+      - --timeout=3600
+      - --set-env-vars=PROVIDER_MODE=vertex,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=${_VERTEX_LOCATION},OUTPUT_DIR=/mnt/gcs/output,DATA_DIR=/mnt/gcs/data
+      - --add-volume=name=gcsvol,type=cloud-storage,bucket=${_BUCKET}
+      - --add-volume-mount=volume=gcsvol,mount-path=/mnt/gcs
+      # OJO: --allow-unauthenticated deja la app PUBLICA en internet. Como dispara
+      # generaciones que CUESTAN dinero (Veo/Gemini), considera restringir el acceso
+      # (ver guia de deploy). Para una app privada, cambia a --no-allow-unauthenticated.
+      - --allow-unauthenticated
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
