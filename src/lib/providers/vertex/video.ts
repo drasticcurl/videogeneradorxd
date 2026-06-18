@@ -14,6 +14,7 @@ import {
   snapDuration,
 } from "../../config";
 import { buildVeoVideoPrompt } from "../../prompts";
+import { loadVeoPromptTemplateText } from "../../promptTemplate.server";
 import type {
   VideoExtendInput,
   VideoGenInput,
@@ -56,6 +57,7 @@ export class VertexVideoProvider implements VideoProvider {
       videoPrompt: input.prompt,
       dialogue: input.dialogue,
       assetType: input.assetType,
+      template: loadVeoPromptTemplateText(),
       durationSec: input.durationSec,
       aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
       override: input.promptOverride,
@@ -120,6 +122,7 @@ export class VertexVideoProvider implements VideoProvider {
       videoPrompt: input.prompt + continuation,
       dialogue: input.dialogue,
       assetType: input.assetType,
+      template: loadVeoPromptTemplateText(),
       durationSec: input.durationSec,
       aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
       // Si hay override, lo respetamos pero le sumamos la instruccion de continuidad
