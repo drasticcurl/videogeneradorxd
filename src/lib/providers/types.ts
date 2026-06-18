@@ -93,6 +93,11 @@ export interface VideoGenInput {
   resolution?: string;
   /** dialogo a usar para audio (Veo genera el audio hablado). */
   dialogue?: string;
+  /**
+   * Tipo de asset del clip ("avatar" | "broll"). Determina si el dialogo se arma como
+   * talking-head con lip-sync (avatar) o como voz en off (broll). Default: avatar.
+   */
+  assetType?: "avatar" | "broll";
   /** id de modelo de video (Veo 3.1). */
   model?: string;
   /**
@@ -120,6 +125,8 @@ export interface VideoExtendInput {
   aspectRatio?: string;
   resolution?: string;
   dialogue?: string;
+  /** Tipo de asset del clip ("avatar" | "broll"); ver VideoGenInput. Default: avatar. */
+  assetType?: "avatar" | "broll";
   model?: string;
   /** OVERRIDE del prompt final (se manda tal cual, sin armado automatico). */
   promptOverride?: string;

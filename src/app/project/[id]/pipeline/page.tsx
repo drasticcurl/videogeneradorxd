@@ -123,6 +123,18 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     return m;
   }, [project]);
 
+  // Tipo de asset por clip.id ("avatar" | "broll"): define si el dialogo se arma como
+  // selfie/talking-head o como voz en off (para que el preview del prompt sea correcto).
+  const assetTypeByRef = useMemo(() => {
+    const m = new Map<string, "avatar" | "broll">();
+    const tipoByAsset = new Map<string, "avatar" | "broll">();
+    project?.plan.assets.forEach((a) => tipoByAsset.set(a.id, a.tipo));
+    project?.plan.clips.forEach((c) =>
+      m.set(c.id, tipoByAsset.get(c.asset_id) ?? "avatar")
+    );
+    return m;
+  }, [project]);
+
   const imageModels = config?.catalog.image ?? [];
   const videoModels = config?.catalog.video ?? [];
   const projectImageModel = project?.models.image ?? "";
@@ -196,6 +208,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     dialogueByRef,
     durationByRef,
     finalPromptByRef,
+    assetTypeByRef,
     modelOptions: videoModels,
     projectModel: projectVideoModel,
   };
@@ -368,6 +381,7 @@ interface JobMeta {
   dialogueByRef: Map<string, string>;
   durationByRef: Map<string, number>;
   finalPromptByRef: Map<string, string>;
+  assetTypeByRef?: Map<string, "avatar" | "broll">;
   modelOptions: { id: string; label: string }[];
   projectModel: string;
 }
@@ -411,6 +425,7 @@ function Group({
               currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
               currentDuration={meta.durationByRef.get(j.refId)}
               currentFinalPrompt={meta.finalPromptByRef.get(j.refId) ?? ""}
+              assetType={meta.assetTypeByRef?.get(j.refId)}
               modelOptions={meta.modelOptions}
               projectModel={meta.projectModel}
               {...handlers}

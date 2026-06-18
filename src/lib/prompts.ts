@@ -298,6 +298,15 @@ export interface VeoPromptInput {
   /** texto en pantalla a evitar quemar en el video (lo agrega el usuario aparte). */
   noOnScreenText?: boolean;
   /**
+   * Tipo de asset del clip:
+   *  - "avatar" (default): persona/talking-head. Si hay dialogo, se arma estilo UGC/selfie
+   *    con lip-sync (la persona habla a camara).
+   *  - "broll": inserto sin cara hablando. Si hay dialogo, se trata como VOZ EN OFF
+   *    (voiceover, sin lip-sync): NUNCA se mete el bloque selfie de "persona hablando a camara".
+   * Si no se especifica, se asume "avatar" para conservar el comportamiento anterior.
+   */
+  assetType?: "avatar" | "broll";
+  /**
    * OVERRIDE del prompt final. Si viene con contenido, se devuelve TAL CUAL y se ignora
    * todo el armado automatico (estilo UGC/selfie, lip-sync, voz/acento, etc.). Permite que
    * el usuario controle exactamente lo que se le manda a Veo (ej. b-roll sin persona hablando).
@@ -307,7 +316,10 @@ export interface VeoPromptInput {
 
 /**
  * Arma el prompt final que se manda a Veo, combinando la cinematografia del clip
- * con el estilo UGC/selfie y el bloque de acento argentino (cuando hay dialogo).
+ * con el estilo correcto segun el tipo de asset:
+ *  - avatar (talking-head) + dialogo  -> estilo UGC/selfie + lip-sync + bloque de acento argentino.
+ *  - b-roll + dialogo                 -> inserto sin cara hablando + VOZ EN OFF (voiceover) + acento.
+ *  - sin dialogo                      -> movimiento natural, sin dialogo.
  *
  * Si `input.override` tiene contenido, se devuelve EXACTAMENTE ese texto (sin armado
  * automatico): el usuario tiene control total sobre lo que se ejecuta.
@@ -320,6 +332,9 @@ export function buildVeoVideoPrompt(input: VeoPromptInput): string {
   const dur = Math.max(1, Math.round(input.durationSec));
   const aspect = input.aspectRatio ?? "9:16";
   const hasDialogue = Boolean(input.dialogue && input.dialogue.trim().length > 0);
+  // Solo es talking-head (persona hablando a camara) si NO es b-roll. Para b-roll
+  // el dialogo, si existe, va como voz en off (narracion), nunca como cara hablando.
+  const isBroll = input.assetType === "broll";
 
   const parts: string[] = [];
   parts.push(
@@ -329,7 +344,8 @@ export function buildVeoVideoPrompt(input: VeoPromptInput): string {
     parts.push(input.videoPrompt.trim());
   }
 
-  if (hasDialogue) {
+  if (hasDialogue && !isBroll) {
+    // Talking-head / avatar: persona habla directo a camara con lip-sync.
     parts.push(
       "UGC selfie style: the person holds their phone at arm's length and talks directly to camera, " +
         "natural casual head and hand movement, warm hopeful conversational tone, subtle handheld shake, " +
@@ -339,6 +355,20 @@ export function buildVeoVideoPrompt(input: VeoPromptInput): string {
     );
     parts.push(ARGENTINE_VOICE_BLOCK);
     parts.push(`[DIALOGO] (speak exactly this, in Rioplatense Argentine Spanish): "${input.dialogue!.trim()}"`);
+  } else if (hasDialogue && isBroll) {
+    // B-roll con voz en off: NO hay cara hablando ni lip-sync; la linea es narracion off-screen.
+    parts.push(
+      "B-roll insert: NO person talking to camera and NO visible talking face or lip-sync. " +
+        "Show only the scene and action described above, with smooth natural camera movement and realistic lighting. " +
+        "The line below plays as OFF-SCREEN VOICEOVER narration over the footage (nobody mouths it on screen). " +
+        "No on-screen text. " +
+        aspect +
+        "."
+    );
+    parts.push(ARGENTINE_VOICE_BLOCK);
+    parts.push(
+      `[VOZ EN OFF / VOICEOVER] (off-screen narration, speak exactly this in Rioplatense Argentine Spanish): "${input.dialogue!.trim()}"`
+    );
   } else {
     parts.push(
       "Smooth natural motion with subtle camera movement and realistic lighting. " +

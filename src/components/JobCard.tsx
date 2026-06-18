@@ -32,6 +32,8 @@ interface Props {
   currentDuration?: number;
   /** override del prompt final actual del clip (solo videos); "" si no hay override */
   currentFinalPrompt?: string;
+  /** tipo de asset del clip ("avatar" | "broll"); define si el dialogo es selfie o voz en off */
+  assetType?: "avatar" | "broll";
   /** opciones de modelo para el selector (catalogo de imagen o de video segun el tipo) */
   modelOptions: ModelOption[];
   /** modelo del proyecto para este tipo (default si no hay override) */
@@ -71,6 +73,7 @@ export function JobCard({
   currentDialogue,
   currentDuration,
   currentFinalPrompt,
+  assetType,
   modelOptions,
   projectModel,
   onApprove,
@@ -125,6 +128,7 @@ export function JobCard({
     return buildVeoVideoPrompt({
       videoPrompt: promptText,
       dialogue: dialogueText,
+      assetType,
       durationSec: durationChoice,
       aspectRatio: "9:16",
     });
