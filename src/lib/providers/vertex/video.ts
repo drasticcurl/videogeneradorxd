@@ -57,6 +57,8 @@ export class VertexVideoProvider implements VideoProvider {
       dialogue: input.dialogue,
       durationSec: input.durationSec,
       aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
+      acento: input.accent,
+      assetTipo: input.assetTipo,
       override: input.promptOverride,
     });
 
@@ -120,6 +122,8 @@ export class VertexVideoProvider implements VideoProvider {
       dialogue: input.dialogue,
       durationSec: input.durationSec,
       aspectRatio: input.aspectRatio ?? ASPECT_RATIO,
+      acento: input.accent,
+      assetTipo: input.assetTipo,
       // Si hay override, lo respetamos pero le sumamos la instruccion de continuidad
       // para que la extension empalme con el video base.
       override: input.promptOverride

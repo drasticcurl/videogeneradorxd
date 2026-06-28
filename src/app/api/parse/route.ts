@@ -20,11 +20,13 @@ export async function POST(req: Request) {
       model?: string;
       imageVariants?: number;
       references?: { id?: string; label?: string }[];
+      accent?: "arg" | "neutro";
     };
     const brief = (body.brief ?? "").trim();
     if (!brief) {
       return badRequest("El brief esta vacio. Pegá el texto con las escenas.");
     }
+    const accent = body.accent === "neutro" ? "neutro" : "arg";
     // Normalizamos las referencias (avatares ya subidos): ids slug, sin vacios.
     const references = (body.references ?? [])
       .map((r) => ({ id: slugify(String(r.id ?? "")), label: r.label }))
@@ -34,7 +36,10 @@ export async function POST(req: Request) {
     const plan = await getLlmProvider().parseBrief(brief, {
       model,
       references: references.length > 0 ? references : undefined,
+      accent,
     });
+    // El acento elegido en la UI manda: lo dejamos fijado en el plan.
+    plan.global.acento = accent;
 
     // Garantizamos que TODAS las referencias provistas existan en plan.references
     // (aunque la LLM se las haya olvidado), asi la subida posterior las puede mapear.

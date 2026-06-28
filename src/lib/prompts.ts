@@ -5,17 +5,46 @@
  * [visual]/[audio] o prosa) en un PlanJSON estructurado y consistente.
  */
 
-export const PARSER_SYSTEM_PROMPT = `Sos un director de arte y productor tecnico de anuncios UGC (user generated content) para funnels de quiz.
+import type { Acento } from "./schema";
+
+/** Idioma de dialogo por defecto segun acento. */
+function defaultIdiomaDialogo(acento: Acento): string {
+  return acento === "neutro" ? "es-419 (espanol neutro)" : "es-AR (espanol rioplatense, vos)";
+}
+
+/**
+ * Instruccion de dialecto/registro para los DIALOGOS que arma el parser.
+ * Cambia segun el acento elegido por el usuario (deslizable neutro / argentino).
+ */
+function parserDialectRule(acento: Acento): string {
+  if (acento === "neutro") {
+    return `4. Todos los dialogos quedan en el idioma_dialogo en ESPANOL NEUTRO latinoamericano (estandar, sin
+   marca regional fuerte). NO uses voseo argentino, NO uses muletillas regionales (nada de che, dale,
+   posta, boludo) ni modismos mexicanos. Usa un registro claro, natural y conversacional, entendible en
+   toda Latinoamerica. Trato "tu" o impersonal segun convenga. NO traduzcas a otro idioma.`;
+  }
+  return `4. Todos los dialogos quedan en el idioma_dialogo (es-AR, registro "vos") SIN traducir. SIEMPRE espanol
+   RIOPLATENSE ARGENTINO (acento de Buenos Aires / porteno), nunca neutro ni mexicano. Usa "voseo"
+   (vos/tenes/mande/mira) y muletillas naturales argentinas (che, dale, posta, en serio, te juro).`;
+}
+
+/**
+ * Arma el prompt de sistema del parser para el acento elegido. El bloque de dialecto
+ * (regla 4) y el idioma_dialogo por defecto se adaptan a "arg" (rioplatense) o "neutro".
+ */
+export function buildParserSystemPrompt(acento: Acento = "arg"): string {
+  return `Sos un director de arte y productor tecnico de anuncios UGC (user generated content) para funnels de quiz.
 Tu trabajo es leer un brief en lenguaje natural (espanol, formato libre) y devolver UN UNICO objeto JSON valido
 que describa el plan de produccion completo. NO escribas texto fuera del JSON.
 
 ESTRUCTURA DE SALIDA (exacta):
 {
   "global": {
-    "idioma_dialogo": string,      // idioma de los dialogos, por defecto "es-AR" (espanol rioplatense, "vos")
+    "idioma_dialogo": string,      // idioma de los dialogos, por defecto "${defaultIdiomaDialogo(acento)}"
     "formato": string,             // relacion de aspecto, por defecto "9:16"
     "reglas_realismo": string,     // reglas de realismo/estilo que apliquen a TODAS las imagenes/videos
-    "negative_prompt": string      // negative prompt global (en ingles)
+    "negative_prompt": string,     // negative prompt global (en ingles)
+    "acento": string               // "${acento}" (registro de voz/dialogo: "arg" rioplatense | "neutro")
   },
   "references": [                  // SOLO si el usuario subio fotos/avatares de referencia (VSL)
     {
@@ -73,9 +102,7 @@ REGLAS OBLIGATORIAS DE CONSISTENCIA:
    y el prompt DEBE incluir explicitamente la instruccion
    "keep identity 100% consistent with the reference, same face, same person".
 3. Todos los prompts visuales (image.prompt, image.negative_prompt, clip.video_prompt) van EN INGLES.
-4. Todos los dialogos quedan en el idioma_dialogo (es-AR, registro "vos") SIN traducir. SIEMPRE espanol
-   RIOPLATENSE ARGENTINO (acento de Buenos Aires / porteno), nunca neutro ni mexicano. Usa "voseo"
-   (vos/tenes/mande/mira) y muletillas naturales argentinas (che, dale, posta, en serio, te juro).
+${parserDialectRule(acento)}
 5. Cada clip referencia una image_id que exista en el proyecto y un asset_id valido.
 6. Asigna "orden" consecutivo segun la secuencia narrativa del brief. Para un VSL largo de talking-head,
    respetá el ORDEN EXACTO de los bloques/lineas del guion: una linea de dialogo = un clip (6 u 8 seg).
@@ -88,12 +115,23 @@ REGLAS OBLIGATORIAS DE CONSISTENCIA:
 11. "formato" SIEMPRE es "9:16" (vertical).
 12. "duracion_seg" SOLO puede ser 4, 6 u 8 (son las unicas duraciones validas de Veo). Si el brief pide otra (ej. 7), redondea a la mas cercana de esas tres.
 13. Para clips de avatar que hablan a camara, el "video_prompt" (en ingles) debe describir el estilo del
-    brief. Para VSL talking-head: plano medio o primer plano, persona hablando directo a camara, movimiento
-    natural de cabeza/manos, lip-sync preciso al audio en espanol, sin texto en pantalla, misma cara/ropa/set.
-    Para UGC/selfie: telefono a distancia de brazo, leve temblor de mano. Para b-roll: movimiento de camara y
-    accion del objeto, sin dialogo.
+    brief de forma EXPLICITA, asi se elige bien el armado del video:
+    - VSL / testimonio formal: usa "talking-head, talks directly to camera", plano medio o primer plano,
+      movimiento natural de cabeza/manos, lip-sync preciso, sin texto en pantalla, misma cara/ropa/set.
+    - UGC / selfie casero: usa "UGC selfie, holds phone at arm's length", leve temblor de mano. SOLO cuando
+      el brief realmente pida ese estilo casero (no lo pongas por defecto en todo).
+    - b-roll: describi el movimiento de camara y la accion del objeto/escena; NO pongas una persona hablando.
+      Si el b-roll lleva voz en off, dejalo igual como b-roll (el audio va por encima).
 
 Devolve SOLO el JSON. Nada de markdown, ni \`\`\`, ni explicaciones.`;
+}
+
+/**
+ * Prompt de sistema del parser para el acento por defecto (arg). Se mantiene como
+ * constante para compatibilidad; el provider arma el prompt segun el acento elegido
+ * con buildParserSystemPrompt(acento).
+ */
+export const PARSER_SYSTEM_PROMPT = buildParserSystemPrompt("arg");
 
 /**
  * responseSchema para forzar JSON estructurado en Gemini (subset de OpenAPI que usa Vertex).
@@ -109,6 +147,7 @@ export const PARSER_RESPONSE_SCHEMA = {
         formato: { type: "STRING" },
         reglas_realismo: { type: "STRING" },
         negative_prompt: { type: "STRING" },
+        acento: { type: "STRING", enum: ["arg", "neutro"] },
       },
       required: ["idioma_dialogo", "formato", "reglas_realismo", "negative_prompt"],
     },
@@ -209,17 +248,29 @@ export function buildReferencesPromptBlock(
  * Plantilla COPIABLE para que el usuario genere el storyboard en CUALQUIER IA
  * (ChatGPT, Gemini, etc.) y obtenga EXACTAMENTE el JSON que la app espera.
  * Asi el formato nunca falla: el usuario pega el JSON resultante en "Pegar PlanJSON".
+ * El acento (arg / neutro) cambia el idioma_dialogo sugerido y la regla de dialecto.
  */
-export const STORYBOARD_PROMPT_TEMPLATE = `Actua como director de arte y productor tecnico de anuncios UGC para un funnel de quiz.
+export function buildStoryboardPromptTemplate(acento: Acento = "arg"): string {
+  const idioma = acento === "neutro" ? "es-419" : "es-AR";
+  const dialogoHint =
+    acento === "neutro"
+      ? "linea hablada en espanol NEUTRO latinoamericano (sin voseo ni modismos); '' si es b-roll mudo"
+      : "linea hablada en es-AR (vos); '' si es b-roll mudo";
+  const dialectoRule =
+    acento === "neutro"
+      ? "- Prompts visuales EN INGLES; dialogos en ESPANOL NEUTRO latinoamericano (sin voseo ni modismos regionales), sin traducir a otro idioma."
+      : "- Prompts visuales EN INGLES; dialogos en es-AR (vos) sin traducir.";
+  return `Actua como director de arte y productor tecnico de anuncios UGC para un funnel de quiz.
 Te voy a pasar un brief de campaña y tenes que devolverme UN UNICO objeto JSON valido (sin markdown, sin texto extra)
 con este formato EXACTO, que despues voy a pegar en mi app "AUGC Pipeline":
 
 {
   "global": {
-    "idioma_dialogo": "es-AR",
+    "idioma_dialogo": "${idioma}",
     "formato": "9:16",
     "reglas_realismo": "string con reglas de estilo/realismo para todas las imagenes y videos",
-    "negative_prompt": "string en ingles con lo que hay que evitar"
+    "negative_prompt": "string en ingles con lo que hay que evitar",
+    "acento": "${acento}"
   },
   "references": [
     { "id": "natalia", "label": "Natalia Reyes" }   // SOLO si subiste fotos de avatares (VSL); si no, []
@@ -246,8 +297,8 @@ con este formato EXACTO, que despues voy a pegar en mi app "AUGC Pipeline":
       "orden": 1,                         // 1,2,3... orden en el anuncio
       "asset_id": "id_de_un_asset",
       "image_id": "id_de_una_imagen",     // frame inicial del video
-      "video_prompt": "movimiento de camara/accion/expresion EN INGLES",
-      "dialogo": "linea hablada en es-AR (vos); '' si es b-roll mudo",
+      "video_prompt": "movimiento de camara/accion/expresion EN INGLES (decí si es talking-head, UGC selfie o b-roll)",
+      "dialogo": "${dialogoHint}",
       "duracion_seg": 8,                  // SOLO 4, 6 u 8
       "etiqueta": "IA" | "FILMAR_REAL",
       "on_screen_text": "texto en pantalla sugerido (opcional)"
@@ -266,7 +317,7 @@ REGLAS QUE TENES QUE CUMPLIR SI O SI:
   avatar son "image2image" con "ref_image_id" a una imagen previa, y el prompt tiene que incluir
   "keep identity 100% consistent with the reference, same face, same person".
 - Para un VSL largo de talking-head: una linea del guion = un clip (6 u 8s), respetando el ORDEN exacto.
-- Prompts visuales EN INGLES; dialogos en es-AR (vos) sin traducir.
+${dialectoRule}
 - "image_id" y "asset_id" de cada clip tienen que existir en el JSON.
 - ids en minuscula, sin espacios (a-z, 0-9, guion bajo).
 - Si falta info, completa con defaults razonables y agregalo en "warnings". NUNCA dejes campos obligatorios vacios.
@@ -274,32 +325,95 @@ REGLAS QUE TENES QUE CUMPLIR SI O SI:
 
 ESTE ES EL BRIEF:
 <<< PEGA ACA TU BRIEF >>>`;
+}
+
+/** Plantilla copiable por defecto (acento argentino), para compatibilidad. */
+export const STORYBOARD_PROMPT_TEMPLATE = buildStoryboardPromptTemplate("arg");
 
 
 
 /* ========================================================================
  * Construccion del prompt de VIDEO para Veo.
  *
- * Basado en un prompt probado por el usuario: animacion selfie/UGC realista,
- * movimiento natural, lip-sync, sin texto en pantalla, 9:16, y un bloque de
- * VOZ & ACENTO que fuerza espanol RIOPLATENSE ARGENTINO (Buenos Aires) SIEMPRE.
+ * Combina la cinematografia del clip con un BLOQUE DE ESTILO de toma elegido de
+ * forma inteligente (UGC/selfie, talking-head o b-roll) y un bloque de VOZ & ACENTO
+ * que respeta el acento elegido por el usuario (argentino rioplatense o neutro).
  * ===================================================================== */
 
-/** Bloque de voz/acento argentino. Se agrega SIEMPRE que haya dialogo. */
+/** Bloque de voz/acento argentino rioplatense. */
 export const ARGENTINE_VOICE_BLOCK = `VOICE & ACCENT (very important): the person speaks in RIOPLATENSE ARGENTINE SPANISH (Buenos Aires / porteno accent), NOT Mexican, NOT Castilian, NOT neutral Latin American Spanish. Use the characteristic Argentine intonation, "voseo" (vos / tenes / mande / mira), the typical "sh" sound for "ll" and "y" (yo = "sho", ya = "sha", llave = "shave"), and a relaxed, melodic portena cadence. Natural adult voice, warm and conversational, casual everyday delivery.`;
+
+/** Bloque de voz/acento NEUTRO latinoamericano (estandar, sin marca regional fuerte). */
+export const NEUTRAL_VOICE_BLOCK = `VOICE & ACCENT (very important): the person speaks in NEUTRAL LATIN AMERICAN SPANISH (standard, accent-neutral), NOT specifically Argentine, NOT Mexican, NOT Castilian. Clear standard pronunciation, no strong regional slang or local idioms, neutral intonation understandable across all of Latin America. Natural adult voice, warm and conversational, casual everyday delivery.`;
+
+/** Devuelve el bloque de voz/acento segun el acento elegido. */
+export function voiceBlockFor(acento: Acento = "arg"): string {
+  return acento === "neutro" ? NEUTRAL_VOICE_BLOCK : ARGENTINE_VOICE_BLOCK;
+}
+
+/** Como pedir el dialogo segun el acento. */
+function dialogueLine(acento: Acento, dialogue: string): string {
+  const lang =
+    acento === "neutro"
+      ? "neutral Latin American Spanish"
+      : "Rioplatense Argentine Spanish";
+  return `[DIALOGO] (speak exactly this, in ${lang}): "${dialogue}"`;
+}
+
+/**
+ * Estilo de toma de un clip de video:
+ *  - "ugc":          selfie casero, telefono a distancia de brazo (UGC).
+ *  - "talking_head": persona hablando directo a camara, plano medio/primer plano (VSL/testimonio).
+ *  - "broll":        plano de recurso (objeto/escena), SIN persona hablando a camara.
+ */
+export type ShotStyle = "ugc" | "talking_head" | "broll";
+
+const UGC_HINTS =
+  /\b(ugc|selfie|arm'?s? length|arms-length|front camera|handheld phone|holds? (the |their )?phone|filming (her|him|them)self|vlog|phone at arm)\b/i;
+const HEAD_HINTS =
+  /\b(talking[- ]?head|to camera|to-camera|direct(ly)? to camera|piece to camera|testimonial|interview|spokesperson|presenter|news anchor|addresses the camera|speaking to the camera)\b/i;
+const BROLL_HINTS =
+  /\b(b-?roll|insert shot|cutaway|product shot|macro( shot)?|close-?up of (the |a )?(product|bottle|jar|glass|food|plate|liquid|object|hands?)|establishing shot|scenery|landscape|empty (room|scene)|no person|stir(ring|red)?|pouring|texture)\b/i;
+
+/**
+ * Decide el estilo de toma de forma inteligente, para NO forzar siempre el estilo
+ * UGC/selfie. Prioridad:
+ *  1. assetTipo === "broll"  -> b-roll (nunca selfie, aunque tenga voz en off).
+ *  2. pistas explicitas en el video_prompt (ugc / talking-head / b-roll).
+ *  3. si hay dialogo y nada explicito -> talking-head (persona hablando, sin forzar selfie).
+ *  4. si no hay dialogo -> b-roll (movimiento de escena, sin persona hablando).
+ */
+export function inferShotStyle(
+  videoPrompt: string | undefined,
+  hasDialogue: boolean,
+  assetTipo?: "avatar" | "broll"
+): ShotStyle {
+  if (assetTipo === "broll") return "broll";
+  const text = videoPrompt ?? "";
+  if (UGC_HINTS.test(text)) return "ugc";
+  if (HEAD_HINTS.test(text)) return "talking_head";
+  if (BROLL_HINTS.test(text)) return "broll";
+  return hasDialogue ? "talking_head" : "broll";
+}
 
 export interface VeoPromptInput {
   /** Descripcion visual/cinematografica del clip (en ingles). */
   videoPrompt: string;
-  /** Linea de dialogo en es-AR; "" si es b-roll mudo. */
+  /** Linea de dialogo; "" si es b-roll mudo. */
   dialogue?: string;
   durationSec: number;
   aspectRatio?: string;
   /** texto en pantalla a evitar quemar en el video (lo agrega el usuario aparte). */
   noOnScreenText?: boolean;
+  /** Acento/registro de la voz. Default "arg" (rioplatense). */
+  acento?: Acento;
+  /** Tipo del asset del clip (avatar/broll). Ayuda a decidir el estilo de toma. */
+  assetTipo?: "avatar" | "broll";
+  /** Estilo de toma EXPLICITO. Si no viene, se infiere del video_prompt/assetTipo. */
+  shotStyle?: ShotStyle;
   /**
    * OVERRIDE del prompt final. Si viene con contenido, se devuelve TAL CUAL y se ignora
-   * todo el armado automatico (estilo UGC/selfie, lip-sync, voz/acento, etc.). Permite que
+   * todo el armado automatico (estilo de toma, lip-sync, voz/acento, etc.). Permite que
    * el usuario controle exactamente lo que se le manda a Veo (ej. b-roll sin persona hablando).
    */
   override?: string;
@@ -307,7 +421,8 @@ export interface VeoPromptInput {
 
 /**
  * Arma el prompt final que se manda a Veo, combinando la cinematografia del clip
- * con el estilo UGC/selfie y el bloque de acento argentino (cuando hay dialogo).
+ * con el estilo de toma adecuado (UGC/selfie, talking-head o b-roll, elegido de forma
+ * inteligente y NO forzando selfie siempre) y el bloque de voz/acento elegido.
  *
  * Si `input.override` tiene contenido, se devuelve EXACTAMENTE ese texto (sin armado
  * automatico): el usuario tiene control total sobre lo que se ejecuta.
@@ -319,7 +434,10 @@ export function buildVeoVideoPrompt(input: VeoPromptInput): string {
 
   const dur = Math.max(1, Math.round(input.durationSec));
   const aspect = input.aspectRatio ?? "9:16";
+  const acento: Acento = input.acento ?? "arg";
   const hasDialogue = Boolean(input.dialogue && input.dialogue.trim().length > 0);
+  const style: ShotStyle =
+    input.shotStyle ?? inferShotStyle(input.videoPrompt, hasDialogue, input.assetTipo);
 
   const parts: string[] = [];
   parts.push(
@@ -329,22 +447,51 @@ export function buildVeoVideoPrompt(input: VeoPromptInput): string {
     parts.push(input.videoPrompt.trim());
   }
 
+  if (style === "broll") {
+    // B-roll: nunca persona hablando a camara. Si hay "dialogo", es voz en off.
+    if (hasDialogue) {
+      parts.push(
+        "B-roll style: focus on the scene and the action/object described, smooth natural camera " +
+          "movement and realistic lighting. Do NOT show a person talking to camera, no lip-sync. " +
+          `No on-screen text. ${aspect}.`
+      );
+      parts.push(voiceBlockFor(acento));
+      parts.push(
+        `[VOICE-OVER NARRATION] (heard over the footage, spoken in ${
+          acento === "neutro" ? "neutral Latin American Spanish" : "Rioplatense Argentine Spanish"
+        }): "${input.dialogue!.trim()}"`
+      );
+    } else {
+      parts.push(
+        "B-roll style: smooth natural motion with subtle camera movement and realistic lighting, " +
+          `focus on the scene/object. No person talking, no spoken dialogue. No on-screen text. ${aspect}.`
+      );
+    }
+    return parts.join("\n\n");
+  }
+
+  // Estilos con persona hablando a camara (ugc / talking_head).
   if (hasDialogue) {
-    parts.push(
-      "UGC selfie style: the person holds their phone at arm's length and talks directly to camera, " +
-        "natural casual head and hand movement, warm hopeful conversational tone, subtle handheld shake, " +
-        "accurate lip-sync to the spoken line. No on-screen text. " +
-        aspect +
-        "."
-    );
-    parts.push(ARGENTINE_VOICE_BLOCK);
-    parts.push(`[DIALOGO] (speak exactly this, in Rioplatense Argentine Spanish): "${input.dialogue!.trim()}"`);
+    if (style === "ugc") {
+      parts.push(
+        "UGC selfie style: the person holds their phone at arm's length and talks directly to camera, " +
+          "natural casual head and hand movement, warm conversational tone, subtle handheld shake, " +
+          `accurate lip-sync to the spoken line. No on-screen text. ${aspect}.`
+      );
+    } else {
+      // talking_head: directo a camara, sin forzar el selfie con telefono.
+      parts.push(
+        "Talking-head style: the person talks directly to camera in a natural, conversational way, " +
+          "medium or close-up framing, subtle natural head and hand movement, steady framing, realistic " +
+          `expression, accurate lip-sync to the spoken line. No on-screen text. ${aspect}.`
+      );
+    }
+    parts.push(voiceBlockFor(acento));
+    parts.push(dialogueLine(acento, input.dialogue!.trim()));
   } else {
     parts.push(
       "Smooth natural motion with subtle camera movement and realistic lighting. " +
-        "No spoken dialogue. No on-screen text. " +
-        aspect +
-        "."
+        `No spoken dialogue. No on-screen text. ${aspect}.`
     );
   }
 
