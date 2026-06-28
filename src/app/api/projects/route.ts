@@ -36,11 +36,18 @@ export async function POST(req: Request) {
       imageVariants?: number;
       defaultResolution?: string;
       autoApprove?: boolean;
+      accent?: "arg" | "neutro";
     };
 
     const validation = validatePlan(body.plan);
     if (!validation.ok) {
       return badRequest("El plan no es valido.", validation.errors);
+    }
+
+    // El acento elegido en la UI (deslizable neutro/arg) manda sobre el plan: lo
+    // fijamos en plan.global.acento para que la voz de los videos lo respete.
+    if (body.accent === "arg" || body.accent === "neutro") {
+      validation.plan.global.acento = body.accent;
     }
 
     const id = randomUUID();

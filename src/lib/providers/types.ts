@@ -4,7 +4,7 @@
  *
  * El modelo concreto se pasa POR LLAMADA (lo elige el usuario por proyecto).
  */
-import type { ProjectPlan } from "../schema";
+import type { Acento, ProjectPlan } from "../schema";
 
 /**
  * Error HTTP de un proveedor (Vertex). Lleva el status y, si vino, el Retry-After
@@ -46,6 +46,8 @@ export interface LlmProvider {
        * planos son image2image contra su reference.id.
        */
       references?: { id: string; label?: string }[];
+      /** Acento/registro de los dialogos a generar: "arg" rioplatense | "neutro". */
+      accent?: Acento;
     }
   ): Promise<ProjectPlan>;
 }
@@ -95,6 +97,10 @@ export interface VideoGenInput {
   dialogue?: string;
   /** id de modelo de video (Veo 3.1). */
   model?: string;
+  /** Acento/registro de la voz hablada: "arg" rioplatense | "neutro". Default "arg". */
+  accent?: Acento;
+  /** Tipo del asset del clip (avatar/broll); ayuda a elegir el estilo de toma (no forzar selfie). */
+  assetTipo?: "avatar" | "broll";
   /**
    * OVERRIDE del prompt final. Si viene con contenido, se manda TAL CUAL a Veo y se
    * ignora el armado automatico (estilo UGC/selfie, lip-sync, voz/acento).
@@ -121,6 +127,10 @@ export interface VideoExtendInput {
   resolution?: string;
   dialogue?: string;
   model?: string;
+  /** Acento/registro de la voz hablada: "arg" rioplatense | "neutro". Default "arg". */
+  accent?: Acento;
+  /** Tipo del asset del clip (avatar/broll); ayuda a elegir el estilo de toma. */
+  assetTipo?: "avatar" | "broll";
   /** OVERRIDE del prompt final (se manda tal cual, sin armado automatico). */
   promptOverride?: string;
 }

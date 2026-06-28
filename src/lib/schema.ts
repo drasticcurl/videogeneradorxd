@@ -70,11 +70,22 @@ export const ClipSchema = z.object({
   final_prompt: z.string().optional(),
 });
 
+/**
+ * Acento/registro de la voz hablada en los videos y de los dialogos que arma el parser:
+ *  - "arg":    espanol RIOPLATENSE ARGENTINO (Buenos Aires, voseo, muletillas portenas).
+ *  - "neutro": espanol NEUTRO latinoamericano (estandar, sin marca regional fuerte).
+ * Se elige con el deslizable de la UI antes de generar los prompts.
+ */
+export const ACENTOS = ["arg", "neutro"] as const;
+export type Acento = (typeof ACENTOS)[number];
+
 export const GlobalSchema = z.object({
   idioma_dialogo: z.string().default("es-AR"),
   formato: z.string().default("9:16"),
   reglas_realismo: z.string().default(""),
   negative_prompt: z.string().default(""),
+  /** Acento/registro de la voz y de los dialogos. Default "arg" (compat con lo anterior). */
+  acento: z.enum(ACENTOS).default("arg"),
 });
 
 export const ProjectPlanSchema = z
