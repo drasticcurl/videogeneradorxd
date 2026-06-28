@@ -123,6 +123,20 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     return m;
   }, [project]);
 
+  // Tipo del asset (avatar/broll) por clip.id, para inferir bien el estilo de toma.
+  const assetTipoByRef = useMemo(() => {
+    const tipoByAsset = new Map<string, "avatar" | "broll">();
+    project?.plan.assets.forEach((a) => tipoByAsset.set(a.id, a.tipo));
+    const m = new Map<string, "avatar" | "broll">();
+    project?.plan.clips.forEach((c) => {
+      const t = tipoByAsset.get(c.asset_id);
+      if (t) m.set(c.id, t);
+    });
+    return m;
+  }, [project]);
+
+  const projectAccent: "arg" | "neutro" = project?.plan.global.acento ?? "arg";
+
   const imageModels = config?.catalog.image ?? [];
   const videoModels = config?.catalog.video ?? [];
   const projectImageModel = project?.models.image ?? "";
@@ -198,6 +212,8 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     finalPromptByRef,
     modelOptions: videoModels,
     projectModel: projectVideoModel,
+    accent: projectAccent,
+    assetTipoByRef,
   };
 
   // Props extra para videos (selector de resolucion por clip).
@@ -370,6 +386,8 @@ interface JobMeta {
   finalPromptByRef: Map<string, string>;
   modelOptions: { id: string; label: string }[];
   projectModel: string;
+  accent?: "arg" | "neutro";
+  assetTipoByRef?: Map<string, "avatar" | "broll">;
 }
 
 interface VideoExtra {
@@ -411,6 +429,8 @@ function Group({
               currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
               currentDuration={meta.durationByRef.get(j.refId)}
               currentFinalPrompt={meta.finalPromptByRef.get(j.refId) ?? ""}
+              currentAccent={meta.accent}
+              currentAssetTipo={meta.assetTipoByRef?.get(j.refId)}
               modelOptions={meta.modelOptions}
               projectModel={meta.projectModel}
               {...handlers}
@@ -460,6 +480,8 @@ function Filmstrip({
                   currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
                   currentDuration={meta.durationByRef.get(j.refId)}
                   currentFinalPrompt={meta.finalPromptByRef.get(j.refId) ?? ""}
+                  currentAccent={meta.accent}
+                  currentAssetTipo={meta.assetTipoByRef?.get(j.refId)}
                   modelOptions={meta.modelOptions}
                   projectModel={meta.projectModel}
                   {...handlers}

@@ -4,7 +4,7 @@
  * proyecto actual, jobs y logs en vivo. Llamadas al backend centralizadas aca.
  */
 import { create } from "zustand";
-import type { ProjectPlan } from "@/lib/schema";
+import type { Acento, ProjectPlan } from "@/lib/schema";
 import type {
   JobRecord,
   LogEntry,
@@ -75,6 +75,12 @@ interface ProjectState {
   imageVariants: number;
   defaultResolution: string;
   /**
+   * Acento/registro de la voz hablada y de los dialogos: "arg" (rioplatense argentino)
+   * o "neutro" (espanol neutro latinoamericano). Lo elige el usuario con el deslizable
+   * antes de generar; se persiste en plan.global.acento.
+   */
+  accent: Acento;
+  /**
    * Si true, cada imagen/video se aprueba sola al terminar (modo "dejar correr").
    * Si false, cada job queda en awaiting_approval esperando confirmacion manual.
    * Lo elige el usuario al crear el proyecto. Default sugerido: true para VSL
@@ -96,6 +102,8 @@ interface ProjectState {
   setModel: (kind: keyof ProjectModels, id: string) => void;
   setImageVariants: (n: number) => void;
   setDefaultResolution: (r: string) => void;
+  /** Cambia el acento (neutro/arg). Si hay plan cargado, lo refleja en plan.global.acento. */
+  setAccent: (a: Acento) => void;
   /** Toggle explicito del usuario (marca autoApproveUserSet = true). */
   setAutoApprove: (v: boolean) => void;
 
@@ -199,6 +207,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   selectedModels: { ...FALLBACK_MODELS },
   imageVariants: 1,
   defaultResolution: "720p",
+  accent: "arg",
   // Default OFF para videos "normales" (el usuario aprueba cada uno). En la pagina
   // se ajusta a ON automaticamente cuando se suben avatares de referencia (VSL),
   // a menos que el usuario haya tocado el toggle.
@@ -217,6 +226,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((s) => ({ selectedModels: { ...s.selectedModels, [kind]: id } })),
   setImageVariants: (n) => set({ imageVariants: Math.min(4, Math.max(1, n)) }),
   setDefaultResolution: (r) => set({ defaultResolution: r }),
+  setAccent: (a) =>
+    set((s) => ({
+      accent: a,
+      // Si ya hay un plan cargado, reflejamos el acento en su global para que el
+      // preview y la generacion lo usen sin tener que reparsear.
+      plan: s.plan ? { ...s.plan, global: { ...s.plan.global, acento: a } } : s.plan,
+    })),
   setAutoApprove: (v) => set({ autoApprove: v, autoApproveUserSet: true }),
 
   addReferenceFile: async (file) => {
@@ -326,7 +342,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   parseBrief: async () => {
-    const { brief, selectedModels, imageVariants, references } = get();
+    const { brief, selectedModels, imageVariants, references, accent } = get();
     set({ parsing: true, error: null });
     try {
       const data = await jsonFetch<{ plan: ProjectPlan; estimate: CostEstimate }>(
@@ -338,6 +354,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             brief,
             model: selectedModels.llm,
             imageVariants,
+            accent,
             references: references.map((r) => ({ id: r.id, label: r.label })),
           }),
         }
@@ -376,6 +393,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       logs: [],
       autoApprove: false,
       autoApproveUserSet: false,
+      accent: "arg",
     }),
 
   loadProject: async (id) => {
@@ -394,6 +412,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       selectedModels: data.project.models,
       imageVariants: data.project.imageVariants,
       defaultResolution: data.project.defaultResolution ?? "720p",
+      accent: data.project.plan.global.acento ?? "arg",
     });
   },
 

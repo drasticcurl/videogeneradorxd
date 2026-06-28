@@ -5,10 +5,10 @@
 import { vertexBaseUrl, assertVertexConfig, resolveModel } from "../../config";
 import {
   PARSER_RESPONSE_SCHEMA,
-  PARSER_SYSTEM_PROMPT,
+  buildParserSystemPrompt,
   buildReferencesPromptBlock,
 } from "../../prompts";
-import { validatePlan, type ProjectPlan } from "../../schema";
+import { validatePlan, type Acento, type ProjectPlan } from "../../schema";
 import type { LlmProvider } from "../types";
 import { authHeaders } from "./auth";
 
@@ -23,12 +23,13 @@ interface GeminiResponse {
 export class VertexLlmProvider implements LlmProvider {
   async parseBrief(
     text: string,
-    opts?: { model?: string; references?: { id: string; label?: string }[] }
+    opts?: { model?: string; references?: { id: string; label?: string }[]; accent?: Acento }
   ): Promise<ProjectPlan> {
     assertVertexConfig();
     const model = resolveModel("llm", opts?.model);
     const url = `${vertexBaseUrl()}/${model}:generateContent`;
 
+    const accent: Acento = opts?.accent ?? "arg";
     const refBlock = buildReferencesPromptBlock(opts?.references);
     const userText = refBlock
       ? `${refBlock}\n\nBRIEF:\n${text}`
@@ -37,7 +38,7 @@ export class VertexLlmProvider implements LlmProvider {
     const body = {
       systemInstruction: {
         role: "system",
-        parts: [{ text: PARSER_SYSTEM_PROMPT }],
+        parts: [{ text: buildParserSystemPrompt(accent) }],
       },
       contents: [
         {
