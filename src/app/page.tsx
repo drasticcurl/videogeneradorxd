@@ -17,7 +17,7 @@ import { CostEstimatePanel } from "@/components/CostEstimatePanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ModelSelectorBar } from "@/components/ModelSelectorBar";
 import { SAMPLE_BRIEF } from "@/lib/sampleBrief";
-import { STORYBOARD_PROMPT_TEMPLATE } from "@/lib/prompts";
+import { buildStoryboardPromptTemplate } from "@/lib/prompts";
 
 interface ProjectSummary {
   id: string;
@@ -44,6 +44,8 @@ export default function HomePage() {
     references,
     autoApprove,
     setAutoApprove,
+    accent,
+    setAccent,
     setBrief,
     loadConfig,
     parseBrief,
@@ -101,6 +103,7 @@ export default function HomePage() {
           imageVariants,
           defaultResolution,
           autoApprove,
+          accent,
         }),
       });
       const createData = await createRes.json();
@@ -127,7 +130,7 @@ export default function HomePage() {
   }
 
   function copyPromptTemplate() {
-    navigator.clipboard?.writeText(STORYBOARD_PROMPT_TEMPLATE);
+    navigator.clipboard?.writeText(buildStoryboardPromptTemplate(accent));
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   }
@@ -145,6 +148,52 @@ export default function HomePage() {
           placeholder="Nombre del proyecto (opcional)"
           className="w-full rounded-lg border border-slate-700 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
         />
+
+        {/* Deslizable de ACENTO de la voz/dialogos: Neutro <-> Argentino.
+            Afecta tanto los dialogos que arma la IA como el bloque de voz que se
+            le manda a Veo al generar cada video. Se guarda en plan.global.acento. */}
+        <div className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-panel p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex-1">
+            <span className="font-medium text-slate-100">Acento de la voz y los diálogos</span>
+            <span className="block text-xs text-slate-400">
+              {accent === "arg" ? (
+                <>
+                  <b>Argentino</b> (rioplatense / porteño): voseo y tonada de Buenos
+                  Aires en el audio y en los diálogos.
+                </>
+              ) : (
+                <>
+                  <b>Neutro</b>: español latinoamericano estándar, sin voseo ni
+                  modismos regionales.
+                </>
+              )}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1 rounded-lg border border-slate-700 bg-ink p-1">
+            <button
+              type="button"
+              onClick={() => setAccent("neutro")}
+              className={`rounded-md px-3 py-1.5 text-sm transition ${
+                accent === "neutro"
+                  ? "bg-accent text-white"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              Neutro
+            </button>
+            <button
+              type="button"
+              onClick={() => setAccent("arg")}
+              className={`rounded-md px-3 py-1.5 text-sm transition ${
+                accent === "arg"
+                  ? "bg-accent text-white"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              🇦🇷 Argentino
+            </button>
+          </div>
+        </div>
 
         {/* Switch de auto-aprobacion del proyecto.
             - OFF (videos normales): cada imagen/video queda en "esperando aprobacion"

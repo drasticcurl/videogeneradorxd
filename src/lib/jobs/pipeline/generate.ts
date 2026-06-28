@@ -208,6 +208,7 @@ async function runVideoGeneration(
     model,
   });
 
+  const assetTipo = project.plan.assets.find((a) => a.id === clip.asset_id)?.tipo;
   const result = await getVideoProvider().generate({
     imageBytes,
     imageMimeType: "image/png",
@@ -217,6 +218,8 @@ async function runVideoGeneration(
     resolution,
     dialogue: clip.dialogo,
     model,
+    accent: project.plan.global.acento ?? "arg",
+    assetTipo,
     promptOverride: clip.final_prompt,
   });
 

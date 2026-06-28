@@ -62,6 +62,8 @@ export async function GET(
         dialogue: clip.dialogo,
         durationSec: clip.duracion_seg,
         aspectRatio: ASPECT_RATIO,
+        acento: project.plan.global.acento ?? "arg",
+        assetTipo: project.plan.assets.find((a) => a.id === clip.asset_id)?.tipo,
       });
       const override = clip.final_prompt?.trim() ? clip.final_prompt : null;
       // executedPrompt: lo que REALMENTE se manda a Veo (override si existe, si no el auto).

@@ -29,6 +29,7 @@ function demoPlan(brief: string): ProjectPlan {
       reglas_realismo:
         "Realismo documental, luz natural de cocina, piel con textura real, sin retoque excesivo.",
       negative_prompt: DEFAULT_NEGATIVE,
+      acento: "arg",
     },
     references: [],
     assets: [
@@ -232,6 +233,7 @@ function vslDemoPlan(
       reglas_realismo:
         "Talking head profesional pero cercano, luz natural suave, piel con textura real, misma cara/ropa/set en todos los planos.",
       negative_prompt: DEFAULT_NEGATIVE,
+      acento: "arg",
     },
     references: refs.map((r) => ({ id: r.id, label: r.label })),
     assets,
@@ -247,13 +249,19 @@ function vslDemoPlan(
 export class MockLlmProvider implements LlmProvider {
   async parseBrief(
     _text: string,
-    _opts?: { model?: string; references?: { id: string; label?: string }[] }
+    _opts?: {
+      model?: string;
+      references?: { id: string; label?: string }[];
+      accent?: "arg" | "neutro";
+    }
   ): Promise<ProjectPlan> {
     // Simulamos latencia de la LLM.
     await new Promise((r) => setTimeout(r, 300));
     const refs = _opts?.references ?? [];
-    if (refs.length > 0) return vslDemoPlan(_text, refs);
-    return demoPlan(_text);
+    const plan = refs.length > 0 ? vslDemoPlan(_text, refs) : demoPlan(_text);
+    // Reflejamos el acento elegido en el plan demo (la voz se arma con esto).
+    plan.global.acento = _opts?.accent ?? "arg";
+    return plan;
   }
 }
 
