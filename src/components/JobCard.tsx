@@ -32,6 +32,10 @@ interface Props {
   currentDuration?: number;
   /** override del prompt final actual del clip (solo videos); "" si no hay override */
   currentFinalPrompt?: string;
+  /** acento del proyecto (solo videos) para que el preview del prompt coincida */
+  currentAccent?: "arg" | "neutro";
+  /** tipo del asset del clip (solo videos) para inferir bien el estilo de toma */
+  currentAssetTipo?: "avatar" | "broll";
   /** opciones de modelo para el selector (catalogo de imagen o de video segun el tipo) */
   modelOptions: ModelOption[];
   /** modelo del proyecto para este tipo (default si no hay override) */
@@ -71,6 +75,8 @@ export function JobCard({
   currentDialogue,
   currentDuration,
   currentFinalPrompt,
+  currentAccent,
+  currentAssetTipo,
   modelOptions,
   projectModel,
   onApprove,
@@ -127,6 +133,8 @@ export function JobCard({
       dialogue: dialogueText,
       durationSec: durationChoice,
       aspectRatio: "9:16",
+      acento: currentAccent ?? "arg",
+      assetTipo: currentAssetTipo,
     });
   }
 

@@ -164,6 +164,8 @@ export async function extendVideoJob(jobId: string): Promise<JobRecord | undefin
     resolution,
     dialogue: clip.dialogo,
     model,
+    accent: project.plan.global.acento ?? "arg",
+    assetTipo: project.plan.assets.find((a) => a.id === clip.asset_id)?.tipo,
     promptOverride: clip.final_prompt,
   });
 
