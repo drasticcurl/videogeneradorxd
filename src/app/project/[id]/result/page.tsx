@@ -17,6 +17,8 @@ export default function ResultPage({ params }: { params: { id: string } }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [stitchMsg, setStitchMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showJson, setShowJson] = useState(false);
+  const [jsonCopied, setJsonCopied] = useState(false);
 
   useEffect(() => {
     loadConfig();
@@ -63,6 +65,43 @@ export default function ResultPage({ params }: { params: { id: string } }) {
   const outputPath = project
     ? `${config?.outputDir ?? "./output"}/${project.id}`
     : "";
+
+  // JSON con todos los videos (clips) del proyecto, listo para copiar.
+  const videosJson = manifest
+    ? JSON.stringify(
+        {
+          project_id: manifest.project_id,
+          name: manifest.name,
+          final_video: manifest.final_video,
+          clips: [...manifest.clips]
+            .sort((a, b) => a.orden - b.orden)
+            .map((c) => ({
+              id: c.id,
+              orden: c.orden,
+              etiqueta: c.etiqueta,
+              status: c.status,
+              duracion_seg: c.duracion_seg,
+              resolucion: c.resolucion ?? null,
+              dialogo: c.dialogo ?? "",
+              on_screen_text: c.on_screen_text ?? "",
+              model: c.model,
+              file: c.file,
+            })),
+        },
+        null,
+        2
+      )
+    : "";
+
+  async function handleCopyJson() {
+    try {
+      await navigator.clipboard?.writeText(videosJson);
+      setJsonCopied(true);
+      setTimeout(() => setJsonCopied(false), 1500);
+    } catch {
+      /* clipboard no disponible */
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -139,6 +178,42 @@ export default function ResultPage({ params }: { params: { id: string } }) {
             controls
             className="max-h-[480px] rounded-md"
           />
+        </div>
+      )}
+
+      {/* JSON de todos los videos */}
+      {manifest && manifest.clips.length > 0 && (
+        <div className="rounded-lg border border-slate-700 bg-panel p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold text-slate-200">
+                JSON de todos los videos
+              </div>
+              <p className="text-xs text-slate-500">
+                Data de los {manifest.clips.length} clips (orden, estado, diálogo,
+                modelo, archivo). Copialo para reutilizarlo donde quieras.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowJson((v) => !v)}
+                className="rounded-md border border-slate-600 px-3 py-1.5 text-xs hover:bg-slate-800"
+              >
+                {showJson ? "Ocultar" : "Ver JSON"}
+              </button>
+              <button
+                onClick={() => void handleCopyJson()}
+                className="rounded-md border border-slate-600 px-3 py-1.5 text-xs hover:bg-slate-800"
+              >
+                {jsonCopied ? "✓ copiado" : "Copiar JSON"}
+              </button>
+            </div>
+          </div>
+          {showJson && (
+            <pre className="mt-3 max-h-96 overflow-auto rounded-md border border-slate-800 bg-ink p-3 text-[11px] leading-relaxed text-slate-300">
+              <code>{videosJson}</code>
+            </pre>
+          )}
         </div>
       )}
 
