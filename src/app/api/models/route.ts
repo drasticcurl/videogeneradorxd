@@ -26,27 +26,15 @@ interface ModelsResponse {
 
 let cache: { ts: number; data: ModelsResponse } | null = null;
 
-/** Junta el catalogo dinamico con el curado: los curados van primero (con su label lindo). */
-function mergeCatalog(dynamic: ModelCatalog): ModelCatalog {
+/**
+ * Catalogo BLOQUEADO: exponemos UNICAMENTE los modelos curados de MODEL_CATALOG,
+ * ignorando cualquier otro modelo que Vertex liste. Solo se conserva el listado
+ * dinamico para poder marcar la fuente como "vertex" cuando el proyecto responde.
+ */
+function mergeCatalog(_dynamic: ModelCatalog): ModelCatalog {
   const out: ModelCatalog = { llm: [], image: [], video: [] };
   for (const k of ["llm", "image", "video"] as const) {
-    const curatedIds = MODEL_CATALOG[k].map((o) => o.id);
-    const labelById = new Map<string, string>();
-    for (const o of dynamic[k]) labelById.set(o.id, o.label);
-    for (const o of MODEL_CATALOG[k]) labelById.set(o.id, o.label); // label curado pisa al id pelado
-
-    const dynIds = dynamic[k].map((o) => o.id);
-    const curated = curatedIds.filter(
-      (id) => labelById.has(id) // siempre true, pero deja los curados primero
-    );
-    const others = dynIds
-      .filter((id) => !curatedIds.includes(id))
-      .sort((a, b) => a.localeCompare(b));
-
-    out[k] = [...curated, ...others].map((id) => ({
-      id,
-      label: labelById.get(id) ?? id,
-    }));
+    out[k] = MODEL_CATALOG[k].map((o) => ({ id: o.id, label: o.label }));
   }
   return out;
 }
