@@ -191,9 +191,9 @@ function dataUrlToBlob(dataUrl: string): Blob {
 }
 
 const FALLBACK_MODELS: ProjectModels = {
-  llm: "gemini-2.5-flash",
+  llm: "gemini-2.5-pro",
   image: "gemini-2.5-flash-image",
-  video: "veo-3.1-generate-001",
+  video: "veo-3.1-lite-generate-001",
 };
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
