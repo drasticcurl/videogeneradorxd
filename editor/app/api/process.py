@@ -26,6 +26,7 @@ Referencias de requisitos: 9.5, 10.1, 10.2.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import List, Optional
 
@@ -38,11 +39,18 @@ from app.jobs.manager import JobManager, gestor_jobs
 from app.jobs.runner import JobRunner
 from app.models.errors import error_envelope
 from app.models.settings import Ajustes, validar_ajustes
+from app.storage.backend import (
+    StorageBackend,
+    get_storage_backend,
+    resolver_orden_clips as _resolver_orden_backend,
+)
 from app.storage.clip_store import ClipStore
 from app.storage.music_store import MusicStore
 from app.storage.workdir import JobWorkdir
 
 router = APIRouter(tags=["procesar"])
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +94,23 @@ def _resolver_clip_por_id(clip_id: str) -> Optional[str]:
     return str(coincidencias[0]) if coincidencias else None
 
 
+def _resolver_clip_por_key(clip_key: str, backend: StorageBackend, edit_job_id: str, workdir: str) -> Optional[str]:
+    """Resolve a clip by Shared_Volume key (cloud mode).
+
+    Materializes the input from the storage backend into the workdir.
+    Returns the local path of the materialized file, or None on failure.
+    """
+    if not clip_key:
+        return None
+    try:
+        from pathlib import Path
+        materialized = backend.materialize_input(edit_job_id, clip_key, Path(workdir))
+        return str(materialized)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("Failed to materialize clip key %s: %s", clip_key, exc)
+        return None
+
+
 # Ejecutor compartido, cableado con el Gestor de Jobs por defecto de la app y con
 # los resolutores de música y de clips. En pruebas se sustituye por un runner con
 # pasos mockeados vía ``app.dependency_overrides[obtener_job_runner]``.
@@ -122,6 +147,10 @@ class ProcesarRequest(BaseModel):
     orden_clips: Optional[List[str]] = Field(default=None)
     musica_id: Optional[str] = Field(default=None)
     ajustes: Optional[Ajustes] = Field(default=None)
+    # Cloud mode: edit_job_id from the generator, used for Shared_Volume key
+    # namespacing. When provided, clips in orden_clips are treated as Shared_Volume
+    # keys rather than local clip store IDs.
+    edit_job_id: Optional[str] = Field(default=None)
     # TRANSITORIO (spec subtitulos-ia-remotion, Req 2.2, 8.3, 14.3): clave de
     # OpenAI para la corrección con IA. Viaja con la petición de procesado y se
     # propaga al ``JobManager`` EN MEMORIA; **nunca** se serializa a disco
@@ -192,6 +221,27 @@ async def procesar(
     # --- Creación del Job y lanzamiento en background (Req 10.1) ---
     job_id = f"job_{uuid.uuid4().hex}"
     workdir = str(JobWorkdir(job_id).root)
+
+    # In cloud/volume mode with an edit_job_id, materialize inputs from the
+    # Shared_Volume before launching the pipeline. The orden_clips entries are
+    # treated as Shared_Volume keys instead of local clip store IDs.
+    if peticion.edit_job_id and config.is_volume_backend():
+        backend = get_storage_backend()
+        from pathlib import Path
+        workdir_path = Path(workdir)
+        workdir_path.mkdir(parents=True, exist_ok=True)
+        try:
+            materialized = _resolver_orden_backend(
+                orden, backend, peticion.edit_job_id, workdir_path
+            )
+            # Replace orden with materialized local paths
+            orden = [str(p) for p in materialized]
+        except FileNotFoundError as exc:
+            return _invalid_request(
+                f"Input materialization failed: {exc}",
+                {"campo": "orden_clips", "error": str(exc)},
+            )
+
     manager.crear_job(
         job_id,
         orden,
@@ -203,6 +253,10 @@ async def procesar(
         # elimina al alcanzar un estado terminal. Nunca se persiste ni se loguea.
         openai_api_key=peticion.openai_api_key,
     )
+
+    # Store the edit_job_id on the internal job for persist_output later
+    if peticion.edit_job_id:
+        manager.establecer_edit_job_id(job_id, peticion.edit_job_id)
 
     # Lanza el pipeline sin bloquear: ``lanzar`` programa la ejecución en el
     # executor y devuelve de inmediato, por lo que la respuesta llega en <= 2 s.

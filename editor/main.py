@@ -221,9 +221,15 @@ def salud() -> dict[str, str]:
 if __name__ == "__main__":
     import uvicorn
 
+    # In cloud mode (sidecar), bind to localhost only (127.0.0.1) — the editor
+    # is reachable only from the generator container over localhost (Req 9.1).
+    # In local mode, bind to the configured BACKEND_HOST (127.0.0.1 by default,
+    # but could be 0.0.0.0 for local dev with external access).
+    host = "127.0.0.1" if config.is_cloud_mode() else config.BACKEND_HOST
+
     uvicorn.run(
         "main:app",
-        host=config.BACKEND_HOST,
+        host=host,
         port=config.BACKEND_PORT,
         reload=False,
     )
