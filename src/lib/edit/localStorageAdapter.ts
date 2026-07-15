@@ -14,7 +14,37 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { config } from "../config";
 import type { StorageAdapter } from "./storageAdapter";
-import { deriveKey } from "./storageAdapter";
+import { deriveKey, relativeInputKey } from "./storageAdapter";
+
+async function readFileRange(
+  filePath: string,
+  range: { start: number; end?: number }
+): Promise<Uint8Array> {
+  const fd = await fsp.open(filePath, "r");
+  try {
+    const stat = await fd.stat();
+    const endExclusive = range.end === undefined
+      ? stat.size
+      : Math.min(range.end + 1, stat.size);
+    const length = Math.max(0, endExclusive - range.start);
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const { bytesRead } = await fd.read(
+        buffer,
+        offset,
+        length - offset,
+        range.start + offset
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    const result = buffer.subarray(0, offset);
+    return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+  } finally {
+    await fd.close();
+  }
+}
 
 export class LocalStorageAdapter implements StorageAdapter {
   private readonly baseDir: string;
@@ -51,6 +81,20 @@ export class LocalStorageAdapter implements StorageAdapter {
     return key;
   }
 
+  async toEditorInputReference(
+    editJobId: string,
+    storedKey: string
+  ): Promise<string> {
+    relativeInputKey(editJobId, storedKey);
+    const abs = path.resolve(this.resolveKey(storedKey));
+    const root = path.resolve(this.baseDir);
+    if (!abs.startsWith(`${root}${path.sep}`)) {
+      throw new Error(`Local editor input escaped storage root: ${storedKey}`);
+    }
+    await fsp.access(abs);
+    return abs;
+  }
+
   async getOutputStream(
     editJobId: string,
     relKey: string,
@@ -58,12 +102,16 @@ export class LocalStorageAdapter implements StorageAdapter {
   ): Promise<Uint8Array> {
     const key = deriveKey(editJobId, "outputs", relKey);
     const abs = this.resolveKey(key);
-    const buf = await fsp.readFile(abs);
     if (range) {
-      const end = range.end !== undefined ? range.end + 1 : buf.length;
-      return new Uint8Array(buf.buffer, buf.byteOffset + range.start, end - range.start);
+      return readFileRange(abs, range);
     }
+    const buf = await fsp.readFile(abs);
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+
+  async getOutputSize(editJobId: string, relKey: string): Promise<number> {
+    const key = deriveKey(editJobId, "outputs", relKey);
+    return (await fsp.stat(this.resolveKey(key))).size;
   }
 
   /**

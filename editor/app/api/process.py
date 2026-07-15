@@ -65,6 +65,13 @@ def _resolver_musica_por_id(musica_id: Optional[str]) -> Optional[str]:
     """
     if not musica_id:
         return None
+    from pathlib import Path
+    materialized = config.resolve_permitted_input_file(musica_id)
+    if materialized is not None:
+        return str(materialized)
+    if Path(musica_id).is_absolute():
+        logger.warning("Rejected music path outside permitted local roots: %s", musica_id)
+        return None
     base = MusicStore().base_dir
     if not base.exists():
         return None
@@ -86,6 +93,13 @@ def _resolver_clip_por_id(clip_id: str) -> Optional[str]:
     Devuelve la ruta del archivo si existe, o ``None`` si no se encuentra.
     """
     if not clip_id:
+        return None
+    from pathlib import Path
+    permitted = config.resolve_permitted_input_file(clip_id)
+    if permitted is not None:
+        return str(permitted)
+    if Path(clip_id).is_absolute():
+        logger.warning("Rejected clip path outside permitted local roots: %s", clip_id)
         return None
     base = ClipStore().base_dir
     if not base.exists():
@@ -225,6 +239,7 @@ async def procesar(
     # In cloud/volume mode with an edit_job_id, materialize inputs from the
     # Shared_Volume before launching the pipeline. The orden_clips entries are
     # treated as Shared_Volume keys instead of local clip store IDs.
+    resolved_music_id = peticion.musica_id
     if peticion.edit_job_id and config.is_volume_backend():
         backend = get_storage_backend()
         from pathlib import Path
@@ -236,10 +251,19 @@ async def procesar(
             )
             # Replace orden with materialized local paths
             orden = [str(p) for p in materialized]
-        except FileNotFoundError as exc:
+            if peticion.musica_id:
+                resolved_music_id = str(
+                    backend.materialize_input(
+                        peticion.edit_job_id,
+                        peticion.musica_id,
+                        workdir_path,
+                    )
+                )
+        except (FileNotFoundError, ValueError) as exc:
+            campo = "musica_id" if peticion.musica_id and peticion.musica_id in str(exc) else "orden_clips"
             return _invalid_request(
                 f"Input materialization failed: {exc}",
-                {"campo": "orden_clips", "error": str(exc)},
+                {"campo": campo, "error": str(exc)},
             )
 
     manager.crear_job(
@@ -247,7 +271,7 @@ async def procesar(
         orden,
         peticion.ajustes,
         workdir,
-        musica_id=peticion.musica_id,
+        musica_id=resolved_music_id,
         # Clave transitoria de OpenAI (Req 2.2): se propaga al Gestor de Jobs,
         # que la guarda FUERA de la serialización del Job (mapa en memoria) y la
         # elimina al alcanzar un estado terminal. Nunca se persiste ni se loguea.

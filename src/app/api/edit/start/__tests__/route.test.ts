@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { POST } from "../route";
 import { __setDeps, __resetDeps } from "../_deps";
 import type { StartRouteDeps } from "../_deps";
-import type { EditJob } from "@/lib/edit/types";
+import type { EditJob, EditorProcesarRequest } from "@/lib/edit/types";
 import { EditorPermanentError } from "@/lib/edit/retry";
 
 // ---------------------------------------------------------------------------
@@ -57,10 +57,11 @@ function createMockDeps(overrides?: Partial<StartRouteDeps>) {
   const putInputKeys: string[] = [];
   const mockAdapter = {
     putInput: vi.fn(async (_editJobId: string, relKey: string, _data: Uint8Array) => {
-      const key = `edit-io/test/${relKey}`;
+      const key = `edit-io/test/inputs/${relKey}`;
       putInputKeys.push(key);
       return key;
     }),
+    toEditorInputReference: vi.fn(async (_editJobId: string, storedKey: string) => storedKey.split("/inputs/")[1]),
     getOutputStream: vi.fn(),
     persistOutput: vi.fn(),
     signedGetUrl: vi.fn(),
@@ -68,7 +69,7 @@ function createMockDeps(overrides?: Partial<StartRouteDeps>) {
 
   const mockClient = {
     baseUrl: "http://127.0.0.1:8000",
-    procesar: vi.fn(async () => ({
+    procesar: vi.fn(async (_request: EditorProcesarRequest) => ({
       job_id: "editor-job-123",
       estado: "en_cola",
     })),
@@ -88,6 +89,7 @@ function createMockDeps(overrides?: Partial<StartRouteDeps>) {
     createClient: () => mockClient as any,
     getStorageAdapter: () => mockAdapter as any,
     getBrollBank: () => mockBrollBank as any,
+    startMonitor: vi.fn(),
     ...overrides,
   };
 
@@ -191,6 +193,14 @@ describe("POST /api/edit/start", () => {
     expect(editJobStore.createEditJob).toHaveBeenCalledTimes(1);
     expect(mockClient.procesar).toHaveBeenCalledTimes(1);
 
+    // FastAPI receives the generator namespace plus relative filenames only.
+    const procesarCall = mockClient.procesar.mock.calls[0][0];
+    expect(procesarCall.edit_job_id).toBe(json.editJobId);
+    expect(procesarCall.orden_clips).toEqual([
+      "clip-0001-clip-1.mp4",
+      "clip-0002-clip-2.mp4",
+    ]);
+
     // Job should be in running state
     const stored = storedJobs.get(json.editJobId);
     expect(stored).toBeDefined();
@@ -267,10 +277,35 @@ describe("POST /api/edit/start", () => {
 
     // The procesar call should have orden_clips matching the upload order
     const procesarCall = mockClient.procesar.mock.calls[0][0];
-    expect(procesarCall.orden_clips).toHaveLength(3);
-    // The ordering was sorted by index: clip-b(0), clip-a(1), clip-c(2)
-    // Each key in orden_clips should correspond to the file uploaded in that order
-    expect(procesarCall.orden_clips.length).toBe(3);
+    expect(procesarCall.orden_clips).toEqual([
+      "clip-0001-clip-b.mp4",
+      "clip-0002-clip-a.mp4",
+      "clip-0003-clip-c.mp4",
+    ]);
+    expect(procesarCall.orden_clips.every((key: string) => !key.startsWith("edit-io/"))).toBe(true);
+  });
+
+  it("assigns deterministic unique names when input basenames collide", async () => {
+    const { deps, mockClient, mockAdapter } = createMockDeps();
+    __setDeps(deps);
+
+    const response = await POST(
+      jsonRequest({
+        projectId: "proj-1",
+        source: { type: "clips", clipIds: ["same", "same"] },
+        options: { silenceCut: true, subtitles: true },
+      })
+    );
+
+    expect(response.status).toBe(202);
+    expect(mockAdapter.putInput.mock.calls.map((call: any[]) => call[1])).toEqual([
+      "clip-0001-same.mp4",
+      "clip-0002-same.mp4",
+    ]);
+    expect(mockClient.procesar.mock.calls[0][0].orden_clips).toEqual([
+      "clip-0001-same.mp4",
+      "clip-0002-same.mp4",
+    ]);
   });
 
   // -------------------------------------------------------------------------
@@ -440,6 +475,63 @@ describe("POST /api/edit/start", () => {
   // Happy path with music → music key forwarded to editor
   // -------------------------------------------------------------------------
 
+  it("accepts M4A when the browser reports a common or generic MIME", async () => {
+    const { deps, mockClient } = createMockDeps();
+    __setDeps(deps);
+
+    for (const mimeType of [
+      "audio/mp4",
+      "audio/m4a",
+      "audio/x-m4a",
+      "application/x-m4a",
+      "application/octet-stream",
+      "",
+    ]) {
+      const response = await POST(
+        jsonRequest({
+          projectId: "proj-1",
+          source: { type: "clips", clipIds: ["clip-1"] },
+          options: { silenceCut: true, subtitles: false },
+          music: {
+            data: Buffer.from("fake-m4a").toString("base64"),
+            mimeType,
+            fileName: "song.m4a",
+          },
+        })
+      );
+      expect(response.status).toBe(202);
+    }
+    expect(mockClient.procesar).toHaveBeenCalledTimes(6);
+  });
+
+  it("marks the job failed with UPLOAD when the music write fails", async () => {
+    const { deps, mockAdapter, mockClient, storedJobs } = createMockDeps();
+    mockAdapter.putInput
+      .mockResolvedValueOnce("edit-io/test/inputs/clip.mp4")
+      .mockRejectedValueOnce(new Error("music disk full"));
+    __setDeps(deps);
+
+    const response = await POST(
+      jsonRequest({
+        projectId: "proj-1",
+        source: { type: "clips", clipIds: ["clip-1"] },
+        options: { silenceCut: true, subtitles: false },
+        music: {
+          data: Buffer.from("fake-audio").toString("base64"),
+          mimeType: "audio/mpeg",
+          fileName: "song.mp3",
+        },
+      })
+    );
+
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.error).toContain("Music upload failed");
+    expect(mockClient.procesar).not.toHaveBeenCalled();
+    expect(storedJobs.get(body.editJobId)?.status).toBe("failed");
+    expect(storedJobs.get(body.editJobId)?.error?.paso).toBe("UPLOAD");
+  });
+
   it("uploads music and includes musica_id in procesar request", async () => {
     const { deps, mockClient, mockAdapter } = createMockDeps();
     __setDeps(deps);
@@ -462,11 +554,12 @@ describe("POST /api/edit/start", () => {
     // Verify music was uploaded (adapter.putInput called for music too)
     const putInputCalls = mockAdapter.putInput.mock.calls;
     // At least one call should be for the music file
-    const musicCall = putInputCalls.find((c: any[]) => c[1] === "song.mp3");
+    const musicCall = putInputCalls.find((c: any[]) => c[1] === "music-song.mp3");
     expect(musicCall).toBeDefined();
 
     // Verify musica_id is in the procesar request
     const procesarCall = mockClient.procesar.mock.calls[0][0];
-    expect(procesarCall.musica_id).toBeDefined();
+    expect(procesarCall.musica_id).toBe("music-song.mp3");
+    expect(procesarCall.musica_id).not.toContain("edit-io/");
   });
 });

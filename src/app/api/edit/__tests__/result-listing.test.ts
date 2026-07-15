@@ -61,6 +61,7 @@ function createMockAdapter(options: {
 }): StorageAdapter {
   return {
     putInput: async () => "mock-key",
+    toEditorInputReference: async () => "mock-key",
     getOutputStream: async (_editJobId: string, _relKey: string, range?: { start: number; end?: number }) => {
       if (options.throwOnGet) throw new Error("Object not found");
       const data = options.outputData ?? new Uint8Array([0x00, 0x01, 0x02, 0x03]);
@@ -238,7 +239,23 @@ describe("GET /api/edit (listing)", () => {
   it("returns empty list when no completed jobs exist", async () => {
     const job = makeJob({ status: "running", outputKey: null });
     const store = createInMemoryStore([job]);
-    setListDeps({ editJobStore: store });
+    setListDeps({
+      editJobStore: store,
+      getStorageAdapter: () => ({
+        ...createMockAdapter({}),
+        persistOutput: async () => undefined,
+      }),
+      createClient: () => ({
+        baseUrl: "http://localhost:8000",
+        procesar: async () => ({ job_id: "", estado: "" }),
+        progreso: async () => ({
+          porcentaje: 25,
+          paso_actual: "UNIR",
+          mensaje: "Running",
+          estado: "en_ejecucion",
+        } as any),
+      }),
+    });
 
     const req = new Request("http://localhost/api/edit?projectId=proj-001");
     const res = await getList(req);
@@ -246,6 +263,25 @@ describe("GET /api/edit (listing)", () => {
     const body = await res.json();
     expect(body.outputs).toEqual([]);
     expect(body.total).toBe(0);
+  });
+
+  it("recovers a nonterminal job when durable final.mp4 already exists", async () => {
+    const job = makeJob({ status: "running", outputKey: null });
+    const store = createInMemoryStore([job]);
+    setListDeps({
+      editJobStore: store,
+      getStorageAdapter: () => ({
+        ...createMockAdapter({}),
+        persistOutput: async () => "edit-output/job-001/final.mp4",
+      }),
+    });
+
+    const res = await getList(new Request("http://localhost/api/edit?projectId=proj-001"));
+    const body = await res.json();
+
+    expect(body.total).toBe(1);
+    expect(body.outputs[0].outputKey).toBe("edit-output/job-001/final.mp4");
+    expect(store.getEditJob("job-001")?.status).toBe("completed");
   });
 
   it("returns only completed jobs with outputKey, newest first", async () => {

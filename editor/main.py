@@ -221,8 +221,8 @@ def salud() -> dict[str, str]:
 if __name__ == "__main__":
     import uvicorn
 
-    # In cloud mode (sidecar), bind to localhost only (127.0.0.1) — the editor
-    # is reachable only from the generator container over localhost (Req 9.1).
+    # In cloud mode, bind to localhost only: the editor is reachable only from
+    # the Next.js process in the same combined container (Req 9.1).
     # In local mode, bind to the configured BACKEND_HOST (127.0.0.1 by default,
     # but could be 0.0.0.0 for local dev with external access).
     host = "127.0.0.1" if config.is_cloud_mode() else config.BACKEND_HOST

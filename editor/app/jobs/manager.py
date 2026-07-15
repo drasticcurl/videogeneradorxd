@@ -82,7 +82,6 @@ class JobManager:
         # Generator-side edit_job_id for Shared_Volume namespacing (cloud mode).
         self._edit_job_ids: Dict[str, str] = {}
         self._lock = threading.RLock()
-        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Registro

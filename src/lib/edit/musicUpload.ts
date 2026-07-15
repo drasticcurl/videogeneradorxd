@@ -5,7 +5,7 @@
  * Uploads to the inputs/ area via the storage adapter and returns the input key
  * only after upload succeeds. Omits the reference when no track is provided.
  *
- * Supported audio formats: audio/mpeg, audio/wav, audio/ogg, audio/flac, audio/aac.
+ * Supported audio formats include MP3, WAV, OGG, FLAC, AAC, and M4A.
  *
  * Requirements: 2.2, 2.3, 2.5
  */
@@ -16,6 +16,8 @@ import type { StorageAdapter } from "./storageAdapter";
 // Supported audio MIME types
 // ---------------------------------------------------------------------------
 
+export const MAX_MUSIC_UPLOAD_BYTES = 20 * 1024 * 1024;
+
 /**
  * Set of audio MIME types accepted for music uploads.
  */
@@ -25,7 +27,20 @@ export const SUPPORTED_MUSIC_MIMES: ReadonlySet<string> = new Set([
   "audio/ogg",
   "audio/flac",
   "audio/aac",
+  "audio/mp4",
+  "audio/m4a",
+  "audio/x-m4a",
+  "application/x-m4a",
 ]);
+
+const SUPPORTED_MUSIC_EXTENSIONS = new Set([
+  ".mp3", ".wav", ".ogg", ".oga", ".flac", ".aac", ".m4a",
+]);
+
+export const MUSIC_FILE_ACCEPT = [
+  ...SUPPORTED_MUSIC_MIMES,
+  ...SUPPORTED_MUSIC_EXTENSIONS,
+].join(",");
 
 /**
  * Human-readable list of supported formats for error messages.
@@ -36,6 +51,7 @@ export const SUPPORTED_MUSIC_FORMATS: readonly string[] = [
   "audio/ogg (.ogg)",
   "audio/flac (.flac)",
   "audio/aac (.aac)",
+  "audio/mp4, audio/m4a, audio/x-m4a, or application/x-m4a (.m4a)",
 ];
 
 // ---------------------------------------------------------------------------
@@ -52,8 +68,10 @@ export interface MusicUploadInput {
 }
 
 export interface MusicUploadResult {
-  /** The storage key of the uploaded music file (only set on success). */
+  /** Full storage key retained by the generator adapter. */
   inputKey?: string;
+  /** Relative filename sent to FastAPI under edit-io/<id>/inputs. */
+  editorKey?: string;
   /** Error message if validation/upload failed. */
   error?: string;
 }
@@ -66,10 +84,21 @@ export interface MusicUploadResult {
  * Validates whether the given MIME type is a supported audio format.
  * Returns null if valid, or an error message string if not.
  */
-export function validateMusicFormat(mimeType: string): string | null {
-  if (!SUPPORTED_MUSIC_MIMES.has(mimeType)) {
+export function validateMusicFormat(
+  mimeType: string,
+  fileName?: string
+): string | null {
+  const normalizedMime = mimeType.trim().toLowerCase();
+  const extension = fileName && fileName.includes(".")
+    ? `.${fileName.split(".").pop()!.toLowerCase()}`
+    : "";
+  const genericMime = normalizedMime === "" || normalizedMime === "application/octet-stream";
+  if (
+    !SUPPORTED_MUSIC_MIMES.has(normalizedMime) &&
+    !(genericMime && SUPPORTED_MUSIC_EXTENSIONS.has(extension))
+  ) {
     return (
-      `Unsupported music format "${mimeType}". ` +
+      `Unsupported music format "${mimeType || "unknown"}". ` +
       `Supported formats: ${SUPPORTED_MUSIC_FORMATS.join(", ")}.`
     );
   }
@@ -94,7 +123,8 @@ export function validateMusicFormat(mimeType: string): string | null {
 export async function handleMusicUpload(
   editJobId: string,
   music: MusicUploadInput | undefined,
-  adapter: StorageAdapter
+  adapter: StorageAdapter,
+  editorKey?: string
 ): Promise<MusicUploadResult> {
   // No track provided → omit reference (Req 2.3)
   if (!music) {
@@ -102,12 +132,16 @@ export async function handleMusicUpload(
   }
 
   // Validate format (Req 2.5)
-  const formatError = validateMusicFormat(music.mimeType);
+  const formatError = validateMusicFormat(music.mimeType, music.fileName);
   if (formatError) {
     return { error: formatError };
   }
 
   // Upload to inputs/ — reference only after success (Req 2.2)
-  const inputKey = await adapter.putInput(editJobId, music.fileName, music.data);
-  return { inputKey };
+  const relativeKey = editorKey ?? music.fileName;
+  const inputKey = await adapter.putInput(editJobId, relativeKey, music.data);
+  return {
+    inputKey,
+    editorKey: await adapter.toEditorInputReference(editJobId, inputKey),
+  };
 }

@@ -196,6 +196,13 @@ describe("GET /api/edit/[editJobId]/progress", () => {
         procesar: async () => ({ job_id: "", estado: "" }),
         progreso: async () => ({ porcentaje: 100, paso_actual: null, mensaje: "Done", error: null, estado: "completado" } as any),
       }),
+      getStorageAdapter: () => ({
+        putInput: async () => "",
+        toEditorInputReference: async () => "",
+        getOutputStream: async () => new Uint8Array(),
+        persistOutput: async () => "edit-output/job-001/final.mp4",
+        signedGetUrl: async () => undefined,
+      }),
     });
 
     const res = await GET(makeRequest(), { params: { editJobId: "job-001" } });

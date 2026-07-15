@@ -10,8 +10,14 @@
  *
  * Requirements: 1, 2, 3, 4
  */
-import { useState, useCallback } from "react";
-import type { EditOptions, ClipOrderEntry } from "@/lib/edit/types";
+import { useState, useCallback, useEffect } from "react";
+import type { EditOptions } from "@/lib/edit/types";
+import {
+  apiErrorMessage,
+  encodeMusicFile,
+  MUSIC_FILE_ACCEPT,
+  parseProgressResponse,
+} from "./editUiData";
 
 interface EditPanelProps {
   projectId: string;
@@ -28,7 +34,6 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
   const [silenceCut, setSilenceCut] = useState(true);
   const [subtitles, setSubtitles] = useState(true);
   const [musicFile, setMusicFile] = useState<File | null>(null);
-  const [brollIds, setBrollIds] = useState<string[]>([]);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editJobId, setEditJobId] = useState<string | null>(null);
@@ -43,17 +48,15 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
         options: {
           silenceCut,
           subtitles,
-          ordering: clipIds.map((id, i) => ({ index: i, clipId: id, isBroll: false })),
+          ...(source === "clips"
+            ? { ordering: clipIds.map((id, i) => ({ index: i, clipId: id, isBroll: false })) }
+            : {}),
         } satisfies EditOptions,
       };
 
-      // If there's a music file, we'd upload it first - simplified for now
+      // The route accepts music bytes as a structured base64 payload.
       if (musicFile) {
-        body.musicFileName = musicFile.name;
-      }
-
-      if (brollIds.length > 0) {
-        body.brollClipIds = brollIds;
+        body.music = await encodeMusicFile(musicFile);
       }
 
       const res = await fetch("/api/edit/start", {
@@ -63,8 +66,14 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
       });
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error?.message || `Error ${res.status}`);
+        const text = await res.text();
+        let data: unknown = text;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          // Keep plain-text API errors as-is.
+        }
+        throw new Error(apiErrorMessage(data, res.status));
       }
 
       const data = await res.json();
@@ -74,10 +83,10 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
     } finally {
       setLaunching(false);
     }
-  }, [projectId, source, clipIds, silenceCut, subtitles, musicFile, brollIds]);
+  }, [projectId, source, clipIds, silenceCut, subtitles, musicFile]);
 
   if (editJobId) {
-    return <EditProgress editJobId={editJobId} projectId={projectId} />;
+    return <EditProgress editJobId={editJobId} />;
   }
 
   return (
@@ -145,7 +154,7 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
         <label className="text-xs text-slate-400 font-medium">Música (opcional)</label>
         <input
           type="file"
-          accept="audio/*"
+          accept={MUSIC_FILE_ACCEPT}
           onChange={(e) => setMusicFile(e.target.files?.[0] || null)}
           className="text-xs text-slate-400"
         />
@@ -179,15 +188,13 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
 
 interface EditProgressProps {
   editJobId: string;
-  projectId: string;
 }
 
-function EditProgress({ editJobId, projectId }: EditProgressProps) {
+function EditProgress({ editJobId }: EditProgressProps) {
   const [progress, setProgress] = useState({ porcentaje: 0, pasoActual: "", mensaje: "Iniciando...", status: "queued" as string });
-  const [polling, setPolling] = useState(true);
 
   // Poll progress every 2 seconds
-  useState(() => {
+  useEffect(() => {
     let active = true;
     const poll = async () => {
       while (active) {
@@ -195,14 +202,9 @@ function EditProgress({ editJobId, projectId }: EditProgressProps) {
           const res = await fetch(`/api/edit/${editJobId}/progress`);
           if (res.ok) {
             const data = await res.json();
-            setProgress({
-              porcentaje: data.porcentaje ?? 0,
-              pasoActual: data.paso_actual ?? data.pasoActual ?? "",
-              mensaje: data.mensaje ?? "",
-              status: data.status ?? "running",
-            });
-            if (data.status === "completed" || data.status === "failed") {
-              setPolling(false);
+            const parsed = parseProgressResponse(data);
+            setProgress(parsed);
+            if (parsed.status === "completed" || parsed.status === "failed") {
               active = false;
               return;
             }
@@ -215,7 +217,7 @@ function EditProgress({ editJobId, projectId }: EditProgressProps) {
     };
     poll();
     return () => { active = false; };
-  });
+  }, [editJobId]);
 
   const isComplete = progress.status === "completed";
   const isFailed = progress.status === "failed";

@@ -95,6 +95,43 @@ OUTPUT_ROOT: Path = Path(
     os.environ.get("VSE_OUTPUT", str(BACKEND_ROOT / ".output"))
 ).resolve()
 
+
+def local_input_roots() -> tuple[Path, ...]:
+    """Return roots from which FastAPI may consume absolute input paths.
+
+    The editor workdir and generator output directory are permitted by default.
+    Additional roots must be explicitly supplied via ``VSE_LOCAL_INPUT_ROOTS``
+    using the platform path separator.
+    """
+    generator_output = Path(
+        os.environ.get("OUTPUT_DIR", str(BACKEND_ROOT.parent / "output"))
+    ).resolve()
+    roots = {WORKDIR_ROOT.resolve(), generator_output}
+    for raw in os.environ.get("VSE_LOCAL_INPUT_ROOTS", "").split(os.pathsep):
+        if raw.strip():
+            roots.add(Path(raw).expanduser().resolve())
+    return tuple(sorted(roots, key=str))
+
+
+def resolve_permitted_input_file(value: str) -> Path | None:
+    """Resolve an existing file only when it is beneath a permitted root."""
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        return None
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        return None
+    if not resolved.is_file():
+        return None
+    for root in local_input_roots():
+        try:
+            resolved.relative_to(root)
+            return resolved
+        except ValueError:
+            continue
+    return None
+
 # Nombre del artefacto final por Job.
 FINAL_VIDEO_FILENAME: str = "final.mp4"
 
@@ -236,8 +273,8 @@ DEFAULT_LIBERACION_MS: int = 500
 # ---------------------------------------------------------------------------
 # Integration flags — storage backend & edit mode (video-editor-integration)
 # ---------------------------------------------------------------------------
-# These flags control the editor's I/O mode when deployed as a sidecar within
-# the single multi-container Cloud Run service alongside the generator.
+# These flags control the editor's I/O mode when deployed in the combined
+# Cloud Run container alongside the generator process.
 # Both default to "local" so standalone operation is preserved (Req 10).
 #
 # Durable output storage config is inherited from videogeneradorxd's existing
@@ -256,7 +293,7 @@ def get_storage_backend() -> StorageBackendMode:
 
     - "local":  read/write via on-disk filesystem paths (default, standalone).
     - "volume": read/write via the Shared_Volume mounted in-instance, used when
-                deployed as a sidecar in the multi-container Cloud Run service.
+                deployed in the combined Cloud Run container.
     """
     raw = os.environ.get("VSE_STORAGE_BACKEND", "local").strip().lower()
     if raw == "volume":
@@ -268,7 +305,7 @@ def get_edit_mode() -> EditModeValue:
     """Return the configured edit mode.
 
     - "local": standalone operation, editor runs independently (default).
-    - "cloud": single multi-container Cloud Run service topology, editor as sidecar.
+    - "cloud": combined Cloud Run container with an internal editor process.
     """
     raw = os.environ.get("EDIT_MODE", "local").strip().lower()
     if raw == "cloud":
@@ -277,7 +314,7 @@ def get_edit_mode() -> EditModeValue:
 
 
 def is_cloud_mode() -> bool:
-    """Convenience predicate: True when running in cloud (sidecar) mode."""
+    """Convenience predicate: True when running in combined cloud mode."""
     return get_edit_mode() == "cloud"
 
 

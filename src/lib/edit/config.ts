@@ -1,9 +1,8 @@
 /**
  * Edit-mode configuration for the generator ↔ editor integration.
  *
- * Controls whether the generator talks to the editor sidecar in "cloud" mode
- * (single multi-container Cloud Run service with shared volume) or "local" mode
- * (both apps standalone on loopback, filesystem I/O only).
+ * Controls whether the generator talks to the internal editor process in "cloud"
+ * mode (one combined Cloud Run container) or "local" mode (standalone processes).
  *
  * Durable output storage config is inherited from videogeneradorxd's existing
  * storage configuration (OUTPUT_DIR / GCS FUSE mount). No dedicated edit bucket.
@@ -36,8 +35,8 @@ function envInt(name: string, fallback: number): number {
 /**
  * EDIT_MODE controls the deployment topology:
  *  - "local": both apps run standalone, editor reached over loopback, filesystem I/O.
- *  - "cloud": single Cloud Run multi-container service, editor as sidecar over localhost,
- *             shared volume for scratch I/O, existing Output_Store for durable persistence.
+ *  - "cloud": one combined Cloud Run container; editor reached over localhost,
+ *             shared filesystem scratch for I/O, existing Output_Store for persistence.
  *
  * Default: "local" (standalone development without external services).
  */
@@ -57,7 +56,7 @@ export function isCloudMode(): boolean {
 
 /**
  * Base URL of the editor service.
- * In cloud mode this is always localhost (sidecar within same instance).
+ * In cloud mode this is localhost (the editor process in the same container).
  * In local mode this defaults to http://127.0.0.1:8000 (the editor's default port).
  */
 export function getEditorBaseUrl(): string {

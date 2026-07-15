@@ -12,6 +12,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { reconcileEditJob } from "@/lib/edit/jobReconciler";
 import { getDeps } from "./_deps";
 
 export const runtime = "nodejs";
@@ -33,7 +34,23 @@ export async function GET(req: Request): Promise<Response> {
     );
   }
 
-  // Get all edit jobs for this project
+  // Reconcile persisted nonterminal jobs before filtering. This recovers a
+  // durable final.mp4 when the original browser tab closed or processes reset.
+  const initialJobs = currentDeps.editJobStore.listEditJobs(projectId);
+  const pending = initialJobs.filter(
+    (job) => job.status !== "completed" && job.status !== "failed"
+  );
+  const results = await Promise.allSettled(
+    pending.map((job) => reconcileEditJob(job.id, currentDeps))
+  );
+  for (const [index, result] of results.entries()) {
+    if (result.status === "rejected") {
+      console.warn("[edit/list] reconciliation failed", {
+        editJobId: pending[index]?.id,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    }
+  }
   const allJobs = currentDeps.editJobStore.listEditJobs(projectId);
 
   // Filter to only completed jobs with an outputKey (Req 6.2, 6.3)

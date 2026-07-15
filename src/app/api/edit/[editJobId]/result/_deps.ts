@@ -4,7 +4,7 @@
  */
 
 import { editJobsDb } from "@/lib/edit/editJobStore";
-import { LocalStorageAdapter } from "@/lib/edit/localStorageAdapter";
+import { createEditStorageAdapter } from "@/lib/edit/storageFactory";
 import type { StorageAdapter } from "@/lib/edit/storageAdapter";
 import type { EditJobStore } from "@/lib/edit/editJobStore";
 
@@ -15,7 +15,7 @@ export interface ResultRouteDeps {
 
 const defaultDeps: ResultRouteDeps = {
   editJobStore: editJobsDb,
-  getStorageAdapter: (projectId: string) => new LocalStorageAdapter(projectId),
+  getStorageAdapter: createEditStorageAdapter,
 };
 
 let currentDeps: ResultRouteDeps = defaultDeps;

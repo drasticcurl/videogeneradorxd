@@ -2,8 +2,8 @@
 
 Defines the StorageBackend protocol and two implementations:
 - LocalStorageBackend: reproduces today's on-disk behavior (default).
-- VolumeStorageBackend: reads from / writes to the Shared_Volume used when deployed
-  as a sidecar in the single multi-container Cloud Run service.
+- VolumeStorageBackend: reads from / writes to the shared filesystem used by
+  the two processes in the combined Cloud Run container.
 
 Selection is driven by the VSE_STORAGE_BACKEND env var (default "local").
 
@@ -78,11 +78,23 @@ class StorageBackend(Protocol):
 # ---------------------------------------------------------------------------
 
 
+def _validate_edit_job_id(edit_job_id: str) -> None:
+    if (
+        not edit_job_id
+        or edit_job_id in {".", ".."}
+        or "/" in edit_job_id
+        or "\\" in edit_job_id
+        or os.path.isabs(edit_job_id)
+    ):
+        raise ValueError(f"Invalid edit job id: {edit_job_id!r}")
+
+
 def _validate_key(edit_job_id: str, key: str) -> None:
     """Validate that a key is safe (no traversal, no absolute paths).
 
     Raises ValueError if the key would escape the expected prefix.
     """
+    _validate_edit_job_id(edit_job_id)
     if not key or key.strip() == "":
         raise ValueError(f"Empty key for edit job {edit_job_id}")
     if "\\" in key:
@@ -122,12 +134,23 @@ class LocalStorageBackend:
         _validate_key(edit_job_id, os.path.basename(key))
 
         source = Path(key)
-        if not source.is_absolute():
+        if source.is_absolute():
+            permitted = config.resolve_permitted_input_file(str(source))
+            if permitted is None:
+                raise ValueError(
+                    f"Absolute input path is outside permitted local roots: {key!r}"
+                )
+            source = permitted
+        else:
             from app.storage.clip_store import ClipStore
 
-            source = ClipStore().base_dir / key
+            source = (ClipStore().base_dir / key).resolve()
+            try:
+                source.relative_to(ClipStore().base_dir.resolve())
+            except ValueError as exc:
+                raise ValueError(f"Local input key escapes clip store: {key!r}") from exc
 
-        if not source.exists():
+        if not source.exists() or not source.is_file():
             raise FileNotFoundError(
                 f"Input missing for edit job {edit_job_id}: {key}"
             )
@@ -165,7 +188,7 @@ SHARED_VOLUME_PATH = os.environ.get("SHARED_VOLUME_PATH", "/shared")
 
 
 class VolumeStorageBackend:
-    """Shared_Volume storage backend (cloud/sidecar mode).
+    """Shared-filesystem storage backend for the combined cloud container.
 
     materialize_input: reads from edit-io/<editJobId>/inputs/<key> on the
     Shared_Volume into the workdir.
@@ -195,8 +218,13 @@ class VolumeStorageBackend:
         """Copy an input from the Shared_Volume inputs area into the workdir."""
         _validate_key(edit_job_id, key)
 
-        source = self._inputs_dir(edit_job_id) / key
-        if not source.exists():
+        inputs_dir = self._inputs_dir(edit_job_id).resolve()
+        source = (inputs_dir / key).resolve()
+        try:
+            source.relative_to(inputs_dir)
+        except ValueError as exc:
+            raise ValueError(f"Input key escapes job namespace: {key!r}") from exc
+        if not source.exists() or not source.is_file():
             raise FileNotFoundError(
                 f"Input missing on shared volume for edit job {edit_job_id}: {key} "
                 f"(expected at {source})"
@@ -208,8 +236,14 @@ class VolumeStorageBackend:
                 f"Input unreadable on shared volume for edit job {edit_job_id}: {key}"
             )
 
+        dest_dir = dest_dir.resolve()
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / key
+        dest = (dest_dir / key).resolve()
+        try:
+            dest.relative_to(dest_dir)
+        except ValueError as exc:
+            raise ValueError(f"Destination key escapes workdir: {key!r}") from exc
+        dest.parent.mkdir(parents=True, exist_ok=True)
         # Atomic-ish write: write to temp then rename to avoid partial files
         tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
         try:
@@ -227,6 +261,7 @@ class VolumeStorageBackend:
         self, edit_job_id: str, source_path: Path
     ) -> Optional[str]:
         """Write output to the Shared_Volume outputs area and persist to Output_Store."""
+        _validate_edit_job_id(edit_job_id)
         if not source_path.exists():
             logger.error(
                 "Cannot persist output for edit job %s: source %s not found",
@@ -268,49 +303,24 @@ class VolumeStorageBackend:
     def _persist_to_output_store(
         self, edit_job_id: str, source_path: Path
     ) -> Optional[str]:
-        """Persist to the existing Output_Store (GCS or local fallback).
+        """Copy to the existing mounted durable output filesystem.
 
-        Uses google-cloud-storage if available (guarded import), otherwise
-        falls back to local filesystem copy to OUTPUT_ROOT.
+        ``VSE_OUTPUT`` points at the existing GCS FUSE edit-output directory in
+        production. Returning a logical key keeps the generator contract
+        independent of the mount's absolute path.
         """
-        try:
-            from google.cloud import storage as gcs_storage  # type: ignore
-
-            # Use the existing bucket configuration from the generator
-            bucket_name = os.environ.get("GCS_BUCKET")
-            if bucket_name:
-                client = gcs_storage.Client()
-                bucket = client.bucket(bucket_name)
-                blob_name = f"edit-output/{edit_job_id}/{config.FINAL_VIDEO_FILENAME}"
-                blob = bucket.blob(blob_name)
-                blob.upload_from_filename(str(source_path))
-                logger.info(
-                    "Persisted output for edit job %s to GCS: gs://%s/%s",
-                    edit_job_id,
-                    bucket_name,
-                    blob_name,
-                )
-                return blob_name
-        except ImportError:
-            logger.debug(
-                "google-cloud-storage not available; falling back to local persist"
-            )
-        except Exception as exc:
-            logger.error(
-                "GCS persist failed for edit job %s: %s", edit_job_id, exc
-            )
-            # Fall through to local fallback
-
-        # Local fallback: copy to OUTPUT_ROOT
+        _validate_edit_job_id(edit_job_id)
         try:
             output_dir = config.OUTPUT_ROOT / edit_job_id
             output_dir.mkdir(parents=True, exist_ok=True)
             dest = output_dir / config.FINAL_VIDEO_FILENAME
-            shutil.copy2(source_path, dest)
-            return str(dest)
+            tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
+            shutil.copy2(source_path, tmp_dest)
+            tmp_dest.replace(dest)
+            return f"edit-output/{edit_job_id}/{config.FINAL_VIDEO_FILENAME}"
         except Exception as exc:
             logger.error(
-                "Local persist fallback failed for edit job %s: %s",
+                "Durable filesystem persist failed for edit job %s: %s",
                 edit_job_id,
                 exc,
             )

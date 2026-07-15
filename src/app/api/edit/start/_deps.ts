@@ -5,21 +5,25 @@
 
 import { editJobsDb } from "@/lib/edit/editJobStore";
 import { createEditorClient } from "@/lib/edit/editorClient";
-import { LocalStorageAdapter } from "@/lib/edit/localStorageAdapter";
+import { createEditStorageAdapter } from "@/lib/edit/storageFactory";
+import type { StorageAdapter } from "@/lib/edit/storageAdapter";
 import { BrollBank } from "@/lib/edit/brollBank";
+import { launchEditJobMonitor } from "@/lib/edit/jobReconciler";
 
 export interface StartRouteDeps {
   editJobStore: typeof editJobsDb;
   createClient: typeof createEditorClient;
-  getStorageAdapter: (projectId: string) => LocalStorageAdapter;
+  getStorageAdapter: (projectId: string) => StorageAdapter;
   getBrollBank: () => BrollBank;
+  startMonitor: (editJobId: string) => void;
 }
 
 const defaultDeps: StartRouteDeps = {
   editJobStore: editJobsDb,
   createClient: createEditorClient,
-  getStorageAdapter: (projectId: string) => new LocalStorageAdapter(projectId),
+  getStorageAdapter: createEditStorageAdapter,
   getBrollBank: () => new BrollBank(),
+  startMonitor: launchEditJobMonitor,
 };
 
 let currentDeps: StartRouteDeps = defaultDeps;

@@ -123,7 +123,9 @@ export interface EditJob {
  * Matches the editor's ProcesarRequest Pydantic model.
  */
 export interface EditorProcesarRequest {
-  /** Ordered list of clip paths/keys for the editor to process. */
+  /** Generator edit job namespace used for shared filesystem materialization. */
+  edit_job_id?: string;
+  /** Ordered relative filenames under edit-io/<edit_job_id>/inputs. */
   orden_clips: string[];
   /** Optional music track identifier/path. */
   musica_id?: string;

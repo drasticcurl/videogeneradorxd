@@ -9,6 +9,11 @@
  */
 import { describe, it, expect } from "vitest";
 import type { EditOptions, ClipOrderEntry, EditSource } from "@/lib/edit/types";
+import {
+  apiErrorMessage,
+  parseOutputListResponse,
+  parseProgressResponse,
+} from "../editUiData";
 
 describe("EditPanel — data contracts", () => {
   it("builds correct source for clips mode", () => {
@@ -65,6 +70,45 @@ describe("EditPanel — data contracts", () => {
       isBroll: false,
     }));
     expect(tooMany.length).toBeGreaterThan(MAX_CLIPS);
+  });
+});
+
+describe("EditPanel — BFF response shapes", () => {
+  it("reads progress from the nested progress object", () => {
+    expect(parseProgressResponse({
+      status: "running",
+      progress: {
+        porcentaje: 42,
+        pasoActual: "TRANSCRIBIR",
+        mensaje: "Transcribiendo",
+        error: null,
+      },
+    })).toEqual({
+      status: "running",
+      porcentaje: 42,
+      pasoActual: "TRANSCRIBIR",
+      mensaje: "Transcribiendo",
+    });
+  });
+
+  it("reads the output listing's outputs/editJobId/completedAt shape", () => {
+    expect(parseOutputListResponse({
+      outputs: [{
+        editJobId: "edit-1",
+        outputKey: "edit-output/edit-1/final.mp4",
+        completedAt: "2025-01-01T00:00:00Z",
+      }],
+    })).toEqual([{
+      editJobId: "edit-1",
+      outputKey: "edit-output/edit-1/final.mp4",
+      completedAt: "2025-01-01T00:00:00Z",
+    }]);
+  });
+
+  it("handles string and object API errors", () => {
+    expect(apiErrorMessage("plain failure", 500)).toBe("plain failure");
+    expect(apiErrorMessage({ error: "structured failure" }, 400)).toBe("structured failure");
+    expect(apiErrorMessage({ error: { message: "nested failure" } }, 400)).toBe("nested failure");
   });
 });
 
