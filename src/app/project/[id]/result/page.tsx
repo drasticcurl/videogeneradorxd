@@ -8,6 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "@/store/useProjectStore";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { StatusBadge } from "@/components/StatusBadge";
+import { EditPanel } from "@/components/edit/EditPanel";
+import { EditOutputList } from "@/components/edit/EditOutputList";
 import type { ManifestClip } from "@/lib/types";
 
 export default function ResultPage({ params }: { params: { id: string } }) {
@@ -100,6 +102,15 @@ export default function ResultPage({ params }: { params: { id: string } }) {
           genera y no gasta poder uniendo video.
         </p>
       </div>
+
+      {/* Editor integration */}
+      <EditPanel
+        projectId={projectId}
+        clipIds={manifest?.clips.filter(c => c.status === "done" && c.file).map(c => c.id) ?? []}
+        hasFinal={false}
+      />
+
+      <EditOutputList projectId={projectId} />
 
       {/* Timeline de clips */}
       <section className="space-y-3">
