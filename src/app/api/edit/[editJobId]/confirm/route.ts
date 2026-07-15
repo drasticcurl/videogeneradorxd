@@ -9,38 +9,12 @@
  */
 
 import { NextResponse } from "next/server";
-import { editJobsDb } from "@/lib/edit/editJobStore";
-import { createEditorClient } from "@/lib/edit/editorClient";
 import { EditorPermanentError } from "@/lib/edit/retry";
-import type { EditJobStore } from "@/lib/edit/editJobStore";
 import type { EditorClient } from "@/lib/edit/editorClient";
+import { getDeps } from "./_deps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// ---------------------------------------------------------------------------
-// Dependency injection (overridable for tests)
-// ---------------------------------------------------------------------------
-
-export interface ConfirmRouteDeps {
-  editJobStore: EditJobStore;
-  createClient: () => EditorClient;
-}
-
-const defaultDeps: ConfirmRouteDeps = {
-  editJobStore: editJobsDb,
-  createClient: () => createEditorClient(),
-};
-
-let currentDeps: ConfirmRouteDeps = defaultDeps;
-
-export function __setDeps(deps: Partial<ConfirmRouteDeps>): void {
-  currentDeps = { ...defaultDeps, ...deps };
-}
-
-export function __resetDeps(): void {
-  currentDeps = defaultDeps;
-}
 
 // ---------------------------------------------------------------------------
 // Extended EditorClient type with confirm capability
@@ -63,6 +37,7 @@ export async function POST(
   { params }: { params: { editJobId: string } }
 ): Promise<Response> {
   const { editJobId } = params;
+  const currentDeps = getDeps();
 
   // Look up the EditJob
   const job = currentDeps.editJobStore.getEditJob(editJobId);

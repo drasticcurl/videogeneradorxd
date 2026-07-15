@@ -11,8 +11,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { POST, __setDeps, __resetDeps } from "../route";
-import type { StartRouteDeps } from "../route";
+import { POST } from "../route";
+import { __setDeps, __resetDeps } from "../_deps";
+import type { StartRouteDeps } from "../_deps";
 import type { EditJob } from "@/lib/edit/types";
 import { EditorPermanentError } from "@/lib/edit/retry";
 

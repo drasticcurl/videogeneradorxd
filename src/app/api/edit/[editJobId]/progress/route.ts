@@ -9,39 +9,12 @@
  */
 
 import { NextResponse } from "next/server";
-import { editJobsDb } from "@/lib/edit/editJobStore";
-import { createEditorClient } from "@/lib/edit/editorClient";
 import { mapEditorEstado } from "@/lib/edit/statusMap";
 import type { EditJob, EditorProgress, EditJobError } from "@/lib/edit/types";
-import type { EditJobStore } from "@/lib/edit/editJobStore";
-import type { EditorClient } from "@/lib/edit/editorClient";
+import { getDeps } from "./_deps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// ---------------------------------------------------------------------------
-// Dependency injection (overridable for tests)
-// ---------------------------------------------------------------------------
-
-export interface ProgressRouteDeps {
-  editJobStore: EditJobStore;
-  createClient: () => EditorClient;
-}
-
-const defaultDeps: ProgressRouteDeps = {
-  editJobStore: editJobsDb,
-  createClient: () => createEditorClient({ timeoutMs: 5_000, retry: { maxAttempts: 1 } }),
-};
-
-let currentDeps: ProgressRouteDeps = defaultDeps;
-
-export function __setDeps(deps: Partial<ProgressRouteDeps>): void {
-  currentDeps = { ...defaultDeps, ...deps };
-}
-
-export function __resetDeps(): void {
-  currentDeps = defaultDeps;
-}
 
 // ---------------------------------------------------------------------------
 // Editor raw progress response shape (from /progreso/{id})
@@ -64,6 +37,7 @@ export async function GET(
   { params }: { params: { editJobId: string } }
 ): Promise<Response> {
   const { editJobId } = params;
+  const currentDeps = getDeps();
 
   // Look up the EditJob
   const job = currentDeps.editJobStore.getEditJob(editJobId);
@@ -129,7 +103,7 @@ export async function GET(
   const mensaje = rawProgress.mensaje ?? "";
 
   // Map estado to normalized status (Req 8.2, 8.5)
-  let newStatus = job.status;
+  let newStatus: EditJob["status"] = job.status;
   let newError: EditJobError | null = job.error;
 
   if (rawProgress.estado) {

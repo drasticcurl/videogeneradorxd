@@ -19,10 +19,7 @@
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
-import { editJobsDb } from "@/lib/edit/editJobStore";
-import { createEditorClient } from "@/lib/edit/editorClient";
 import { EditorPermanentError } from "@/lib/edit/retry";
-import { LocalStorageAdapter } from "@/lib/edit/localStorageAdapter";
 import { buildAjustes } from "@/lib/edit/buildAjustes";
 import { handleMusicUpload, validateMusicFormat } from "@/lib/edit/musicUpload";
 import {
@@ -31,7 +28,6 @@ import {
   mergeOrdering,
   buildDefaultOrdering,
 } from "@/lib/edit/resolveInputs";
-import { BrollBank } from "@/lib/edit/brollBank";
 import type {
   EditJob,
   EditSource,
@@ -39,6 +35,7 @@ import type {
   EditorProcesarRequest,
 } from "@/lib/edit/types";
 import type { MusicUploadInput } from "@/lib/edit/musicUpload";
+import { getDeps } from "./_deps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,39 +59,12 @@ interface StartEditRequestBody {
 }
 
 // ---------------------------------------------------------------------------
-// Dependency factories (overrideable for testing)
-// ---------------------------------------------------------------------------
-
-export interface StartRouteDeps {
-  editJobStore: typeof editJobsDb;
-  createClient: typeof createEditorClient;
-  getStorageAdapter: (projectId: string) => LocalStorageAdapter;
-  getBrollBank: () => BrollBank;
-}
-
-const defaultDeps: StartRouteDeps = {
-  editJobStore: editJobsDb,
-  createClient: createEditorClient,
-  getStorageAdapter: (projectId: string) => new LocalStorageAdapter(projectId),
-  getBrollBank: () => new BrollBank(),
-};
-
-// Allow tests to inject deps via a module-level setter
-let currentDeps: StartRouteDeps = defaultDeps;
-
-export function __setDeps(deps: Partial<StartRouteDeps>): void {
-  currentDeps = { ...defaultDeps, ...deps };
-}
-
-export function __resetDeps(): void {
-  currentDeps = defaultDeps;
-}
-
-// ---------------------------------------------------------------------------
 // POST handler
 // ---------------------------------------------------------------------------
 
 export async function POST(req: Request): Promise<Response> {
+  const currentDeps = getDeps();
+
   // 1. Parse request body
   let body: StartEditRequestBody;
   try {
