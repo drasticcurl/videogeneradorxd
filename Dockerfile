@@ -1,38 +1,54 @@
 # syntax=docker/dockerfile:1
-# ============================================================================
-# Imagen de produccion para Cloud Run (Next.js standalone, SIN ffmpeg).
-# El stitch del video final lo hace el usuario en su PC (descarga el ZIP).
-# El almacenamiento (OUTPUT_DIR/DATA_DIR) apunta a un bucket montado por Cloud Run
-# (Cloud Storage FUSE), asi que NO se guarda nada dentro de la imagen.
-# ============================================================================
 
-# ---------- deps: instala dependencias con cache ----------
-FROM node:20-slim AS deps
+# ---------- Node dependencies ----------
+FROM node:20-bookworm-slim AS node-deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# ---------- builder: compila Next en modo standalone ----------
-FROM node:20-slim AS builder
+# ---------- Next.js standalone build ----------
+FROM node:20-bookworm-slim AS next-builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=node-deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-# ---------- runner: imagen final minima ----------
-FROM node:20-slim AS runner
+# ---------- Python virtual environment ----------
+FROM node:20-bookworm-slim AS python-deps
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-venv python3-pip \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-ENV NODE_ENV=production
-ENV NEXT_TELEMETRY_DISABLED=1
-# Cloud Run inyecta PORT (default 8080). El server standalone respeta PORT/HOSTNAME.
-ENV PORT=8080
-ENV HOSTNAME=0.0.0.0
+COPY editor/requirements.txt /tmp/editor-requirements.txt
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/editor-requirements.txt
 
-# Output standalone: server.js + node_modules minimo + .next necesario.
-COPY --from=builder /app/.next/standalone ./
-# Assets estaticos (no van en standalone).
-COPY --from=builder /app/.next/static ./.next/static
+# ---------- Combined Cloud Run runtime ----------
+FROM node:20-bookworm-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=8080 \
+    HOSTNAME=0.0.0.0 \
+    PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1
+
+# ffmpeg package includes ffprobe and the runtime filters/codecs used by the
+# editor; libass9 provides subtitle rendering support.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates python3 ffmpeg libass9 bash \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=python-deps /opt/venv /opt/venv
+COPY --from=next-builder /app/.next/standalone ./
+COPY --from=next-builder /app/.next/static ./.next/static
+COPY editor ./editor
+COPY scripts/start-combined.sh ./scripts/start-combined.sh
+RUN chmod 0755 ./scripts/start-combined.sh \
+    && mkdir -p /shared /shared/editor-workdir
 
 EXPOSE 8080
-CMD ["node", "server.js"]
+CMD ["/app/scripts/start-combined.sh"]

@@ -3,7 +3,7 @@
  *
  * Two implementations:
  *  - LocalStorageAdapter: uses the project's output/<projectId>/ scratch (local mode).
- *  - VolumeStorageAdapter: uses the Shared_Volume (emptyDir) for input exchange
+ *  - VolumeStorageAdapter: uses shared in-container scratch for input exchange
  *    and delegates durable output persistence to videogeneradorxd's existing storage.
  *
  * All keys are confined to the edit-io/<editJobId>/ prefix via deriveKey().
@@ -31,6 +31,13 @@ export interface StorageAdapter {
   putInput(editJobId: string, relKey: string, data: Uint8Array): Promise<string>;
 
   /**
+   * Convert a stored input key into the reference FastAPI can consume.
+   * Cloud mode returns a confined relative filename; local mode returns the
+   * actual confined absolute path written by putInput.
+   */
+  toEditorInputReference(editJobId: string, storedKey: string): Promise<string>;
+
+  /**
    * Get a readable byte buffer from the edit-job output area.
    * @param editJobId  The unique edit job identifier.
    * @param relKey     Relative filename within the outputs area (e.g. "final.mp4").
@@ -42,6 +49,9 @@ export interface StorageAdapter {
     relKey: string,
     range?: { start: number; end?: number }
   ): Promise<Uint8Array>;
+
+  /** Return output size without buffering the entire file when supported. */
+  getOutputSize?(editJobId: string, relKey: string): Promise<number>;
 
   /**
    * Persist a finished output to the durable Output_Store.
@@ -127,8 +137,13 @@ export function deriveKey(
   // Normalize (removes redundant slashes and "." segments)
   const normalized = path.posix.normalize(relKey);
 
-  // Double-check the normalized result doesn't escape
-  if (normalized.startsWith("/") || normalized.startsWith("..")) {
+  // Double-check the normalized result doesn't escape or collapse to the prefix.
+  if (
+    normalized === "." ||
+    normalized === "" ||
+    normalized.startsWith("/") ||
+    normalized.startsWith("..")
+  ) {
     throw new KeyConfinementError(editJobId, relKey);
   }
 
@@ -142,4 +157,24 @@ export function deriveKey(
   }
 
   return fullKey;
+}
+
+
+/**
+ * Extract a confined relative input key from a key returned by putInput.
+ */
+export function relativeInputKey(editJobId: string, storedKey: string): string {
+  if (!storedKey || storedKey.includes("\\") || path.isAbsolute(storedKey)) {
+    throw new KeyConfinementError(editJobId, storedKey);
+  }
+  const prefix = `edit-io/${editJobId}/inputs/`;
+  if (!storedKey.startsWith(prefix)) {
+    throw new KeyConfinementError(editJobId, storedKey);
+  }
+  const relative = storedKey.slice(prefix.length);
+  // Re-derive to reject traversal, empty keys, and normalization tricks.
+  if (deriveKey(editJobId, "inputs", relative) !== storedKey) {
+    throw new KeyConfinementError(editJobId, storedKey);
+  }
+  return relative;
 }

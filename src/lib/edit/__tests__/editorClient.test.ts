@@ -118,7 +118,7 @@ describe("withRetry", () => {
 
 describe("EditorClient — no auth token", () => {
   it("never attaches Authorization headers on procesar", async () => {
-    const fakeFetch = vi.fn(async () => {
+    const fakeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       return new Response(
         JSON.stringify({ job_id: "j-1", estado: "PROCESANDO" }),
         { status: 202, headers: { "Content-Type": "application/json" } },
@@ -142,7 +142,7 @@ describe("EditorClient — no auth token", () => {
   });
 
   it("never attaches Authorization headers on progreso", async () => {
-    const fakeFetch = vi.fn(async () => {
+    const fakeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       return new Response(
         JSON.stringify({ porcentaje: 75, pasoActual: "SUBTÍTULOS", mensaje: "ok", error: null }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -167,7 +167,7 @@ describe("EditorClient — no auth token", () => {
 
   it("also omits auth in cloud mode (EDIT_MODE=cloud)", async () => {
     // Cloud mode changes storage paths but should NOT add any auth to editor calls
-    const fakeFetch = vi.fn(async () => {
+    const fakeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       return new Response(
         JSON.stringify({ job_id: "j-cloud", estado: "PROCESANDO" }),
         { status: 202, headers: { "Content-Type": "application/json" } },
@@ -196,7 +196,7 @@ describe("EditorClient — no auth token", () => {
 describe("EditorClient — error mapping", () => {
   it("maps 5xx to EditorTransientError and retries", async () => {
     let callCount = 0;
-    const fakeFetch = vi.fn(async () => {
+    const fakeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       callCount++;
       if (callCount < 3) {
         return new Response("Internal Server Error", { status: 500 });
@@ -222,7 +222,7 @@ describe("EditorClient — error mapping", () => {
 
   it("maps ECONNREFUSED to EditorTransientError and retries (sidecar not ready)", async () => {
     let callCount = 0;
-    const fakeFetch = vi.fn(async () => {
+    const fakeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       callCount++;
       if (callCount < 2) {
         const err = new TypeError("fetch failed");
@@ -249,7 +249,7 @@ describe("EditorClient — error mapping", () => {
   });
 
   it("maps 4xx to EditorPermanentError (no retry)", async () => {
-    const fakeFetch = vi.fn(async () => {
+    const fakeFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       return new Response(JSON.stringify({ detail: "bad input" }), { status: 400 });
     });
 

@@ -1,8 +1,8 @@
 /**
  * VolumeStorageAdapter — Shared_Volume based storage for cloud mode.
  *
- * Uses the emptyDir Shared_Volume mounted in the Cloud Run multi-container service
- * for input exchange between the generator (ingress) and editor (sidecar) containers.
+ * Uses the shared filesystem inside the combined Cloud Run container for input
+ * exchange between the Next.js ingress process and the FastAPI editor process.
  *
  * - putInput writes inputs to Shared_Volume under edit-io/<editJobId>/inputs/.
  * - getOutputStream reads from edit-io/<editJobId>/outputs/ (Range-aware).
@@ -19,7 +19,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { StorageAdapter } from "./storageAdapter";
-import { deriveKey } from "./storageAdapter";
+import { deriveKey, relativeInputKey } from "./storageAdapter";
 
 // ---------------------------------------------------------------------------
 // Helpers — existing storage delegation
@@ -94,6 +94,19 @@ export class VolumeStorageAdapter implements StorageAdapter {
     return key;
   }
 
+  async toEditorInputReference(
+    editJobId: string,
+    storedKey: string
+  ): Promise<string> {
+    const reference = relativeInputKey(editJobId, storedKey);
+    if (reference.includes("/")) {
+      throw new Error(
+        `Cloud editor input references must be flat filenames: ${storedKey}`
+      );
+    }
+    return reference;
+  }
+
   /**
    * Materialize a source from existing storage onto the Shared_Volume inputs.
    * If the source is already materialized, this is a no-op.
@@ -145,25 +158,66 @@ export class VolumeStorageAdapter implements StorageAdapter {
     const key = deriveKey(editJobId, "outputs", relKey);
     const abs = this.absForKey(key);
 
-    if (range) {
-      const fd = await fsp.open(abs, "r");
-      try {
-        const stat = await fd.stat();
-        const end = range.end !== undefined ? Math.min(range.end + 1, stat.size) : stat.size;
-        const length = end - range.start;
-        if (length <= 0) {
-          return new Uint8Array(0);
-        }
-        const buffer = Buffer.alloc(length);
-        await fd.read(buffer, 0, length, range.start);
-        return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-      } finally {
-        await fd.close();
+    try {
+      if (range) {
+        return await this.readRange(abs, range);
       }
-    }
 
-    const buf = await fsp.readFile(abs);
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      const buf = await fsp.readFile(abs);
+      return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    } catch (error) {
+      const durableKey = `edit-output/${editJobId}/${relKey}`;
+      const durablePath = await this.durableStorage.resolve(durableKey);
+      if (!durablePath) throw error;
+      if (range) {
+        return this.readRange(durablePath, range);
+      }
+      const buf = await fsp.readFile(durablePath);
+      return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    }
+  }
+
+  private async readRange(
+    filePath: string,
+    range: { start: number; end?: number }
+  ): Promise<Uint8Array> {
+    const fd = await fsp.open(filePath, "r");
+    try {
+      const stat = await fd.stat();
+      const endExclusive = range.end === undefined
+        ? stat.size
+        : Math.min(range.end + 1, stat.size);
+      const length = Math.max(0, endExclusive - range.start);
+      const buffer = Buffer.alloc(length);
+      let offset = 0;
+      while (offset < length) {
+        const { bytesRead } = await fd.read(
+          buffer,
+          offset,
+          length - offset,
+          range.start + offset
+        );
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      const result = buffer.subarray(0, offset);
+      return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+    } finally {
+      await fd.close();
+    }
+  }
+
+  async getOutputSize(editJobId: string, relKey: string): Promise<number> {
+    const key = deriveKey(editJobId, "outputs", relKey);
+    try {
+      return (await fsp.stat(this.absForKey(key))).size;
+    } catch (error) {
+      const durablePath = await this.durableStorage.resolve(
+        `edit-output/${editJobId}/${relKey}`
+      );
+      if (!durablePath) throw error;
+      return (await fsp.stat(durablePath)).size;
+    }
   }
 
   /**
@@ -174,20 +228,18 @@ export class VolumeStorageAdapter implements StorageAdapter {
     editJobId: string,
     relKey: string
   ): Promise<string | undefined> {
+    const outputKey = `edit-output/${editJobId}/${relKey}`;
+
+    // FastAPI normally persists the final video atomically before reporting
+    // completion. Return that key directly even if ephemeral scratch vanished.
+    const durablePath = await this.durableStorage.resolve(outputKey);
+    if (durablePath) return outputKey;
+
     const key = deriveKey(editJobId, "outputs", relKey);
     const abs = this.absForKey(key);
-
     try {
       await fsp.access(abs);
-    } catch {
-      return undefined;
-    }
-
-    // Persist to durable storage using the edit-output convention
-    const outputKey = `edit-output/${editJobId}/${relKey}`;
-    try {
-      const storedKey = await this.durableStorage.persist(abs, outputKey);
-      return storedKey;
+      return await this.durableStorage.persist(abs, outputKey);
     } catch {
       return undefined;
     }

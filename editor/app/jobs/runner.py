@@ -23,6 +23,7 @@ import asyncio
 import logging
 from typing import Any, Callable, Optional
 
+from app import config
 from app.engine.pipeline import (
     MOTOR_RENDER_EDICION_FINAL,
     EventoProgreso,
@@ -36,6 +37,7 @@ from app.engine.pipeline import (
 from app.models.settings import DEFAULT_MOTOR_RENDER, MotorRender
 from app.engine.proc import Runner, ejecutar_comando
 from app.jobs.manager import JobManager
+from app.storage.backend import get_storage_backend
 from app.storage.workdir import JobWorkdir
 
 logger = logging.getLogger(__name__)
@@ -109,6 +111,36 @@ class JobRunner:
             )
 
         return reportar
+
+    def _complete_with_persisted_output(
+        self, job_id: str, resultado: ResultadoPipeline
+    ) -> bool:
+        """Persist cloud output before exposing a completed editor status."""
+        final_path = resultado.ruta_video_final
+        if final_path is None:
+            self.manager.marcar_fallido(
+                job_id, "OUTPUT", "Pipeline completed without a final video path"
+            )
+            resultado.exito = False
+            resultado.motivo = "Pipeline completed without a final video path"
+            return False
+
+        edit_job_id = self.manager.obtener_edit_job_id(job_id)
+        if edit_job_id and config.is_volume_backend():
+            output_key = get_storage_backend().persist_output(
+                edit_job_id, final_path
+            )
+            if output_key is None:
+                motivo = "The completed video could not be persisted"
+                self.manager.marcar_fallido(job_id, "OUTPUT", motivo)
+                resultado.exito = False
+                resultado.motivo = motivo
+                return False
+
+        self.manager.marcar_completado(
+            job_id, ruta_video_final=str(final_path)
+        )
+        return True
 
     def ejecutar_job(self, job_id: str) -> ResultadoPipeline:
         """Ejecuta el pipeline de un Job de forma **síncrona** (para el executor).
@@ -213,14 +245,7 @@ class JobRunner:
                 limpiar = False
                 return resultado
             if resultado.exito:
-                self.manager.marcar_completado(
-                    job_id,
-                    ruta_video_final=(
-                        str(resultado.ruta_video_final)
-                        if resultado.ruta_video_final is not None
-                        else None
-                    ),
-                )
+                self._complete_with_persisted_output(job_id, resultado)
             else:
                 # El pipeline ya reportó el evento FALLIDO; se refuerza el estado.
                 self.manager.marcar_fallido(
@@ -519,14 +544,7 @@ class JobRunner:
                 **self._inyecciones,
             )
             if resultado.exito:
-                self.manager.marcar_completado(
-                    job_id,
-                    ruta_video_final=(
-                        str(resultado.ruta_video_final)
-                        if resultado.ruta_video_final is not None
-                        else None
-                    ),
-                )
+                self._complete_with_persisted_output(job_id, resultado)
             else:
                 self.manager.marcar_fallido(
                     job_id,

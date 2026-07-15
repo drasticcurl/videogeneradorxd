@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import hypothesis
 from hypothesis import given, settings
@@ -62,10 +63,15 @@ class TestP4RoundTripLocal:
             dest_dir = Path(tmpdir) / "workdir"
 
             backend = LocalStorageBackend()
-            # Use absolute path as the key (local mode behavior)
-            result_path = backend.materialize_input(
-                "test-job", str(source_file), dest_dir
-            )
+            # Absolute local references are accepted only from explicitly
+            # configured roots, matching the generator/editor contract.
+            with patch.dict(
+                os.environ,
+                {"VSE_LOCAL_INPUT_ROOTS": str(source_dir)},
+            ):
+                result_path = backend.materialize_input(
+                    "test-job", str(source_file), dest_dir
+                )
 
             # The materialized file must contain identical bytes
             assert result_path.exists()

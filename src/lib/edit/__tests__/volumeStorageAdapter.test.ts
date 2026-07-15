@@ -134,6 +134,21 @@ describe("VolumeStorageAdapter — getOutputStream", () => {
     expect(Buffer.from(slice).toString()).toBe("456789");
   });
 
+  it("reads only the requested range from durable fallback", async () => {
+    const adapter = createAdapter();
+    const durableFile = path.join(tmpDir, "durable-video.mp4");
+    await fsp.writeFile(durableFile, Buffer.from("0123456789ABCDEF"));
+    (mockDurableStorage.resolve as ReturnType<typeof vi.fn>).mockResolvedValue(durableFile);
+
+    const slice = await adapter.getOutputStream("job-011", "final.mp4", {
+      start: 5,
+      end: 8,
+    });
+
+    expect(Buffer.from(slice).toString()).toBe("5678");
+    await expect(adapter.getOutputSize("job-011", "final.mp4")).resolves.toBe(16);
+  });
+
   it("rejects traversal in output relKey", async () => {
     const adapter = createAdapter();
 
@@ -164,6 +179,18 @@ describe("VolumeStorageAdapter — persistOutput", () => {
       path.join(tmpDir, "edit-io", "job-020", "outputs", "final.mp4"),
       "edit-output/job-020/final.mp4"
     );
+  });
+
+  it("returns an already durable key without requiring shared scratch or copying again", async () => {
+    const adapter = createAdapter();
+    const durableFile = path.join(tmpDir, "durable-final.mp4");
+    await fsp.writeFile(durableFile, Buffer.from("durable"));
+    (mockDurableStorage.resolve as ReturnType<typeof vi.fn>).mockResolvedValueOnce(durableFile);
+
+    const result = await adapter.persistOutput("job-021", "final.mp4");
+
+    expect(result).toBe("edit-output/job-021/final.mp4");
+    expect(mockDurableStorage.persist).not.toHaveBeenCalled();
   });
 
   it("returns undefined when output file does not exist", async () => {

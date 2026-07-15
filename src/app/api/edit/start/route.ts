@@ -21,7 +21,11 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import { EditorPermanentError } from "@/lib/edit/retry";
 import { buildAjustes } from "@/lib/edit/buildAjustes";
-import { handleMusicUpload, validateMusicFormat } from "@/lib/edit/musicUpload";
+import {
+  handleMusicUpload,
+  validateMusicFormat,
+  MAX_MUSIC_UPLOAD_BYTES,
+} from "@/lib/edit/musicUpload";
 import {
   resolveSource,
   resolveDefaultSource,
@@ -35,6 +39,7 @@ import type {
   EditorProcesarRequest,
 } from "@/lib/edit/types";
 import type { MusicUploadInput } from "@/lib/edit/musicUpload";
+import { editorClipFileName, editorMusicFileName } from "@/lib/edit/inputKeys";
 import { getDeps } from "./_deps";
 
 export const runtime = "nodejs";
@@ -94,15 +99,36 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  // Validate music format early (Req 2.5) — reject before any upload
+  // Validate music format and decoded size before creating a job or uploading.
+  // 20 MiB raw stays safely below Cloud Run's 32 MiB HTTP/1 request limit after
+  // base64 expansion and JSON framing.
+  let decodedMusicData: Uint8Array | undefined;
   if (music) {
-    const formatError = validateMusicFormat(music.mimeType);
+    if (
+      typeof music.data !== "string" ||
+      typeof music.mimeType !== "string" ||
+      typeof music.fileName !== "string"
+    ) {
+      return NextResponse.json(
+        { error: "Invalid music payload" },
+        { status: 400 }
+      );
+    }
+    const formatError = validateMusicFormat(music.mimeType, music.fileName);
     if (formatError) {
       return NextResponse.json(
         { error: formatError },
         { status: 400 }
       );
     }
+    const decoded = Buffer.from(music.data, "base64");
+    if (decoded.byteLength === 0 || decoded.byteLength > MAX_MUSIC_UPLOAD_BYTES) {
+      return NextResponse.json(
+        { error: "Music file must be between 1 byte and 20 MB" },
+        { status: 400 }
+      );
+    }
+    decodedMusicData = new Uint8Array(decoded);
   }
 
   // 2. Resolve source (default to clips if not specified) (Req 1.3)
@@ -176,17 +202,20 @@ export async function POST(req: Request): Promise<Response> {
   await currentDeps.editJobStore.updateEditJob(editJobId, { status: "uploading" });
 
   const adapter = currentDeps.getStorageAdapter(projectId);
-  const ordenClipsKeys: string[] = [];
+  const storedInputKeys: string[] = [];
+  const editorClipKeys: string[] = [];
 
   console.log(`[edit/start] Uploading ${finalOrdering.length} inputs...`);
 
   try {
-    for (const input of finalOrdering) {
+    for (const [index, input] of finalOrdering.entries()) {
       const fileData = await fsp.readFile(input.absPath);
-      const fileName = input.absPath.split("/").pop() ?? `clip_${input.id}.mp4`;
-      console.log("[edit/start] Uploading file", { name: fileName, size: fileData.byteLength });
-      const key = await adapter.putInput(editJobId, fileName, new Uint8Array(fileData));
-      ordenClipsKeys.push(key);
+      const originalName = input.absPath.split("/").pop() ?? `clip_${input.id}.mp4`;
+      const editorKey = editorClipFileName(index, originalName);
+      console.log("[edit/start] Uploading file", { name: editorKey, size: fileData.byteLength });
+      const storedKey = await adapter.putInput(editJobId, editorKey, new Uint8Array(fileData));
+      storedInputKeys.push(storedKey);
+      editorClipKeys.push(await adapter.toEditorInputReference(editJobId, storedKey));
     }
   } catch (err: unknown) {
     // Upload failure: set failed with actionable error, leave already-uploaded inputs (Req 11.1)
@@ -212,44 +241,75 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  console.log("[edit/start] All inputs uploaded", { ordenClipsKeys });
+  console.log("[edit/start] All inputs uploaded", { storedInputKeys, editorClipKeys });
 
   // Handle optional music upload (Req 2.2, 2.3)
   let musicInputKey: string | undefined;
+  let musicEditorKey: string | undefined;
   if (music) {
     const musicData: MusicUploadInput = {
-      data: new Uint8Array(Buffer.from(music.data, "base64")),
+      data: decodedMusicData!,
       mimeType: music.mimeType,
       fileName: music.fileName,
     };
 
-    const musicResult = await handleMusicUpload(editJobId, musicData, adapter);
-    if (musicResult.error) {
-      // This shouldn't happen (we validated above), but handle defensively
+    musicEditorKey = editorMusicFileName(music.fileName);
+    try {
+      const musicResult = await handleMusicUpload(
+        editJobId,
+        musicData,
+        adapter,
+        musicEditorKey
+      );
+      if (musicResult.error) {
+        await currentDeps.editJobStore.updateEditJob(editJobId, {
+          status: "failed",
+          error: { paso: "UPLOAD", motivo: musicResult.error },
+          progress: {
+            porcentaje: 0,
+            pasoActual: "UPLOAD",
+            mensaje: musicResult.error,
+            error: { paso: "UPLOAD", motivo: musicResult.error },
+          },
+        });
+        return NextResponse.json(
+          { error: musicResult.error, editJobId },
+          { status: 400 }
+        );
+      }
+      musicInputKey = musicResult.inputKey;
+      musicEditorKey = musicResult.editorKey;
+      console.log("[edit/start] Music uploaded", { storedKey: musicInputKey, editorKey: musicEditorKey });
+    } catch (err: unknown) {
+      const message = err instanceof Error
+        ? `Music upload failed: ${err.message}`
+        : "Music upload failed: unknown error";
       await currentDeps.editJobStore.updateEditJob(editJobId, {
         status: "failed",
-        error: { paso: "UPLOAD", motivo: musicResult.error },
+        error: { paso: "UPLOAD", motivo: message },
+        progress: {
+          porcentaje: 0,
+          pasoActual: "UPLOAD",
+          mensaje: message,
+          error: { paso: "UPLOAD", motivo: message },
+        },
       });
-      return NextResponse.json(
-        { error: musicResult.error, editJobId },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: message, editJobId }, { status: 500 });
     }
-    musicInputKey = musicResult.inputKey;
-    console.log("[edit/start] Music uploaded", { key: musicInputKey });
   }
 
   // 6. Build Ajustes and call editor /procesar (Req 2.4)
   const ajustes = buildAjustes({
     editOptions: options,
-    musicInputKey,
+    musicInputKey: musicEditorKey,
     overrides,
   });
 
   const procesarRequest: EditorProcesarRequest = {
-    orden_clips: ordenClipsKeys,
+    edit_job_id: editJobId,
+    orden_clips: editorClipKeys,
     ajustes,
-    ...(musicInputKey ? { musica_id: musicInputKey } : {}),
+    ...(musicEditorKey ? { musica_id: musicEditorKey } : {}),
   };
 
   const client = currentDeps.createClient();
@@ -274,6 +334,17 @@ export async function POST(req: Request): Promise<Response> {
         error: null,
       },
     });
+
+    // Monitoring belongs to the always-on server process, not the browser tab.
+    // The launcher de-duplicates monitors and contains all detached rejections.
+    try {
+      currentDeps.startMonitor(editJobId);
+    } catch (monitorError) {
+      console.error("[edit/start] Failed to launch server monitor", {
+        editJobId,
+        error: monitorError instanceof Error ? monitorError.message : String(monitorError),
+      });
+    }
 
     return NextResponse.json({ editJobId }, { status: 202 });
   } catch (err: unknown) {

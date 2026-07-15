@@ -7,13 +7,16 @@ Resumen del diseño en la nube:
 
 - **Cómputo**: Cloud Run, **1 instancia siempre encendida** (`min=max=1`, CPU always-on)
   porque la cola de jobs vive en memoria del proceso.
-- **Almacenamiento**: un **bucket de Cloud Storage montado como disco** (Cloud Storage FUSE).
-  `OUTPUT_DIR` y `DATA_DIR` apuntan al volumen montado → imágenes, clips, `manifest.json` y la
-  "DB" JSON persisten en el bucket sin cambiar código.
+- **Runtime combinado**: una sola imagen/contenedor ejecuta Next.js como ingress en `$PORT`
+  y FastAPI internamente en `127.0.0.1:8000`. El editor nunca tiene ingress propio.
+- **Almacenamiento**: el bucket existente de Cloud Storage se monta con Cloud Storage FUSE.
+  `OUTPUT_DIR`, `DATA_DIR` y `VSE_OUTPUT` apuntan al volumen; `/shared` es scratch local del
+  contenedor para el intercambio entre ambos procesos.
 - **Auth a Vertex AI**: automática vía la **service account** del servicio (ADC). No hace falta
   `gcloud auth ... login` ni claves JSON.
-- **ffmpeg**: NO corre en la nube. El video final lo armás vos en tu PC con el **ZIP** que
-  descarga la app (botón "Descargar proyecto (ZIP)" → `stitch.sh` / `stitch.bat`).
+- **Editor de video**: ffmpeg, ffprobe, libass, auto-editor y faster-whisper están incluidos en
+  la imagen combinada. El ingress de Next.js se inicia solo después de que `/salud` confirme
+  que FastAPI y sus dependencias están listos, con un plazo máximo de 60 segundos.
 
 ---
 
@@ -23,9 +26,9 @@ Resumen del diseño en la nube:
 # Proyecto y facturación activos. Variables de ejemplo:
 export PROJECT_ID=tu-project-id
 export REGION=us-central1
-export BUCKET=tu-bucket-augc          # globalmente único
+export BUCKET=augc-bucket-2725       # bucket existente
 export REPO=augc                      # repo de Artifact Registry
-export SERVICE=augc-pipeline
+export SERVICE=videogeneradorxd
 
 gcloud config set project "$PROJECT_ID"
 
@@ -37,10 +40,8 @@ gcloud services enable \
   artifactregistry.googleapis.com \
   storage.googleapis.com
 
-# Bucket de storage (mismo region que Vertex)
-gcloud storage buckets create "gs://$BUCKET" --location="$REGION"
-
-# Repo de imágenes Docker
+# Este deploy reutiliza el bucket existente indicado por BUCKET; no crea otro.
+# Repo de imágenes Docker (solo si todavía no existe)
 gcloud artifacts repositories create "$REPO" \
   --repository-format=docker --location="$REGION"
 ```
@@ -75,9 +76,12 @@ gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
 3. En **Container, Networking, Security** del servicio configurá (una sola vez; se conserva):
    - **Min/Max instances**: 1 / 1
    - **CPU allocation**: *CPU is always allocated* (no throttling)
-   - **Memory**: 2 GiB · **CPU**: 1 · **Request timeout**: 3600
+   - **Memory**: 8 GiB · **CPU**: 4 · **Request timeout**: 3600
    - **Volumes**: agregá un volumen tipo *Cloud Storage bucket* (`$BUCKET`) montado en `/mnt/gcs`.
    - **Variables de entorno** (ver tabla abajo).
+   - El arranque combinado da a FastAPI **como máximo 60 segundos** para responder `/salud`;
+     si FastAPI termina antes o vence el plazo, la revisión falla sin iniciar Next.js.
+   - Next.js escucha el puerto de ingress `8080`; FastAPI queda solo en `127.0.0.1:8000`.
 
 ### Opción B — Una línea con gcloud (incluye el mount)
 
@@ -86,8 +90,8 @@ gcloud run deploy "$SERVICE" \
   --source . \
   --region="$REGION" \
   --min-instances=1 --max-instances=1 \
-  --cpu=1 --memory=2Gi --no-cpu-throttling --timeout=3600 \
-  --set-env-vars=PROVIDER_MODE=vertex,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=$REGION,OUTPUT_DIR=/mnt/gcs/output,DATA_DIR=/mnt/gcs/data \
+  --cpu=4 --memory=8Gi --no-cpu-throttling --timeout=3600 \
+  --set-env-vars=PROVIDER_MODE=vertex,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_CLOUD_LOCATION=$REGION,OUTPUT_DIR=/mnt/gcs/output,DATA_DIR=/mnt/gcs/data,EDIT_MODE=cloud,VSE_STORAGE_BACKEND=volume,SHARED_VOLUME_PATH=/shared,VSE_WORKDIR=/shared/editor-workdir,VSE_OUTPUT=/mnt/gcs/output/edit-output,EDITOR_BASE_URL=http://127.0.0.1:8000 \
   --add-volume=name=gcsvol,type=cloud-storage,bucket=$BUCKET \
   --add-volume-mount=volume=gcsvol,mount-path=/mnt/gcs \
   --allow-unauthenticated
@@ -116,6 +120,12 @@ Triggers → Connect repository). Cada push buildea y deploya.
 | `GOOGLE_CLOUD_LOCATION` | `us-central1` | region de Vertex |
 | `OUTPUT_DIR` | `/mnt/gcs/output` | carpeta de salida = subpath del bucket montado |
 | `DATA_DIR` | `/mnt/gcs/data` | estado (db.json) = subpath del bucket montado |
+| `EDIT_MODE` | `cloud` | selecciona el adapter de volumen compartido |
+| `VSE_STORAGE_BACKEND` | `volume` | materializa inputs del editor desde `/shared` |
+| `SHARED_VOLUME_PATH` | `/shared` | scratch entre Next.js y FastAPI dentro del contenedor |
+| `VSE_WORKDIR` | `/shared/editor-workdir` | temporales del pipeline de edición |
+| `VSE_OUTPUT` | `/mnt/gcs/output/edit-output` | copia durable producida por FastAPI (`edit-output/<editJobId>/final.mp4`) |
+| `EDITOR_BASE_URL` | `http://127.0.0.1:8000` | editor interno, sin ingress público |
 | `PIPELINE_AUTO_APPROVE` | `true`/`false` | aprobar jobs solos (opcional) |
 | `APP_PASSWORD` | tu contraseña | activa el login de la app (ver §4) |
 | `APP_AUTH_SECRET` | hex aleatorio largo | firma de la sesión (ver §4) |
@@ -186,5 +196,5 @@ gcloud run services proxy "$SERVICE" --region="$REGION"   # túnel local autenti
   cola y storage (ver nota de arquitectura en `.kiro/steering/project-context.md`).
 - **GCS FUSE** no es un filesystem POSIX 100%: `rename`/`append` son más lentos. `db.ts` ya
   tiene un fallback de escritura para eso. Para un solo usuario anda bien.
-- **Transcripción (Whisper)** no corre en la nube (necesita binarios locales). Es una feature
-  aparte y opcional; no afecta el pipeline de generación.
+- **Transcripción (faster-whisper)** y el pipeline ffmpeg sí corren en la imagen combinada;
+  dimensioná CPU/memoria para la carga del editor.

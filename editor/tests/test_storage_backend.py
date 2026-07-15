@@ -55,11 +55,12 @@ class TestKeyValidation:
 
 
 class TestLocalStorageBackend:
-    def test_materialize_input_copies_file(self, tmp_path):
+    def test_materialize_input_copies_file(self, tmp_path, monkeypatch):
         source_dir = tmp_path / "clips"
         source_dir.mkdir()
         source = source_dir / "clip_01.mp4"
         source.write_bytes(b"video data")
+        monkeypatch.setenv("VSE_LOCAL_INPUT_ROOTS", str(source_dir))
 
         dest_dir = tmp_path / "workdir"
         backend = LocalStorageBackend()
@@ -69,10 +70,19 @@ class TestLocalStorageBackend:
         assert result.read_bytes() == b"video data"
         assert result.name == "clip_01.mp4"
 
-    def test_materialize_input_missing_raises(self, tmp_path):
+    def test_materialize_input_rejects_unconfigured_absolute_path(self, tmp_path):
+        source = tmp_path / "outside" / "clip.mp4"
+        source.parent.mkdir()
+        source.write_bytes(b"video")
+        backend = LocalStorageBackend()
+
+        with pytest.raises(ValueError, match="outside permitted local roots"):
+            backend.materialize_input("job-1", str(source), tmp_path / "workdir")
+
+    def test_materialize_input_missing_absolute_path_is_rejected(self, tmp_path):
         dest_dir = tmp_path / "workdir"
         backend = LocalStorageBackend()
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(ValueError, match="outside permitted local roots"):
             backend.materialize_input("job-1", "/nonexistent/clip.mp4", dest_dir)
 
     def test_persist_output(self, tmp_path, monkeypatch):
@@ -292,3 +302,74 @@ class TestGetStorageBackend:
         monkeypatch.setenv("VSE_STORAGE_BACKEND", "volume")
         backend = get_storage_backend()
         assert isinstance(backend, VolumeStorageBackend)
+
+
+
+# ---------------------------------------------------------------------------
+# Combined-container input/music/output contract
+# ---------------------------------------------------------------------------
+
+
+def test_volume_backend_materializes_relative_music_key(tmp_path):
+    volume = tmp_path / "shared"
+    inputs_dir = volume / "edit-io" / "edit-1" / "inputs"
+    inputs_dir.mkdir(parents=True)
+    (inputs_dir / "music-song.mp3").write_bytes(b"music")
+
+    backend = VolumeStorageBackend(volume_path=str(volume))
+    result = backend.materialize_input(
+        "edit-1", "music-song.mp3", tmp_path / "workdir"
+    )
+
+    assert result.name == "music-song.mp3"
+    assert result.read_bytes() == b"music"
+
+
+def test_volume_backend_rejects_invalid_edit_job_namespace(tmp_path):
+    backend = VolumeStorageBackend(volume_path=str(tmp_path / "shared"))
+    with pytest.raises(ValueError, match="Invalid edit job id"):
+        backend.materialize_input("../escape", "clip.mp4", tmp_path / "workdir")
+
+
+def test_volume_backend_returns_durable_edit_output_key(tmp_path, monkeypatch):
+    import app.config as cfg
+
+    monkeypatch.setattr(cfg, "OUTPUT_ROOT", tmp_path / "mounted-edit-output")
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"finished")
+    backend = VolumeStorageBackend(volume_path=str(tmp_path / "shared"))
+
+    key = backend.persist_output("edit-1", source)
+
+    assert key == "edit-output/edit-1/final.mp4"
+    assert (
+        tmp_path / "mounted-edit-output" / "edit-1" / "final.mp4"
+    ).read_bytes() == b"finished"
+
+
+def test_runner_persists_volume_output_before_completed(tmp_path, monkeypatch):
+    from app.engine.pipeline import ResultadoPipeline
+    from app.jobs.manager import JobManager
+    from app.jobs.runner import JobRunner
+    from app.models.job import JobStatus
+    from app.models.settings import Ajustes
+
+    manager = JobManager()
+    manager.crear_job("editor-1", ["clip.mp4"], Ajustes(), workdir=str(tmp_path))
+    manager.establecer_edit_job_id("editor-1", "edit-1")
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"video")
+    persisted = []
+
+    class Backend:
+        def persist_output(self, edit_job_id, source_path):
+            persisted.append((edit_job_id, source_path))
+            return "edit-output/edit-1/final.mp4"
+
+    monkeypatch.setenv("VSE_STORAGE_BACKEND", "volume")
+    monkeypatch.setattr("app.jobs.runner.get_storage_backend", lambda: Backend())
+    result = ResultadoPipeline(exito=True, ruta_video_final=source)
+
+    assert JobRunner(manager)._complete_with_persisted_output("editor-1", result)
+    assert persisted == [("edit-1", source)]
+    assert manager.obtener("editor-1").progreso.estado == JobStatus.COMPLETADO

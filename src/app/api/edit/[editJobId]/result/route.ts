@@ -95,9 +95,9 @@ export async function GET(
       // Parse Range header
       const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
       if (match) {
-        // First get full content to determine size
-        const fullData = await adapter.getOutputStream(keyEditJobId, relKey);
-        const totalSize = fullData.length;
+        const totalSize = adapter.getOutputSize
+          ? await adapter.getOutputSize(keyEditJobId, relKey)
+          : (await adapter.getOutputStream(keyEditJobId, relKey)).length;
 
         const start = match[1] ? parseInt(match[1], 10) : 0;
         const end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
