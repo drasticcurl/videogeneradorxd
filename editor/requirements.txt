@@ -1,0 +1,22 @@
+# Dependencias de Python del backend (vertical-shorts-editor)
+# Archivo canónico de dependencias del backend FastAPI.
+# Referencias de requisitos: 14.5, 14.6
+
+# --- Framework web y servidor ASGI ---
+fastapi
+uvicorn
+python-multipart          # subida multipart de clips/música (POST /clips, POST /musica)
+
+# --- Validación de datos ---
+pydantic>=2               # modelos de dominio y ajustes (v2)
+
+# --- Herramientas del Motor de Procesamiento ---
+auto-editor               # Paso 2: corte de silencios
+faster-whisper            # Paso 3: transcripción local en CPU con timestamps por palabra
+openai                    # Paso 4b (opt-in): corrección de subtítulos con IA (aislado tras un protocolo inyectable)
+# Nota: ffmpeg/ffprobe son binarios del sistema (instalar con `brew install ffmpeg`).
+
+# --- Testing ---
+pytest                    # tests unitarios / de integración
+hypothesis                # tests property-based (mínimo 100 iteraciones)
+httpx                     # cliente usado por fastapi.testclient.TestClient en los tests de API
