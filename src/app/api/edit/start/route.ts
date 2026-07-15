@@ -78,6 +78,8 @@ export async function POST(req: Request): Promise<Response> {
 
   const { projectId, source, options, music, overrides } = body;
 
+  console.log("[edit/start] Received request", { projectId, sourceType: source?.type ?? "default(clips)" });
+
   if (!projectId || typeof projectId !== "string") {
     return NextResponse.json(
       { error: "Missing or invalid projectId" },
@@ -117,6 +119,8 @@ export async function POST(req: Request): Promise<Response> {
 
   const generatedInputs = resolvedSourceResult.inputs!;
 
+  console.log("[edit/start] Source resolved", { inputCount: generatedInputs.length });
+
   // 3. Merge ordering with b-roll if ordering is provided (Req 1.7)
   const brollBank = currentDeps.getBrollBank();
   let finalOrdering;
@@ -138,6 +142,8 @@ export async function POST(req: Request): Promise<Response> {
     // Use natural order of generated inputs (no b-roll)
     finalOrdering = generatedInputs;
   }
+
+  console.log("[edit/start] Ordering merged", { count: finalOrdering.length });
 
   // 4. Create EditJob (status: queued)
   const editJobId = crypto.randomUUID();
@@ -164,16 +170,21 @@ export async function POST(req: Request): Promise<Response> {
 
   await currentDeps.editJobStore.createEditJob(editJob);
 
+  console.log("[edit/start] EditJob created", { editJobId });
+
   // 5. Upload inputs to storage adapter (status: uploading) (Req 11.1)
   await currentDeps.editJobStore.updateEditJob(editJobId, { status: "uploading" });
 
   const adapter = currentDeps.getStorageAdapter(projectId);
   const ordenClipsKeys: string[] = [];
 
+  console.log(`[edit/start] Uploading ${finalOrdering.length} inputs...`);
+
   try {
     for (const input of finalOrdering) {
       const fileData = await fsp.readFile(input.absPath);
       const fileName = input.absPath.split("/").pop() ?? `clip_${input.id}.mp4`;
+      console.log("[edit/start] Uploading file", { name: fileName, size: fileData.byteLength });
       const key = await adapter.putInput(editJobId, fileName, new Uint8Array(fileData));
       ordenClipsKeys.push(key);
     }
@@ -201,6 +212,8 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  console.log("[edit/start] All inputs uploaded", { ordenClipsKeys });
+
   // Handle optional music upload (Req 2.2, 2.3)
   let musicInputKey: string | undefined;
   if (music) {
@@ -223,6 +236,7 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
     musicInputKey = musicResult.inputKey;
+    console.log("[edit/start] Music uploaded", { key: musicInputKey });
   }
 
   // 6. Build Ajustes and call editor /procesar (Req 2.4)
@@ -240,8 +254,14 @@ export async function POST(req: Request): Promise<Response> {
 
   const client = currentDeps.createClient();
 
+  console.log(`[edit/start] Calling editor /procesar at ${client.baseUrl}`, {
+    payload: JSON.stringify(procesarRequest),
+  });
+
   try {
     const response = await client.procesar(procesarRequest);
+
+    console.log("[edit/start] Editor accepted", { job_id: response.job_id });
 
     // 7. On success: store editorJobId, set status: running, return 202 (Req 1.8)
     await currentDeps.editJobStore.updateEditJob(editJobId, {
@@ -265,6 +285,12 @@ export async function POST(req: Request): Promise<Response> {
       } catch {
         details = err.message;
       }
+
+      console.log("[edit/start] Editor rejected (4xx)", {
+        statusCode: err.statusCode,
+        body: err.body,
+        message: err.message,
+      });
 
       await currentDeps.editJobStore.updateEditJob(editJobId, {
         status: "failed",
@@ -294,6 +320,15 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     // Other errors (transient exhausted, network, etc.)
+    const errObj = err as Error & { code?: string; cause?: unknown };
+    console.log("[edit/start] Editor call FAILED", {
+      message: errObj.message,
+      stack: errObj.stack,
+      code: errObj.code,
+      cause: errObj.cause,
+      name: errObj.name,
+    });
+
     const message =
       err instanceof Error
         ? `Editor call failed: ${err.message}`

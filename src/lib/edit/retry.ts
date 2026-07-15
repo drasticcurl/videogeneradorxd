@@ -116,6 +116,7 @@ export async function withRetry<T>(
   let delay = initialDelayMs;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    console.log(`[withRetry] attempt ${attempt + 1}/${maxAttempts}`);
     try {
       return await fn();
     } catch (err: unknown) {
@@ -125,6 +126,7 @@ export async function withRetry<T>(
       if (err instanceof EditorTransientError) {
         if (attempt < maxAttempts - 1) {
           const sleepTime = Math.min(delay, maxDelayMs);
+          console.log(`[withRetry] sleeping ${sleepTime}ms before retry`);
           await sleep(sleepTime);
           delay *= multiplier;
           continue;
@@ -139,5 +141,6 @@ export async function withRetry<T>(
   }
 
   // All attempts exhausted
+  console.log("[withRetry] ALL RETRIES EXHAUSTED");
   throw lastError;
 }
