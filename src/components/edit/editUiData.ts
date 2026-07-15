@@ -9,6 +9,7 @@ export interface EditProgressView {
   pasoActual: string;
   mensaje: string;
   status: string;
+  error: { paso: string; motivo: string } | null;
 }
 
 export interface EditOutputView {
@@ -27,7 +28,15 @@ export function parseProgressResponse(data: unknown): EditProgressView {
     pasoActual: typeof nested.pasoActual === "string" ? nested.pasoActual : "",
     mensaje: typeof nested.mensaje === "string" ? nested.mensaje : "",
     status: typeof value.status === "string" ? value.status : "running",
+    error: parseProgressError(nested.error),
   };
+}
+
+function parseProgressError(raw: unknown): { paso: string; motivo: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const error = raw as Record<string, unknown>;
+  if (typeof error.paso !== "string" || typeof error.motivo !== "string") return null;
+  return { paso: error.paso, motivo: error.motivo };
 }
 
 export function parseOutputListResponse(data: unknown): EditOutputView[] {

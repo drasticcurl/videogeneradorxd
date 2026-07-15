@@ -191,7 +191,13 @@ interface EditProgressProps {
 }
 
 function EditProgress({ editJobId }: EditProgressProps) {
-  const [progress, setProgress] = useState({ porcentaje: 0, pasoActual: "", mensaje: "Iniciando...", status: "queued" as string });
+  const [progress, setProgress] = useState<{
+    porcentaje: number;
+    pasoActual: string;
+    mensaje: string;
+    status: string;
+    error: { paso: string; motivo: string } | null;
+  }>({ porcentaje: 0, pasoActual: "", mensaje: "Iniciando...", status: "queued", error: null });
 
   // Poll progress every 2 seconds
   useEffect(() => {
@@ -258,8 +264,22 @@ function EditProgress({ editJobId }: EditProgressProps) {
       )}
 
       {isFailed && (
-        <div className="rounded-md bg-red-500/10 border border-red-600/40 px-3 py-2 text-xs text-red-300">
-          Error: {progress.mensaje}
+        <div className="rounded-md bg-red-500/10 border border-red-600/40 px-3 py-2 text-xs text-red-300 space-y-1">
+          {progress.error ? (
+            <>
+              <div className="font-semibold">
+                Error en el paso: {progress.error.paso}
+              </div>
+              <div className="text-slate-400">Motivo:</div>
+              <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-red-200">
+                {progress.error.motivo}
+              </pre>
+            </>
+          ) : (
+            <div className="whitespace-pre-wrap break-words">
+              Error: {progress.mensaje}
+            </div>
+          )}
         </div>
       )}
 
