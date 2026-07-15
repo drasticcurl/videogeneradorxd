@@ -92,6 +92,8 @@ export interface EditJobError {
 export interface EditJob {
   /** Unique edit-job identifier (generator side). */
   id: string;
+  /** Project this edit job belongs to. */
+  projectId: string;
   /** The source selection that produced this job. */
   source: EditSource;
   /** The user-selected editing options. */

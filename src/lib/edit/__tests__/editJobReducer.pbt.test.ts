@@ -28,6 +28,7 @@ function makeRunningJob(): EditJob {
   };
   return {
     id: "test-job-001",
+    projectId: "project-001",
     source: { type: "clips", clipIds: ["clip1"] },
     options: { silenceCut: true, subtitles: true },
     status: "running",
