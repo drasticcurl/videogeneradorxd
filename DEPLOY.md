@@ -27,7 +27,8 @@ Resumen del diseño en la nube:
 export PROJECT_ID=tu-project-id
 export REGION=us-central1
 export BUCKET=augc-bucket-2725       # bucket existente
-export REPO=augc                      # repo de Artifact Registry
+export REPO=cloud-run-source-deploy  # repo de Artifact Registry existente
+export IMAGE=videogeneradorxd/videogeneradorxd
 export SERVICE=videogeneradorxd
 
 gcloud config set project "$PROJECT_ID"
@@ -103,7 +104,7 @@ Hay un `cloudbuild.yaml` parametrizado en la raíz (build → push a Artifact Re
 
 ```bash
 gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_BUCKET=$BUCKET,_REGION=$REGION,_SERVICE=$SERVICE,_REPO=$REPO,_VERTEX_LOCATION=$REGION
+  --substitutions=_BUCKET=$BUCKET,_REGION=$REGION,_SERVICE=$SERVICE,_REPO=$REPO,_IMAGE=$IMAGE,_VERTEX_LOCATION=$REGION
 ```
 
 Para CI/CD: creá un **trigger de Cloud Build** apuntando a `cloudbuild.yaml` (Cloud Build →
