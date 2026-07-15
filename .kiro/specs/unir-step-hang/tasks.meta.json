@@ -1,0 +1,42 @@
+{
+  "pbtResults": {
+    "1. Write bug-condition exploration test for unbounded / non-terminating external-tool execution": {
+      "status": "failed",
+      "failingExample": "On UNFIXED code: `ImportError: cannot import name 'ComandoTimeoutError' from 'app.engine.proc'` (collection error). Independent guarded reproduction confirmed the behavioral bug: `ejecutar_comando(sleeper)` with no timeout -> ('HANG', 4.0s guard tripped) reproducing \"stuck at 25%, zero output\"; `ejecutar_comando(sleeper, timeout=1.0)` -> raises raw subprocess.TimeoutExpired (not the actionable ComandoTimeoutError) and kills only the direct child. Expected failure — proves the bug exists.",
+      "lastRunTimestamp": 1784127491494
+    },
+    "2. Write no-deadlock concurrent-draining characterization test (invariant to preserve)": {
+      "status": "passed",
+      "lastRunTimestamp": 1784127525199
+    },
+    "3. Write preservation property tests for non-buggy runner outcomes (success & non-zero exit)": {
+      "status": "passed",
+      "lastRunTimestamp": 1784127647751
+    },
+    "4. Write order-preservation property test (unchanged concat order)": {
+      "status": "passed",
+      "lastRunTimestamp": 1784127648354
+    },
+    "5. Write backward-compatible runner-injection property test (single-arg doubles)": {
+      "status": "passed",
+      "lastRunTimestamp": 1784127650982
+    },
+    "6.7 Verify the bug-condition exploration test now passes": {
+      "status": "passed",
+      "lastRunTimestamp": 1784128138159
+    },
+    "6.8 Verify the no-deadlock draining property still holds": {
+      "status": "passed",
+      "lastRunTimestamp": 1784128138252
+    },
+    "6.9 Verify the non-buggy preservation properties still hold": {
+      "status": "passed",
+      "lastRunTimestamp": 1784128143136
+    },
+    "6.10 Verify order preservation and backward-compatible injection still hold": {
+      "status": "passed",
+      "lastRunTimestamp": 1784128143385
+    }
+  },
+  "executionHistory": {}
+}

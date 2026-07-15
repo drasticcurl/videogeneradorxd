@@ -26,7 +26,8 @@ import json
 from dataclasses import dataclass
 from typing import List, Optional
 
-from app.engine.proc import Runner, ejecutar_comando
+from app import config
+from app.engine.proc import Runner, ejecutar_comando, invocar_runner
 
 
 class ClipInspeccionError(Exception):
@@ -235,7 +236,7 @@ def inspeccionar_clip(ruta: str, runner: Runner = ejecutar_comando) -> ClipInfo:
     """
     comando = construir_comando_ffprobe(ruta)
     try:
-        resultado = runner(comando)
+        resultado = invocar_runner(runner, comando, timeout=config.VSE_PROBE_TIMEOUT_S)
     except FileNotFoundError as exc:  # ffprobe no instalado
         raise ClipInspeccionError(ruta, "ffprobe no disponible") from exc
     except OSError as exc:

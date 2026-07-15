@@ -22,7 +22,8 @@ import re
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple, Union
 
-from app.engine.proc import Runner, ejecutar_comando
+from app import config
+from app.engine.proc import Runner, ejecutar_comando, invocar_runner
 from app.engine.silence import (
     SilenceProcessingError,
     calcular_segmentos_conservar,
@@ -215,7 +216,7 @@ def eliminar_risas(
         " ".join(comando),
     )
     try:
-        resultado = runner(comando)
+        resultado = invocar_runner(runner, comando, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
     except OSError as exc:
         raise SilenceProcessingError(
             f"no se pudo ejecutar ffmpeg (recorte de risas): {exc}"

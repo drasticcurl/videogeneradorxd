@@ -176,6 +176,46 @@ def job_output_path(job_id: str) -> Path:
 DEPENDENCY_CHECK_TIMEOUT_S: float = 10.0
 
 # ---------------------------------------------------------------------------
+# Plazos de subprocesos externos (bugfix unir-step-hang, Req 2.2, 2.4)
+# ---------------------------------------------------------------------------
+# Toda invocación de una herramienta externa (ffmpeg/ffprobe/auto-editor/node)
+# pasa por ``app/engine/proc.py::ejecutar_comando``. Para evitar que un
+# subproceso bloqueado congele un paso indefinidamente (el síntoma "atascado al
+# 25 %, sin logs"), se aplica un plazo acotado por paso. Los valores son
+# generosos a propósito para que ejecuciones sanas con entradas válidas NUNCA lo
+# disparen (preservación / caso lento-pero-sano). Configurables por entorno.
+
+
+def _env_float(nombre: str, defecto: float) -> float:
+    """Lee un plazo en segundos desde el entorno con respaldo numérico.
+
+    Un valor ausente, vacío, no numérico o no positivo cae al ``defecto`` (un
+    plazo debe ser un número positivo para tener sentido como deadline).
+    """
+    crudo = os.environ.get(nombre)
+    if crudo is None:
+        return defecto
+    try:
+        valor = float(crudo)
+    except (TypeError, ValueError):
+        return defecto
+    return valor if valor > 0 else defecto
+
+
+# Plazo general por defecto para herramientas de proceso (ffmpeg/auto-editor):
+# 900 s (15 min). Cubre normalizaciones/concats/mezclas largas sin ser infinito.
+VSE_SUBPROCESS_TIMEOUT_S: float = _env_float("VSE_SUBPROCESS_TIMEOUT_S", 900.0)
+
+# Plazo corto para la inspección/duración con ``ffprobe``: 60 s. Un clip válido
+# se sondea en muy por debajo de un segundo, así que 60 s es un margen amplísimo
+# que aún corta rápido un ffprobe bloqueado (p. ej. lectura FUSE estancada).
+VSE_PROBE_TIMEOUT_S: float = _env_float("VSE_PROBE_TIMEOUT_S", 60.0)
+
+# Plazo más largo para pasos de transcripción/render (faster-whisper, Remotion),
+# que legítimamente pueden tardar bastante más que ffmpeg. Por defecto 1800 s.
+VSE_TRANSCRIPTION_TIMEOUT_S: float = _env_float("VSE_TRANSCRIPTION_TIMEOUT_S", 1800.0)
+
+# ---------------------------------------------------------------------------
 # Valores por defecto del pipeline (Req 3.2, 3.5, 4.2, 5.2, 5.3, 6.1, 7.x, 8.4)
 # ---------------------------------------------------------------------------
 # Resolución objetivo por defecto: 1080x1920 (9:16) (Req 3.2).
