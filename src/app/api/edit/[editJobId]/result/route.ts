@@ -11,38 +11,11 @@
  */
 
 import { NextResponse } from "next/server";
-import { editJobsDb } from "@/lib/edit/editJobStore";
-import { LocalStorageAdapter } from "@/lib/edit/localStorageAdapter";
 import { getSignedUrlTtlSec } from "@/lib/edit/config";
-import type { StorageAdapter } from "@/lib/edit/storageAdapter";
-import type { EditJobStore } from "@/lib/edit/editJobStore";
+import { getDeps } from "./_deps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// ---------------------------------------------------------------------------
-// Dependency injection (overridable for tests)
-// ---------------------------------------------------------------------------
-
-export interface ResultRouteDeps {
-  editJobStore: EditJobStore;
-  getStorageAdapter: (projectId: string) => StorageAdapter;
-}
-
-const defaultDeps: ResultRouteDeps = {
-  editJobStore: editJobsDb,
-  getStorageAdapter: (projectId: string) => new LocalStorageAdapter(projectId),
-};
-
-let currentDeps: ResultRouteDeps = defaultDeps;
-
-export function __setDeps(deps: Partial<ResultRouteDeps>): void {
-  currentDeps = { ...defaultDeps, ...deps };
-}
-
-export function __resetDeps(): void {
-  currentDeps = defaultDeps;
-}
 
 // ---------------------------------------------------------------------------
 // GET handler
@@ -53,6 +26,7 @@ export async function GET(
   { params }: { params: { editJobId: string } }
 ): Promise<Response> {
   const { editJobId } = params;
+  const currentDeps = getDeps();
 
   // Look up the EditJob
   const job = currentDeps.editJobStore.getEditJob(editJobId);
@@ -130,7 +104,7 @@ export async function GET(
 
         if (start <= end && end < totalSize) {
           const rangedData = await adapter.getOutputStream(keyEditJobId, relKey, { start, end });
-          return new Response(rangedData, {
+          return new Response(Buffer.from(rangedData), {
             status: 206,
             headers: {
               "Content-Type": "video/mp4",
@@ -146,7 +120,7 @@ export async function GET(
 
     // Full content
     const data = await adapter.getOutputStream(keyEditJobId, relKey);
-    return new Response(data, {
+    return new Response(Buffer.from(data), {
       status: 200,
       headers: {
         "Content-Type": "video/mp4",

@@ -12,33 +12,10 @@
  */
 
 import { NextResponse } from "next/server";
-import { editJobsDb } from "@/lib/edit/editJobStore";
-import type { EditJobStore } from "@/lib/edit/editJobStore";
+import { getDeps } from "./_deps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// ---------------------------------------------------------------------------
-// Dependency injection (overridable for tests)
-// ---------------------------------------------------------------------------
-
-export interface ListRouteDeps {
-  editJobStore: EditJobStore;
-}
-
-const defaultDeps: ListRouteDeps = {
-  editJobStore: editJobsDb,
-};
-
-let currentDeps: ListRouteDeps = defaultDeps;
-
-export function __setDeps(deps: Partial<ListRouteDeps>): void {
-  currentDeps = { ...defaultDeps, ...deps };
-}
-
-export function __resetDeps(): void {
-  currentDeps = defaultDeps;
-}
 
 // ---------------------------------------------------------------------------
 // GET handler
@@ -47,6 +24,7 @@ export function __resetDeps(): void {
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const projectId = url.searchParams.get("projectId");
+  const currentDeps = getDeps();
 
   if (!projectId) {
     return NextResponse.json(

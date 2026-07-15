@@ -14,8 +14,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { GET, __setDeps as setProgressDeps, __resetDeps as resetProgressDeps } from "@/app/api/edit/[editJobId]/progress/route";
-import { POST, __setDeps as setConfirmDeps, __resetDeps as resetConfirmDeps } from "@/app/api/edit/[editJobId]/confirm/route";
+import { GET } from "@/app/api/edit/[editJobId]/progress/route";
+import { __setDeps as setProgressDeps, __resetDeps as resetProgressDeps } from "@/app/api/edit/[editJobId]/progress/_deps";
+import { POST } from "@/app/api/edit/[editJobId]/confirm/route";
+import { __setDeps as setConfirmDeps, __resetDeps as resetConfirmDeps } from "@/app/api/edit/[editJobId]/confirm/_deps";
 import type { EditJob, EditorProgress } from "@/lib/edit/types";
 import type { EditJobStore } from "@/lib/edit/editJobStore";
 
