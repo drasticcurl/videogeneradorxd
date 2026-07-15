@@ -88,7 +88,57 @@ describe("EditPanel — BFF response shapes", () => {
       porcentaje: 42,
       pasoActual: "TRANSCRIBIR",
       mensaje: "Transcribiendo",
+      error: null,
     });
+  });
+
+  it("surfaces the nested progress.error {paso, motivo} on failure", () => {
+    expect(parseProgressResponse({
+      status: "failed",
+      progress: {
+        porcentaje: 80,
+        pasoActual: "UNIR",
+        mensaje: "Fallo al unir",
+        error: {
+          paso: "UNIR",
+          motivo: "ffmpeg: Error while opening encoder for output stream #0:0",
+        },
+      },
+    })).toEqual({
+      status: "failed",
+      porcentaje: 80,
+      pasoActual: "UNIR",
+      mensaje: "Fallo al unir",
+      error: {
+        paso: "UNIR",
+        motivo: "ffmpeg: Error while opening encoder for output stream #0:0",
+      },
+    });
+  });
+
+  it("defaults error to null when absent", () => {
+    expect(parseProgressResponse({
+      status: "running",
+      progress: { porcentaje: 10, pasoActual: "NORMALIZAR", mensaje: "En curso" },
+    }).error).toBeNull();
+  });
+
+  it("defaults error to null when malformed", () => {
+    // Missing motivo
+    expect(parseProgressResponse({
+      status: "failed",
+      progress: { error: { paso: "UNIR" } },
+    }).error).toBeNull();
+    // Wrong types
+    expect(parseProgressResponse({
+      status: "failed",
+      progress: { error: { paso: 1, motivo: 2 } },
+    }).error).toBeNull();
+    // Not an object
+    expect(parseProgressResponse({
+      status: "failed",
+      progress: { error: "boom" },
+    }).error).toBeNull();
   });
 
   it("reads the output listing's outputs/editJobId/completedAt shape", () => {
