@@ -85,6 +85,8 @@ export function createEditorClient(options?: EditorClientOptions) {
     init?: RequestInit,
   ): Promise<Response> {
     const url = `${baseUrl}${path}`;
+    const method = init?.method ?? "GET";
+    console.log(`[EditorClient] fetching ${method} ${url}`);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -100,6 +102,7 @@ export function createEditorClient(options?: EditorClientOptions) {
 
       if (response.status >= 500) {
         const bodyText = await response.text().catch(() => "");
+        console.log(`[EditorClient] server error ${response.status} ${bodyText}`);
         throw new EditorTransientError(
           `Editor returned ${response.status}: ${bodyText}`,
         );
@@ -114,11 +117,18 @@ export function createEditorClient(options?: EditorClientOptions) {
         );
       }
 
+      console.log(`[EditorClient] response ${response.status}`);
       return response;
     } catch (err: unknown) {
       if (err instanceof EditorTransientError) throw err;
       if (err instanceof EditorPermanentError) throw err;
       if (isTransientNetworkError(err)) {
+        const netErr = err as Error & { code?: string; cause?: unknown };
+        console.log("[EditorClient] network error", {
+          message: netErr.message,
+          code: netErr.code,
+          cause: netErr.cause,
+        });
         throw new EditorTransientError(
           `Network error calling editor: ${(err as Error).message ?? err}`,
           err,
