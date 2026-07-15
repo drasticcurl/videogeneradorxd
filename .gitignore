@@ -27,3 +27,13 @@ yarn-debug.log*
 yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts.bak
+
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+editor/.workdir/
+editor/.output/
+editor/.config/

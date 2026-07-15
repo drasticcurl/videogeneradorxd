@@ -79,6 +79,9 @@ class JobManager:
         # (no se serializa a disco, no aparece en ``GET /progreso`` ni en logs). Se
         # elimina de este mapa cuando el Job alcanza un estado terminal (Req 2.5).
         self._api_keys: Dict[str, str] = {}
+        # Generator-side edit_job_id for Shared_Volume namespacing (cloud mode).
+        self._edit_job_ids: Dict[str, str] = {}
+        self._lock = threading.RLock()
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
@@ -153,6 +156,20 @@ class JobManager:
         """Devuelve el :class:`JobState` de ``job_id`` o ``None`` si no existe."""
         with self._lock:
             return self._jobs.get(job_id)
+
+    # ------------------------------------------------------------------
+    # Edit job ID (generator-side edit_job_id for Shared_Volume namespacing)
+    # ------------------------------------------------------------------
+
+    def establecer_edit_job_id(self, job_id: str, edit_job_id: str) -> None:
+        """Store the generator-side edit_job_id for persist_output namespacing."""
+        with self._lock:
+            self._edit_job_ids[job_id] = edit_job_id
+
+    def obtener_edit_job_id(self, job_id: str) -> Optional[str]:
+        """Return the generator-side edit_job_id, or None."""
+        with self._lock:
+            return self._edit_job_ids.get(job_id)
 
     def listar_ids(self) -> List[str]:
         """Devuelve la lista de identificadores de Jobs registrados."""
