@@ -31,7 +31,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Union
 
-from app.engine.proc import Runner, ejecutar_comando
+from app import config
+from app.engine.proc import Runner, ejecutar_comando, invocar_runner
 from app.models.settings import (
     AjustesTranscripcion,
     IDIOMA_AUTO,
@@ -119,7 +120,7 @@ def _extractor_ffmpeg(runner: Runner) -> Extractor:
     def _extraer(video: str, audio_wav: str) -> None:
         comando = comando_extraer_audio(video, audio_wav)
         try:
-            resultado = runner(comando)
+            resultado = invocar_runner(runner, comando, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
         except OSError as exc:
             raise TranscripcionError(f"no se pudo ejecutar ffmpeg: {exc}") from exc
         if resultado.returncode != 0:

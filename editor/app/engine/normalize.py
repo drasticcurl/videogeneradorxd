@@ -30,8 +30,11 @@ Referencias de requisitos: 3.1, 3.3, 3.4, 2.4.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import List, Sequence
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Rango de dimensiones válidas (Req 3.2): cada eje es un entero entre 2 y 7680.
@@ -335,7 +338,8 @@ from app.engine.ffprobe import (  # noqa: E402
     ClipInspeccionError,
     inspeccionar_clip,
 )
-from app.engine.proc import Runner, ejecutar_comando  # noqa: E402
+from app import config  # noqa: E402
+from app.engine.proc import Runner, ejecutar_comando, invocar_runner  # noqa: E402
 from app.models.settings import AjustesTransiciones  # noqa: E402
 from app.storage.workdir import JobWorkdir  # noqa: E402
 
@@ -649,7 +653,7 @@ def _probar_duracion(ruta: str, runner: Runner) -> float:
         ruta,
     ]
     try:
-        resultado = runner(comando)
+        resultado = invocar_runner(runner, comando, timeout=config.VSE_PROBE_TIMEOUT_S)
     except OSError as exc:
         raise NormalizacionError(ruta, f"no se pudo ejecutar ffprobe (duración): {exc}") from exc
     if resultado.returncode != 0:
@@ -738,19 +742,27 @@ def unir_clips(
 
     job.create()
 
+    total_clips = len(rutas_clips)
+    logger.info("UNIR: iniciando unión de %d clip(s) a %dx%d @ %d fps",
+                total_clips, ancho_objetivo, alto_objetivo, fps)
+
     # (1) Inspección previa: un clip inválido detiene la unión sin salida parcial.
+    logger.info("UNIR: inspeccionando %d clip(s) con ffprobe", total_clips)
     infos: List[ClipInfo] = []
-    for ruta in rutas_clips:
+    for indice, ruta in enumerate(rutas_clips):
+        logger.info("UNIR: inspeccionando clip %d/%d: %s", indice + 1, total_clips, ruta)
         try:
             infos.append(inspector(ruta))
         except ClipInspeccionError as exc:
             raise NormalizacionError(exc.ruta, exc.motivo) from exc
+    logger.info("UNIR: inspección de clips completada")
 
     filtro = cadena_filtro_normalizacion(ancho_objetivo, alto_objetivo, fps)
 
     # (2) Normalización de cada clip a un intermedio homogéneo.
     intermedios: List[_Path] = []
     for indice, (ruta, info) in enumerate(zip(rutas_clips, infos)):
+        logger.info("UNIR: normalizando clip %d/%d: %s", indice + 1, total_clips, ruta)
         salida = job.resolve("norm_%03d.mp4" % indice)
         comando = comando_normalizar_clip(
             entrada=ruta,
@@ -760,13 +772,14 @@ def unir_clips(
             tiene_audio=info.tiene_audio,
         )
         try:
-            resultado = runner(comando)
+            resultado = invocar_runner(runner, comando, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
         except OSError as exc:
             raise NormalizacionError(ruta, f"no se pudo ejecutar ffmpeg: {exc}") from exc
         if resultado.returncode != 0:
             detalle = (resultado.stderr or "").strip() or "código de salida distinto de cero"
             raise NormalizacionError(ruta, f"normalización falló: {detalle}")
         intermedios.append(salida)
+    logger.info("UNIR: normalización de %d clip(s) completada", total_clips)
 
     # (3) Unión en el orden del usuario (Propiedad 5 / Req 3.4).
     unido = job.resolve(NOMBRE_UNIDO)
@@ -776,6 +789,7 @@ def unir_clips(
     tipo_transicion = getattr(transiciones, "tipo", "ninguna") if transiciones is not None else "ninguna"
     nombre_xfade = nombre_transicion_xfade(tipo_transicion)
     if nombre_xfade is not None and len(intermedios) >= 2:
+        logger.info("UNIR: uniendo con transiciones (%s)", tipo_transicion)
         duraciones = [_probar_duracion(str(p), runner) for p in intermedios]
         duracion_ms = getattr(transiciones, "duracion_ms", 400)
         duracion_s = _duracion_transicion_efectiva(duraciones, duracion_ms)
@@ -784,7 +798,7 @@ def unir_clips(
             [str(p) for p in intermedios], str(unido), nombre_xfade, duracion_s, offsets, fps
         )
         try:
-            resultado = runner(comando_tr)
+            resultado = invocar_runner(runner, comando_tr, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
         except OSError as exc:
             raise NormalizacionError(
                 None, f"no se pudo ejecutar ffmpeg (transiciones): {exc}"
@@ -792,9 +806,11 @@ def unir_clips(
         if resultado.returncode != 0:
             detalle = (resultado.stderr or "").strip() or "código de salida distinto de cero"
             raise NormalizacionError(None, f"unión con transiciones falló: {detalle}")
+        logger.info("UNIR: unión con transiciones completada: %s", unido)
         return unido
 
     # (3b) Corte duro (comportamiento por defecto): demuxer concat + copy.
+    logger.info("UNIR: concatenando %d intermedio(s) (corte duro)", len(intermedios))
     concat_txt = job.resolve(NOMBRE_CONCAT_TXT)
     concat_txt.write_text(
         contenido_concat_txt([str(p) for p in intermedios]), encoding="utf-8"
@@ -802,13 +818,14 @@ def unir_clips(
 
     comando_concat = comando_concatenar(str(concat_txt), str(unido))
     try:
-        resultado = runner(comando_concat)
+        resultado = invocar_runner(runner, comando_concat, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
     except OSError as exc:
         raise NormalizacionError(None, f"no se pudo ejecutar ffmpeg (concat): {exc}") from exc
     if resultado.returncode != 0:
         detalle = (resultado.stderr or "").strip() or "código de salida distinto de cero"
         raise NormalizacionError(None, f"concatenación falló: {detalle}")
 
+    logger.info("UNIR: concatenación completada: %s", unido)
     return unido
 
 

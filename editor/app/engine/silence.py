@@ -37,7 +37,7 @@ import errno
 
 from app import config
 from app.deps.path_setup import preparar_auto_editor
-from app.engine.proc import Runner, ejecutar_comando
+from app.engine.proc import Runner, ejecutar_comando, invocar_runner
 from app.util.units import (
     UI_MARGEN_MS_MAX,
     UI_MARGEN_MS_MIN,
@@ -522,7 +522,7 @@ def obtener_duracion(entrada: str, runner: Runner = ejecutar_comando) -> float:
         entrada,
     ]
     try:
-        resultado = runner(comando)
+        resultado = invocar_runner(runner, comando, timeout=config.VSE_PROBE_TIMEOUT_S)
     except OSError as exc:
         raise SilenceProcessingError(
             f"no se pudo ejecutar ffprobe para obtener la duración: {exc}"
@@ -610,7 +610,7 @@ def cortar_silencios_ffmpeg(
     cmd_recorte = comando_recorte_ffmpeg(str(entrada_path), str(salida_path), filtro)
     logger.info("Ejecutando recorte ffmpeg: %s", " ".join(cmd_recorte))
     try:
-        res_recorte = runner(cmd_recorte)
+        res_recorte = invocar_runner(runner, cmd_recorte, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
     except OSError as exc:
         raise SilenceProcessingError(
             f"no se pudo ejecutar ffmpeg (recorte): {exc}"
@@ -749,7 +749,7 @@ def cortar_silencios_vad(
     cmd_recorte = comando_recorte_ffmpeg(str(entrada_path), str(salida_path), filtro)
     logger.info("Ejecutando recorte ffmpeg (VAD): %s", " ".join(cmd_recorte))
     try:
-        res_recorte = runner(cmd_recorte)
+        res_recorte = invocar_runner(runner, cmd_recorte, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
     except OSError as exc:
         raise SilenceProcessingError(
             f"no se pudo ejecutar ffmpeg (recorte VAD): {exc}"
@@ -911,7 +911,7 @@ def detectar_silencios(
         )
         logger.info("Ejecutando silencedetect: %s", " ".join(cmd_detect))
         try:
-            res_detect = runner(cmd_detect)
+            res_detect = invocar_runner(runner, cmd_detect, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
         except OSError as exc:
             raise SilenceProcessingError(
                 f"no se pudo ejecutar ffmpeg (silencedetect): {exc}"
@@ -1037,7 +1037,7 @@ def aplicar_tramos_borrado(
     cmd_recorte = comando_recorte_ffmpeg(str(entrada_path), str(salida_path), filtro)
     logger.info("Ejecutando recorte ffmpeg (aplicar borrado): %s", " ".join(cmd_recorte))
     try:
-        res_recorte = runner(cmd_recorte)
+        res_recorte = invocar_runner(runner, cmd_recorte, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
     except OSError as exc:
         raise SilenceProcessingError(
             f"no se pudo ejecutar ffmpeg (recorte): {exc}"
@@ -1170,7 +1170,7 @@ def cortar_silencios(
     # reproducir manualmente la invocación al diagnosticar fallos.
     logger.info("Ejecutando auto-editor: %s", " ".join(comando))
     try:
-        resultado = runner(comando)
+        resultado = invocar_runner(runner, comando, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
     except PermissionError as exc:
         raise SilenceProcessingError(
             f"no se pudo ejecutar auto-editor: {exc}. {_PISTA_PERMISOS}"

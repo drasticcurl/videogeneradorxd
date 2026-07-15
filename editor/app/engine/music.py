@@ -31,7 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Union
 
-from app.engine.proc import Runner, ejecutar_comando
+from app import config
+from app.engine.proc import Runner, ejecutar_comando, invocar_runner
 from app.models.settings import RANGOS_MOTOR, AjustesMusica
 from app.util.units import dbfs_a_amplitud
 
@@ -254,7 +255,7 @@ def mezclar_musica(
         str(video_path), str(musica_wav), str(salida_path), filtro
     )
     try:
-        resultado = runner(comando)
+        resultado = invocar_runner(runner, comando, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
     except OSError as exc:
         raise MusicaError(f"no se pudo ejecutar ffmpeg: {exc}") from exc
 

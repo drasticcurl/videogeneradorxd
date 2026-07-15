@@ -30,7 +30,8 @@ from typing import Callable, List, Optional, Sequence, Union
 
 from app.engine.ass_builder import construir_ass
 from app.engine.grouping import agrupar
-from app.engine.proc import Runner, ejecutar_comando
+from app import config
+from app.engine.proc import Runner, ejecutar_comando, invocar_runner
 from app.models.settings import (
     RANGOS_MOTOR,
     AjustesSubtitulos,
@@ -251,7 +252,7 @@ def generar_y_quemar_subtitulos(
     # reproducir manualmente la invocación al diagnosticar fallos.
     logger.info("Ejecutando ffmpeg (subtítulos): %s", " ".join(comando))
     try:
-        resultado = runner(comando)
+        resultado = invocar_runner(runner, comando, timeout=config.VSE_SUBPROCESS_TIMEOUT_S)
     except OSError as exc:
         raise SubtitulosError(f"no se pudo ejecutar ffmpeg: {exc}") from exc
 

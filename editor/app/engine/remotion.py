@@ -47,8 +47,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Union
 
+from app import config
 from app.engine.ffprobe import ClipInfo, inspeccionar_clip
-from app.engine.proc import Runner, ejecutar_comando
+from app.engine.proc import Runner, ejecutar_comando, invocar_runner
 from app.models.settings import (
     AjustesRender,
     AjustesSubtitulos,
@@ -661,7 +662,7 @@ def renderizar_con_remotion(
 
     try:
         with _variables_entorno_temporales(entorno):
-            resultado = runner(comando)
+            resultado = invocar_runner(runner, comando, timeout=config.VSE_TRANSCRIPTION_TIMEOUT_S)
     except FileNotFoundError as exc:  # node no instalado
         raise RemotionError(
             f"no se pudo ejecutar el render de Remotion: {_GUIA_NODE_AUSENTE} ({exc})"
