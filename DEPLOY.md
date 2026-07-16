@@ -107,8 +107,18 @@ gcloud builds submit --config cloudbuild.yaml \
   --substitutions=_BUCKET=$BUCKET,_REGION=$REGION,_SERVICE=$SERVICE,_REPO=$REPO,_IMAGE=$IMAGE,_VERTEX_LOCATION=$REGION
 ```
 
+La imagen se etiqueta con `_TAG` (por defecto `latest`), así que un `gcloud builds submit`
+manual funciona sin depender de ningún valor de trigger. Para fijar una etiqueta específica,
+agregá `_TAG` a las substitutions:
+
+```bash
+gcloud builds submit --config cloudbuild.yaml \
+  --substitutions=_BUCKET=$BUCKET,_REGION=$REGION,_SERVICE=$SERVICE,_REPO=$REPO,_IMAGE=$IMAGE,_VERTEX_LOCATION=$REGION,_TAG=v1.2.3
+```
+
 Para CI/CD: creá un **trigger de Cloud Build** apuntando a `cloudbuild.yaml` (Cloud Build →
-Triggers → Connect repository). Cada push buildea y deploya.
+Triggers → Connect repository). Cada push buildea y deploya (podés mapear `_TAG` al SHA del
+commit desde la configuración del trigger).
 
 ---
 
