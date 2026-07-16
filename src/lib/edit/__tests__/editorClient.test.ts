@@ -349,3 +349,157 @@ describe("EditorClient — URL construction", () => {
     expect(client.baseUrl).toBe("http://127.0.0.1:8000");
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// EditorClient — pause read/confirm methods + workfile proxy
+// ---------------------------------------------------------------------------
+
+describe("EditorClient — pause read methods", () => {
+  it("getSilencios returns the editor payload verbatim", async () => {
+    const payload = {
+      job_id: "j-1",
+      estado: "esperando_edicion_silencios",
+      editable: true,
+      video_url: "http://127.0.0.1:8000/workfile/j-1/unido.mp4",
+      video_nombre: "unido.mp4",
+      duracion_s: 12.5,
+      fps: 30,
+      ancho: 1080,
+      alto: 1920,
+      tramos: [{ inicio_s: 1, fin_s: 2 }],
+    };
+    const fakeFetch = vi.fn(async () =>
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const client = createEditorClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchFn: fakeFetch as unknown as typeof globalThis.fetch,
+      retry: { maxAttempts: 1 },
+    });
+    const res = await client.getSilencios("j-1");
+    expect(res).toEqual(payload);
+    expect(fakeFetch).toHaveBeenCalledTimes(1);
+    const [url] = fakeFetch.mock.calls[0] as unknown as [string];
+    expect(url).toBe("http://127.0.0.1:8000/silencios/j-1");
+  });
+
+  it("getSubtitulos and getRender hit the correct URLs", async () => {
+    const fakeFetch = vi.fn(async (url: string) =>
+      new Response(JSON.stringify({ job_id: "j", estado: "x", editable: true, grupos: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const client = createEditorClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchFn: fakeFetch as unknown as typeof globalThis.fetch,
+      retry: { maxAttempts: 1 },
+    });
+    await client.getSubtitulos("j-2");
+    await client.getRender("j-3");
+    expect((fakeFetch.mock.calls[0] as [string])[0]).toBe("http://127.0.0.1:8000/subtitulos/j-2");
+    expect((fakeFetch.mock.calls[1] as [string])[0]).toBe("http://127.0.0.1:8000/render/j-3");
+  });
+});
+
+describe("EditorClient — confirm methods", () => {
+  it("postSilencios succeeds on 202", async () => {
+    const fakeFetch = vi.fn(async () => new Response(null, { status: 202 }));
+    const client = createEditorClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchFn: fakeFetch as unknown as typeof globalThis.fetch,
+      retry: { maxAttempts: 1 },
+    });
+    await expect(
+      client.postSilencios("j-1", { tramos: [{ inicio_s: 0, fin_s: 1 }] }),
+    ).resolves.toBeUndefined();
+    const [url, init] = fakeFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:8000/silencios/j-1");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ tramos: [{ inicio_s: 0, fin_s: 1 }] });
+  });
+
+  it("postSubtitulos maps editor 4xx to EditorPermanentError with statusCode", async () => {
+    const fakeFetch = vi.fn(async () => new Response("count mismatch", { status: 400 }));
+    const client = createEditorClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchFn: fakeFetch as unknown as typeof globalThis.fetch,
+      retry: { maxAttempts: 1 },
+    });
+    await expect(
+      client.postSubtitulos("j-1", { grupos: [{ texto: "hi" }] }),
+    ).rejects.toMatchObject({ name: "EditorPermanentError", statusCode: 400 });
+  });
+
+  it("postRender maps 5xx/network to EditorTransientError", async () => {
+    const fakeFetch = vi.fn(async () => new Response("boom", { status: 500 }));
+    const client = createEditorClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchFn: fakeFetch as unknown as typeof globalThis.fetch,
+      retry: { maxAttempts: 1 },
+    });
+    await expect(
+      client.postRender("j-1", { textos_extra: [], motor: "remotion" }),
+    ).rejects.toBeInstanceOf(EditorTransientError);
+  });
+});
+
+describe("EditorClient — fetchWorkfile", () => {
+  it("forwards the Range header and returns the raw Response without parsing", async () => {
+    const body = new Uint8Array([1, 2, 3, 4]);
+    const fakeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const range = (init?.headers as Record<string, string>)?.["Range"];
+      return new Response(body, {
+        status: range ? 206 : 200,
+        headers: {
+          "Content-Type": "video/mp4",
+          "Content-Range": "bytes 0-3/4",
+          "Accept-Ranges": "bytes",
+        },
+      });
+    });
+    const client = createEditorClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchFn: fakeFetch as unknown as typeof globalThis.fetch,
+      retry: { maxAttempts: 1 },
+    });
+    const res = await client.fetchWorkfile("j-1", "unido.mp4", "bytes=0-3");
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Content-Type")).toBe("video/mp4");
+    expect(res.headers.get("Content-Range")).toBe("bytes 0-3/4");
+    const [url, init] = fakeFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:8000/workfile/j-1/unido.mp4");
+    expect((init.headers as Record<string, string>)["Range"]).toBe("bytes=0-3");
+  });
+
+  it("returns editor 404 verbatim (no throw)", async () => {
+    const fakeFetch = vi.fn(async () => new Response("not found", { status: 404 }));
+    const client = createEditorClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchFn: fakeFetch as unknown as typeof globalThis.fetch,
+      retry: { maxAttempts: 1 },
+    });
+    const res = await client.fetchWorkfile("j-1", "unido.mp4");
+    expect(res.status).toBe(404);
+  });
+
+  it("throws EditorTransientError on network failure", async () => {
+    const fakeFetch = vi.fn(async () => {
+      const err = new TypeError("fetch failed");
+      (err as unknown as { code: string }).code = "ECONNREFUSED";
+      throw err;
+    });
+    const client = createEditorClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchFn: fakeFetch as unknown as typeof globalThis.fetch,
+      retry: { maxAttempts: 1 },
+    });
+    await expect(client.fetchWorkfile("j-1", "unido.mp4")).rejects.toBeInstanceOf(
+      EditorTransientError,
+    );
+  });
+});

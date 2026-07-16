@@ -23,6 +23,90 @@ export interface ProcesarResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Editor pause read/confirm contracts (verbatim, snake_case)
+//
+// These mirror the editor's FastAPI response models exactly. They are returned
+// verbatim by the getX methods and consumed by the BFF normalization helpers.
+// ---------------------------------------------------------------------------
+
+/** A detected/edited silence cut segment (editor form). */
+export interface EditorTramo {
+  inicio_s: number;
+  fin_s: number;
+}
+
+/** A proposed subtitle group with group + per-word timings (editor form). */
+export interface EditorGrupo {
+  texto: string;
+  inicio_s: number;
+  fin_s: number;
+  palabras:
+    | { texto: string; inicio_s: number | null; fin_s: number | null }[]
+    | null;
+}
+
+/** An optional overlaid "hook" text on the final render (editor form). */
+export interface EditorTextoExtra {
+  texto: string;
+  inicio_s: number;
+  fin_s: number;
+  estilo: {
+    fuente: string;
+    tamano: number;
+    color: string;
+    color_borde: string;
+    grosor_borde: number;
+    negrita: boolean;
+    pos_vertical_pct: number;
+    pos_horizontal_pct: number;
+  };
+}
+
+/** GET /silencios/{id} response. */
+export interface EditorSilenciosResponse {
+  job_id: string;
+  estado: string;
+  editable: boolean;
+  video_url: string | null;
+  video_nombre: string | null;
+  duracion_s: number;
+  fps: number;
+  ancho: number;
+  alto: number;
+  tramos: EditorTramo[];
+}
+
+/** GET /subtitulos/{id} response. */
+export interface EditorSubtitulosResponse {
+  job_id: string;
+  estado: string;
+  editable: boolean;
+  grupos: EditorGrupo[];
+}
+
+/** GET /render/{id} response. */
+export interface EditorRenderResponse {
+  job_id: string;
+  estado: string;
+  editable: boolean;
+  motor_preferido: string;
+  grupos: EditorGrupo[];
+  video_url: string | null;
+  video_nombre: string | null;
+  fps: number;
+  ancho: number;
+  alto: number;
+  duracion_s: number | null;
+  textos_extra: EditorTextoExtra[];
+}
+
+/** POST /render/{id} confirmation body. */
+export interface EditorRenderConfirmBody {
+  textos_extra: EditorTextoExtra[];
+  motor?: "remotion";
+}
+
+// ---------------------------------------------------------------------------
 // Network-error classification helpers
 // ---------------------------------------------------------------------------
 
@@ -187,11 +271,140 @@ export function createEditorClient(options?: EditorClientOptions) {
     }, retryOpts);
   }
 
+  // -------------------------------------------------------------------------
+  // Pause read methods — GET the editor's read-only pause payload verbatim
+  // -------------------------------------------------------------------------
+
+  async function getJson<T>(path: string): Promise<T> {
+    return withRetry(async () => {
+      const res = await editorFetch(path, { method: "GET" });
+      return (await res.json()) as T;
+    }, retryOpts);
+  }
+
+  /** GET /silencios/{id} — detected silence segments + preview metadata. */
+  async function getSilencios(
+    editorJobId: string,
+  ): Promise<EditorSilenciosResponse> {
+    return getJson<EditorSilenciosResponse>(
+      `/silencios/${encodeURIComponent(editorJobId)}`,
+    );
+  }
+
+  /** GET /subtitulos/{id} — proposed subtitle groups. */
+  async function getSubtitulos(
+    editorJobId: string,
+  ): Promise<EditorSubtitulosResponse> {
+    return getJson<EditorSubtitulosResponse>(
+      `/subtitulos/${encodeURIComponent(editorJobId)}`,
+    );
+  }
+
+  /** GET /render/{id} — final groups, preview, and existing extra texts. */
+  async function getRender(editorJobId: string): Promise<EditorRenderResponse> {
+    return getJson<EditorRenderResponse>(
+      `/render/${encodeURIComponent(editorJobId)}`,
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Confirmation methods — POST the user's edit; the editor returns 202.
+  // Non-2xx is surfaced via EditorPermanentError (4xx) / EditorTransientError
+  // (5xx/network) by editorFetch so callers can branch on statusCode.
+  // -------------------------------------------------------------------------
+
+  async function postConfirm(path: string, body: unknown): Promise<void> {
+    return withRetry(async () => {
+      const res = await editorFetch(path, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      if (res.status !== 202) {
+        throw new EditorPermanentError(
+          `Expected 202 from ${path}, got ${res.status}`,
+          res.status,
+        );
+      }
+    }, retryOpts);
+  }
+
+  /** POST /silencios/{id} — forward edited cut segments. */
+  async function postSilencios(
+    editorJobId: string,
+    body: { tramos: EditorTramo[] },
+  ): Promise<void> {
+    return postConfirm(`/silencios/${encodeURIComponent(editorJobId)}`, body);
+  }
+
+  /** POST /subtitulos/{id} — forward edited text-only groups. */
+  async function postSubtitulos(
+    editorJobId: string,
+    body: { grupos: { texto: string }[] },
+  ): Promise<void> {
+    return postConfirm(`/subtitulos/${encodeURIComponent(editorJobId)}`, body);
+  }
+
+  /** POST /render/{id} — trigger the final render with optional extra texts. */
+  async function postRender(
+    editorJobId: string,
+    body: EditorRenderConfirmBody,
+  ): Promise<void> {
+    return postConfirm(`/render/${encodeURIComponent(editorJobId)}`, body);
+  }
+
+  // -------------------------------------------------------------------------
+  // Workfile proxy — raw fetch, no JSON parsing, forwards Range for streaming
+  // -------------------------------------------------------------------------
+
+  /**
+   * GET /workfile/{id}/{name} — raw fetch of an intermediate video for preview.
+   *
+   * Performs no JSON parsing and no error classification: it forwards the
+   * `Range` request header (if provided) and returns the editor `Response`
+   * verbatim (status 200/206/404 and headers intact) so the BFF preview route
+   * can stream it. Transient network failures throw EditorTransientError.
+   */
+  async function fetchWorkfile(
+    editorJobId: string,
+    name: string,
+    range?: string,
+  ): Promise<Response> {
+    const url = `${baseUrl}/workfile/${encodeURIComponent(editorJobId)}/${encodeURIComponent(name)}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const headers: Record<string, string> = {};
+    if (range) headers["Range"] = range;
+    try {
+      return await fetchImpl(url, {
+        method: "GET",
+        signal: controller.signal,
+        headers,
+      });
+    } catch (err: unknown) {
+      if (isTransientNetworkError(err)) {
+        throw new EditorTransientError(
+          `Network error fetching workfile: ${(err as Error).message ?? err}`,
+          err,
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
     /** The base URL this client targets (for assertions/tests). */
     baseUrl,
     procesar,
     progreso,
+    getSilencios,
+    getSubtitulos,
+    getRender,
+    postSilencios,
+    postSubtitulos,
+    postRender,
+    fetchWorkfile,
   };
 }
 

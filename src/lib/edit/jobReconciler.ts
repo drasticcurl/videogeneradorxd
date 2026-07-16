@@ -1,3 +1,4 @@
+import { NextResponse } from "next/server";
 import { editJobsDb, type EditJobStore } from "./editJobStore";
 import { createEditorClient, type EditorClient } from "./editorClient";
 import { createEditStorageAdapter } from "./storageFactory";
@@ -24,6 +25,18 @@ export interface ReconcileResult {
   job: EditJob;
   live: boolean;
   message?: string;
+}
+
+/** The three actionable pause statuses treated as live, non-terminal states. */
+const AWAITING_STATUSES = new Set<EditJob["status"]>([
+  "awaiting_silences",
+  "awaiting_subtitles",
+  "awaiting_final_render",
+]);
+
+/** True when the job is in one of the three actionable pause statuses. */
+export function isAwaitingStatus(status: EditJob["status"]): boolean {
+  return AWAITING_STATUSES.has(status);
 }
 
 const defaultDeps: ReconcileDeps = {
@@ -94,10 +107,19 @@ export async function reconcileEditJob(
       const recovered = await detectDurableOutput(job, deps);
       if (recovered) return { job: recovered, live: true };
 
+      // A 404 means the editor's in-memory job was lost (e.g. container
+      // restart). If the job was paused (awaiting_*), surface an actionable
+      // EDITOR_STATE_LOST reason so the user can re-run rather than hang.
+      const wasPaused = isAwaitingStatus(job.status);
       const reason = error.statusCode === 404
-        ? "Editor job state was lost and no durable final.mp4 exists"
+        ? (wasPaused
+            ? "Editor restarted; paused edit state lost — re-run the edit."
+            : "Editor job state was lost and no durable final.mp4 exists")
         : `Editor rejected progress reconciliation (${error.statusCode ?? "4xx"})`;
-      const jobError: EditJobError = { paso: "PROGRESO", motivo: reason };
+      const jobError: EditJobError = {
+        paso: error.statusCode === 404 && wasPaused ? "EDITOR_STATE_LOST" : "PROGRESO",
+        motivo: reason,
+      };
       const failed = await deps.editJobStore.updateEditJob(editJobId, {
         status: "failed",
         outputKey: null,
@@ -173,6 +195,56 @@ export async function reconcileEditJob(
 
   const updated = await deps.editJobStore.updateEditJob(editJobId, patch);
   return { job: updated ?? { ...current, ...patch }, live: true };
+}
+
+/**
+ * Recoverable-lost path for the POST pass-through routes.
+ *
+ * Invoked when the editor returns 404 for a job the generator believes is
+ * paused/running (the editor's in-memory JobManager was dropped on restart).
+ * Runs an output-first durable re-check: if a durable final.mp4 exists the job
+ * transitions to `completed` (200); otherwise it transitions to `failed` with
+ * `{paso:"EDITOR_STATE_LOST", motivo}` (409) — never leaving the job silently
+ * awaiting.
+ *
+ * Requirements: 6.1, 6.2, 6.3, 6.5, 10.5
+ */
+export async function recoverableLost(
+  editJobId: string,
+  deps: Pick<ReconcileDeps, "editJobStore" | "getStorageAdapter">,
+): Promise<Response> {
+  const job = deps.editJobStore.getEditJob(editJobId);
+  if (!job) {
+    return NextResponse.json(
+      { error: `Edit job not found: ${editJobId}` },
+      { status: 404 },
+    );
+  }
+
+  const recovered = await detectDurableOutput(job, {
+    ...defaultDeps,
+    editJobStore: deps.editJobStore,
+    getStorageAdapter: deps.getStorageAdapter,
+  });
+  if (recovered) {
+    return NextResponse.json(
+      { editJobId, status: "completed" },
+      { status: 200 },
+    );
+  }
+
+  const motivo = "Editor restarted; paused edit state lost — re-run the edit.";
+  const jobError: EditJobError = { paso: "EDITOR_STATE_LOST", motivo };
+  await deps.editJobStore.updateEditJob(editJobId, {
+    status: "failed",
+    outputKey: null,
+    error: jobError,
+    progress: { ...job.progress, mensaje: motivo, error: jobError },
+  });
+  return NextResponse.json(
+    { editJobId, status: "failed", error: jobError },
+    { status: 409 },
+  );
 }
 
 const globalForMonitors = globalThis as unknown as {

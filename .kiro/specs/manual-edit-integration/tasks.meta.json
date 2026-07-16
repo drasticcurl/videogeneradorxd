@@ -1,0 +1,37 @@
+{
+  "pbtResults": {
+    "3.3 Write property test for segment integrity": {
+      "status": "passed",
+      "lastRunTimestamp": 1784207492478
+    },
+    "4.2 Write property test for percent monotonicity": {
+      "status": "passed",
+      "lastRunTimestamp": 1784207495340
+    },
+    "8.5 Write property test for preview confinement": {
+      "status": "passed",
+      "lastRunTimestamp": 1784207498228
+    },
+    "14.1 Write property test for state-machine totality": {
+      "status": "passed",
+      "lastRunTimestamp": 1784207501181
+    },
+    "14.2 Write property test for confirmation round-trip": {
+      "status": "passed",
+      "lastRunTimestamp": 1784207503767
+    },
+    "14.3 Write property test for subtitle structure preservation": {
+      "status": "passed",
+      "lastRunTimestamp": 1784207506474
+    },
+    "14.4 Write property test for no-silent-hang": {
+      "status": "passed",
+      "lastRunTimestamp": 1784207509146
+    },
+    "14.5 Write property test for automatic-behavior preservation": {
+      "status": "passed",
+      "lastRunTimestamp": 1784207511975
+    }
+  },
+  "executionHistory": {}
+}
