@@ -248,6 +248,69 @@ export function allGroupsNonEmpty(texts: string[]): boolean {
 }
 
 
+// ---------------------------------------------------------------------------
+// Progress log accumulation (in-UI play-by-play for the edit flow)
+//
+// While an edit job runs, EditProgress accumulates a visible log. A new entry
+// is appended only when the meaningful (status, pasoActual, porcentaje,
+// mensaje) tuple changes — consecutive identical polls are deduped — and the
+// list is capped to the most recent entries.
+// ---------------------------------------------------------------------------
+
+/** Cap on retained log entries (newest kept, oldest dropped). */
+export const MAX_PROGRESS_LOG_ENTRIES = 50;
+
+export interface ProgressLogEntry {
+  /** Wall-clock stamp (HH:MM:SS) of when this change was observed. */
+  time: string;
+  porcentaje: number;
+  pasoActual: string;
+  mensaje: string;
+  status: string;
+}
+
+/** Two entries describe the same progress state (ignoring the timestamp). */
+function sameProgressState(a: ProgressLogEntry, b: ProgressLogEntry): boolean {
+  return (
+    a.status === b.status &&
+    a.pasoActual === b.pasoActual &&
+    a.porcentaje === b.porcentaje &&
+    a.mensaje === b.mensaje
+  );
+}
+
+/**
+ * Appends `entry` to `prev`, deduping when it repeats the last entry's state
+ * and capping the result to the most recent MAX_PROGRESS_LOG_ENTRIES. Pure: it
+ * never mutates `prev` and returns `prev` unchanged when the entry is a dupe.
+ */
+export function appendProgressLog(
+  prev: ProgressLogEntry[],
+  entry: ProgressLogEntry,
+): ProgressLogEntry[] {
+  const last = prev[prev.length - 1];
+  if (last && sameProgressState(last, entry)) return prev;
+  const next = [...prev, entry];
+  if (next.length > MAX_PROGRESS_LOG_ENTRIES) {
+    return next.slice(next.length - MAX_PROGRESS_LOG_ENTRIES);
+  }
+  return next;
+}
+
+/**
+ * Formats a log entry as a single monospace line, e.g.
+ * `[15:04:05] 25% UNIR — Uniendo y normalizando clips a 9:16 · running`.
+ */
+export function formatProgressLogLine(entry: ProgressLogEntry): string {
+  const paso = entry.pasoActual.trim();
+  const mensaje = entry.mensaje.trim();
+  const head = `[${entry.time}] ${entry.porcentaje}%`;
+  const step = paso ? ` ${paso}` : "";
+  const msg = mensaje ? ` — ${mensaje}` : "";
+  return `${head}${step}${msg} · ${entry.status}`;
+}
+
+
 /** Which control surface EditProgress should render for a given status. */
 export type EditControl =
   | "silence"

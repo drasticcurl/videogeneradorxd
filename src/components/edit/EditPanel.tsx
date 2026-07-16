@@ -14,10 +14,13 @@ import { useState, useCallback, useEffect } from "react";
 import type { EditOptions } from "@/lib/edit/types";
 import {
   apiErrorMessage,
+  appendProgressLog,
   controlForStatus,
   encodeMusicFile,
+  formatProgressLogLine,
   MUSIC_FILE_ACCEPT,
   parseProgressResponse,
+  type ProgressLogEntry,
 } from "./editUiData";
 import { SilenceTimeline } from "./SilenceTimeline";
 import { SubtitleReview } from "./SubtitleReview";
@@ -204,6 +207,10 @@ function EditProgress({ editJobId }: EditProgressProps) {
   }>({ porcentaje: 0, pasoActual: "", mensaje: "Iniciando...", status: "queued", error: null });
   // Incrementing this key re-arms the poll loop after a 202 confirmation.
   const [pollKey, setPollKey] = useState(0);
+  // Visible play-by-play log accumulated across progress polls.
+  const [log, setLog] = useState<ProgressLogEntry[]>([]);
+  // Whether the last poll reported live progress (endpoint returns `live`).
+  const [live, setLive] = useState(true);
 
   const restartPoll = useCallback(() => {
     // Optimistically reflect the resumed state and re-arm polling.
@@ -224,6 +231,16 @@ function EditProgress({ editJobId }: EditProgressProps) {
             const parsed = parseProgressResponse(data);
             if (!active) return;
             setProgress(parsed);
+            setLive(typeof data?.live === "boolean" ? data.live : true);
+            // Append a log line only when the observed state actually changed.
+            const entry: ProgressLogEntry = {
+              time: new Date().toTimeString().slice(0, 8),
+              porcentaje: parsed.porcentaje,
+              pasoActual: parsed.pasoActual,
+              mensaje: parsed.mensaje,
+              status: parsed.status,
+            };
+            setLog((prev) => appendProgressLog(prev, entry));
             if (parsed.status === "completed" || parsed.status === "failed") {
               active = false;
               return;
@@ -243,15 +260,51 @@ function EditProgress({ editJobId }: EditProgressProps) {
 
   const control = controlForStatus(progress.status);
 
-  // Awaiting statuses mount the corresponding interactive control.
+  // Scrollable play-by-play log, shown while the job runs / awaits input.
+  const logPanel =
+    log.length > 0 ? (
+      <div className="space-y-1">
+        <div className="flex justify-between text-[11px] text-slate-500">
+          <span>Registro del pipeline</span>
+          {!live && (
+            <span className="text-amber-400/80">· live progress unavailable</span>
+          )}
+        </div>
+        <div className="h-40 overflow-y-auto rounded-md border border-slate-700 bg-slate-900/60 p-2 font-mono text-[11px] leading-relaxed text-slate-300">
+          {log.map((e, i) => (
+            <div key={i} className="whitespace-pre-wrap break-words">
+              {formatProgressLogLine(e)}
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : null;
+
+  // Awaiting statuses mount the corresponding interactive control. The log
+  // panel is rendered alongside so the play-by-play stays visible.
   if (control === "silence") {
-    return <SilenceTimeline editJobId={editJobId} onResumed={restartPoll} />;
+    return (
+      <div className="space-y-4">
+        <SilenceTimeline editJobId={editJobId} onResumed={restartPoll} />
+        {logPanel}
+      </div>
+    );
   }
   if (control === "subtitle") {
-    return <SubtitleReview editJobId={editJobId} onResumed={restartPoll} />;
+    return (
+      <div className="space-y-4">
+        <SubtitleReview editJobId={editJobId} onResumed={restartPoll} />
+        {logPanel}
+      </div>
+    );
   }
   if (control === "final") {
-    return <FinalRenderTrigger editJobId={editJobId} onResumed={restartPoll} />;
+    return (
+      <div className="space-y-4">
+        <FinalRenderTrigger editJobId={editJobId} onResumed={restartPoll} />
+        {logPanel}
+      </div>
+    );
   }
 
   const isComplete = control === "download";
@@ -289,17 +342,20 @@ function EditProgress({ editJobId }: EditProgressProps) {
         </div>
       ) : (
         // queued | uploading | running → live progress bar
-        <div className="space-y-1">
-          <div className="flex justify-between text-xs text-slate-400">
-            <span>{progress.pasoActual || progress.mensaje}</span>
-            <span>{progress.porcentaje}%</span>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <div className="flex justify-between text-xs text-slate-400">
+              <span>{progress.pasoActual || progress.mensaje}</span>
+              <span>{progress.porcentaje}%</span>
+            </div>
+            <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-indigo-500 transition-all"
+                style={{ width: `${progress.porcentaje}%` }}
+              />
+            </div>
           </div>
-          <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-indigo-500 transition-all"
-              style={{ width: `${progress.porcentaje}%` }}
-            />
-          </div>
+          {logPanel}
         </div>
       )}
     </div>

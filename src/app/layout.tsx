@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE } from "@/lib/auth";
+import { VersionBanner } from "@/components/VersionBanner";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -52,6 +53,7 @@ export default function RootLayout({
           </div>
         </header>
         <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+        <VersionBanner />
       </body>
     </html>
   );

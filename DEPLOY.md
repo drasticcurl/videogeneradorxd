@@ -108,7 +108,9 @@ gcloud builds submit --config cloudbuild.yaml \
 ```
 
 La imagen se etiqueta con `_TAG` (por defecto `latest`), así que un `gcloud builds submit`
-manual funciona sin depender de ningún valor de trigger. Para fijar una etiqueta específica,
+manual funciona sin depender de ningún valor de trigger. Ese mismo `_TAG` se pasa al build de
+Docker como `--build-arg APP_VERSION=${_TAG}`, de modo que la versión queda horneada en la
+imagen (ver más abajo, "Banner de versión"). Para fijar una etiqueta específica,
 agregá `_TAG` a las substitutions:
 
 ```bash
@@ -198,6 +200,19 @@ gcloud run services proxy "$SERVICE" --region="$REGION"   # túnel local autenti
 - **Cloud Build**: 2.500 build-minutes/mes gratis.
 - **US$300** de crédito inicial para cuentas nuevas.
 - El costo dominante es **Vertex AI** (Veo/Gemini/Imagen) por generación, independiente del hosting.
+
+---
+
+## 6b. Banner de versión (saber si un deploy realmente subió)
+
+Cada build hornea una identidad en la imagen y la muestra en un chip pequeño fijo en la esquina
+inferior derecha (`versión · build`), visible en todas las páginas. Así se ve al instante si una
+revisión nueva quedó activa sin mirar logs de `gcloud`.
+
+- `_TAG` alimenta `APP_VERSION` (`--build-arg APP_VERSION=${_TAG}` en `cloudbuild.yaml`), que se
+  expone al cliente como `NEXT_PUBLIC_APP_VERSION` (Next.js inyecta las `NEXT_PUBLIC_*` en build).
+- El momento del build se hornea como `NEXT_PUBLIC_BUILD_TIME` durante `npm run build`.
+- Chequeo rápido por curl: `GET /api/version` devuelve `{ version, buildTime }`.
 
 ---
 

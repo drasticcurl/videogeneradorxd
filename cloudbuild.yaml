@@ -16,6 +16,10 @@ steps:
   - name: gcr.io/cloud-builders/docker
     args:
       - build
+      # Feed the image tag into the build so the baked version banner is
+      # meaningful (NEXT_PUBLIC_APP_VERSION == the deployed tag).
+      - --build-arg
+      - APP_VERSION=${_TAG}
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
       - -t

@@ -13,10 +13,14 @@
 import { describe, it, expect } from "vitest";
 import {
   allGroupsNonEmpty,
+  appendProgressLog,
   buildRenderPayload,
   buildSilencesPayload,
   buildSubtitlesPayload,
   controlForStatus,
+  formatProgressLogLine,
+  MAX_PROGRESS_LOG_ENTRIES,
+  type ProgressLogEntry,
 } from "../editUiData";
 import { validateSegments } from "@/lib/edit/validateSegments";
 import type { EditorTextoExtra } from "@/lib/edit/editorClient";
@@ -85,6 +89,69 @@ describe("FinalRenderTrigger — contract", () => {
     expect(three.length > 2).toBe(true);
     const two = [extra("a"), extra("b")];
     expect(two.length <= 2).toBe(true);
+  });
+});
+
+describe("EditProgress — progress log accumulation", () => {
+  const entry = (over: Partial<ProgressLogEntry> = {}): ProgressLogEntry => ({
+    time: "15:04:05",
+    porcentaje: 25,
+    pasoActual: "UNIR",
+    mensaje: "Uniendo y normalizando clips a 9:16",
+    status: "running",
+    ...over,
+  });
+
+  it("appends a new entry when the state tuple changes", () => {
+    const a = entry({ porcentaje: 25 });
+    const b = entry({ porcentaje: 50, mensaje: "Transcribiendo audio" });
+    const log = appendProgressLog(appendProgressLog([], a), b);
+    expect(log).toEqual([a, b]);
+  });
+
+  it("dedupes consecutive identical states (ignoring timestamp)", () => {
+    const a = entry({ time: "15:04:05" });
+    const dupe = entry({ time: "15:04:07" }); // only the time differs
+    const log = appendProgressLog([a], dupe);
+    expect(log).toBe(a === log[0] ? log : log); // same reference returned
+    expect(appendProgressLog([a], dupe)).toHaveLength(1);
+    expect(appendProgressLog([a], dupe)[0]).toBe(a);
+  });
+
+  it("re-appends when a field other than time changes", () => {
+    const a = entry({ status: "running" });
+    const b = entry({ status: "awaiting_silences" });
+    expect(appendProgressLog([a], b)).toEqual([a, b]);
+  });
+
+  it("does not mutate the previous array", () => {
+    const prev: ProgressLogEntry[] = [entry()];
+    const snapshot = [...prev];
+    appendProgressLog(prev, entry({ porcentaje: 99 }));
+    expect(prev).toEqual(snapshot);
+  });
+
+  it("caps retained entries to the most recent MAX_PROGRESS_LOG_ENTRIES", () => {
+    let log: ProgressLogEntry[] = [];
+    for (let i = 0; i < MAX_PROGRESS_LOG_ENTRIES + 20; i++) {
+      log = appendProgressLog(log, entry({ porcentaje: i }));
+    }
+    expect(log).toHaveLength(MAX_PROGRESS_LOG_ENTRIES);
+    // Oldest dropped, newest kept.
+    expect(log[log.length - 1].porcentaje).toBe(MAX_PROGRESS_LOG_ENTRIES + 19);
+    expect(log[0].porcentaje).toBe(20);
+  });
+
+  it("formats a line like [HH:MM:SS] 25% UNIR — mensaje · status", () => {
+    expect(formatProgressLogLine(entry())).toBe(
+      "[15:04:05] 25% UNIR — Uniendo y normalizando clips a 9:16 · running",
+    );
+  });
+
+  it("formats gracefully when paso/mensaje are empty", () => {
+    expect(formatProgressLogLine(entry({ pasoActual: "", mensaje: "" }))).toBe(
+      "[15:04:05] 25% · running",
+    );
   });
 });
 
