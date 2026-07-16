@@ -10,9 +10,16 @@ RUN npm ci
 FROM node:20-bookworm-slim AS next-builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+# Build identity baked into the client bundle. NEXT_PUBLIC_* vars are inlined by
+# Next.js at build time, so they travel into the standalone output and are shown
+# by the version banner / GET /api/version.
+ARG APP_VERSION=dev
+ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION
 COPY --from=node-deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+# NEXT_PUBLIC_BUILD_TIME is set inline for this build step only so the exact
+# build moment is inlined alongside NEXT_PUBLIC_APP_VERSION.
+RUN NEXT_PUBLIC_BUILD_TIME="$(date -u +%Y%m%d-%H%M%SZ)" npm run build
 
 # ---------- Python virtual environment ----------
 FROM node:20-bookworm-slim AS python-deps
