@@ -31,22 +31,41 @@ describe("mapEditorEstado", () => {
     expect(result.error).toBeNull();
   });
 
-  it("maps esperando_edicion_silencios → awaiting_edit", () => {
+  it("maps esperando_edicion_silencios → awaiting_silences", () => {
     const result = mapEditorEstado("esperando_edicion_silencios");
-    expect(result.status).toBe("awaiting_edit");
+    expect(result.status).toBe("awaiting_silences");
     expect(result.error).toBeNull();
   });
 
-  it("maps esperando_revision → awaiting_edit", () => {
+  it("maps esperando_revision → awaiting_subtitles", () => {
     const result = mapEditorEstado("esperando_revision");
-    expect(result.status).toBe("awaiting_edit");
+    expect(result.status).toBe("awaiting_subtitles");
     expect(result.error).toBeNull();
   });
 
-  it("maps esperando_edicion_final → awaiting_edit", () => {
+  it("maps esperando_edicion_final → awaiting_final_render", () => {
     const result = mapEditorEstado("esperando_edicion_final");
-    expect(result.status).toBe("awaiting_edit");
+    expect(result.status).toBe("awaiting_final_render");
     expect(result.error).toBeNull();
+  });
+
+  it("maps every known editor estado to the expected status (table)", () => {
+    const table: Array<[string, string]> = [
+      ["en_cola", "queued"],
+      ["en_ejecucion", "running"],
+      ["esperando_edicion_silencios", "awaiting_silences"],
+      ["esperando_revision", "awaiting_subtitles"],
+      ["esperando_edicion_final", "awaiting_final_render"],
+      ["completado", "completed"],
+      ["fallido", "failed"],
+    ];
+    for (const [estado, expected] of table) {
+      const result = mapEditorEstado(estado);
+      expect(result.status).toBe(expected);
+      if (expected !== "failed") expect(result.error).toBeNull();
+      // The collapsed awaiting_edit status must never be produced.
+      expect(result.status).not.toBe("awaiting_edit");
+    }
   });
 
   it("maps completado → completed", () => {

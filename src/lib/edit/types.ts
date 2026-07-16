@@ -30,14 +30,24 @@ export type EditSource =
  * Normalized edit job status (mirrors the editor's estados but in a
  * generator-friendly vocabulary).
  *
+ * The editor pauses at three distinct human-in-the-loop steps, each mapped to
+ * its own actionable generator status (replacing the previously collapsed
+ * `awaiting_edit`). The domain is exactly these eight values.
+ *
  * Lifecycle:
- *   queued → uploading → running → (awaiting_edit ⇄ running) → completed | failed
+ *   queued → uploading → running
+ *     → (awaiting_silences ⇄ running)      // editor: esperando_edicion_silencios
+ *     → (awaiting_subtitles ⇄ running)     // editor: esperando_revision
+ *     → (awaiting_final_render ⇄ running)  // editor: esperando_edicion_final
+ *     → completed | failed
  */
 export type EditJobStatus =
   | "queued"
   | "uploading"
   | "running"
-  | "awaiting_edit"
+  | "awaiting_silences"
+  | "awaiting_subtitles"
+  | "awaiting_final_render"
   | "completed"
   | "failed";
 

@@ -14,10 +14,14 @@ import { useState, useCallback, useEffect } from "react";
 import type { EditOptions } from "@/lib/edit/types";
 import {
   apiErrorMessage,
+  controlForStatus,
   encodeMusicFile,
   MUSIC_FILE_ACCEPT,
   parseProgressResponse,
 } from "./editUiData";
+import { SilenceTimeline } from "./SilenceTimeline";
+import { SubtitleReview } from "./SubtitleReview";
+import { FinalRenderTrigger } from "./FinalRenderTrigger";
 
 interface EditPanelProps {
   projectId: string;
@@ -198,8 +202,17 @@ function EditProgress({ editJobId }: EditProgressProps) {
     status: string;
     error: { paso: string; motivo: string } | null;
   }>({ porcentaje: 0, pasoActual: "", mensaje: "Iniciando...", status: "queued", error: null });
+  // Incrementing this key re-arms the poll loop after a 202 confirmation.
+  const [pollKey, setPollKey] = useState(0);
 
-  // Poll progress every 2 seconds
+  const restartPoll = useCallback(() => {
+    // Optimistically reflect the resumed state and re-arm polling.
+    setProgress((prev) => ({ ...prev, status: "running" }));
+    setPollKey((k) => k + 1);
+  }, []);
+
+  // Poll progress every 2 seconds. Stops only on completed|failed; while the
+  // job is in an awaiting_* status the matching control mounts and takes over.
   useEffect(() => {
     let active = true;
     const poll = async () => {
@@ -209,6 +222,7 @@ function EditProgress({ editJobId }: EditProgressProps) {
           if (res.ok) {
             const data = await res.json();
             const parsed = parseProgressResponse(data);
+            if (!active) return;
             setProgress(parsed);
             if (parsed.status === "completed" || parsed.status === "failed") {
               active = false;
@@ -222,11 +236,26 @@ function EditProgress({ editJobId }: EditProgressProps) {
       }
     };
     poll();
-    return () => { active = false; };
-  }, [editJobId]);
+    return () => {
+      active = false;
+    };
+  }, [editJobId, pollKey]);
 
-  const isComplete = progress.status === "completed";
-  const isFailed = progress.status === "failed";
+  const control = controlForStatus(progress.status);
+
+  // Awaiting statuses mount the corresponding interactive control.
+  if (control === "silence") {
+    return <SilenceTimeline editJobId={editJobId} onResumed={restartPoll} />;
+  }
+  if (control === "subtitle") {
+    return <SubtitleReview editJobId={editJobId} onResumed={restartPoll} />;
+  }
+  if (control === "final") {
+    return <FinalRenderTrigger editJobId={editJobId} onResumed={restartPoll} />;
+  }
+
+  const isComplete = control === "download";
+  const isFailed = control === "error";
 
   return (
     <div className="rounded-lg border border-indigo-600/40 bg-panel p-4 space-y-4">
@@ -234,24 +263,7 @@ function EditProgress({ editJobId }: EditProgressProps) {
         Progreso de edición
       </h3>
 
-      {/* Progress bar */}
-      <div className="space-y-1">
-        <div className="flex justify-between text-xs text-slate-400">
-          <span>{progress.pasoActual || progress.mensaje}</span>
-          <span>{progress.porcentaje}%</span>
-        </div>
-        <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all ${
-              isFailed ? "bg-red-500" : isComplete ? "bg-emerald-500" : "bg-indigo-500"
-            }`}
-            style={{ width: `${progress.porcentaje}%` }}
-          />
-        </div>
-      </div>
-
-      {/* Status */}
-      {isComplete && (
+      {isComplete ? (
         <div className="space-y-2">
           <div className="text-xs text-emerald-300 font-medium">Edición completada</div>
           <a
@@ -261,31 +273,33 @@ function EditProgress({ editJobId }: EditProgressProps) {
             Descargar resultado
           </a>
         </div>
-      )}
-
-      {isFailed && (
+      ) : isFailed ? (
         <div className="rounded-md bg-red-500/10 border border-red-600/40 px-3 py-2 text-xs text-red-300 space-y-1">
           {progress.error ? (
             <>
-              <div className="font-semibold">
-                Error en el paso: {progress.error.paso}
-              </div>
+              <div className="font-semibold">Error en el paso: {progress.error.paso}</div>
               <div className="text-slate-400">Motivo:</div>
               <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-red-200">
                 {progress.error.motivo}
               </pre>
             </>
           ) : (
-            <div className="whitespace-pre-wrap break-words">
-              Error: {progress.mensaje}
-            </div>
+            <div className="whitespace-pre-wrap break-words">Error: {progress.mensaje}</div>
           )}
         </div>
-      )}
-
-      {progress.status === "awaiting_edit" && (
-        <div className="rounded-md bg-yellow-500/10 border border-yellow-600/40 px-3 py-2 text-xs text-yellow-300">
-          Esperando confirmación manual...
+      ) : (
+        // queued | uploading | running → live progress bar
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs text-slate-400">
+            <span>{progress.pasoActual || progress.mensaje}</span>
+            <span>{progress.porcentaje}%</span>
+          </div>
+          <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-indigo-500 transition-all"
+              style={{ width: `${progress.porcentaje}%` }}
+            />
+          </div>
         </div>
       )}
     </div>

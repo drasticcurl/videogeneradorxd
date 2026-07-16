@@ -1,5 +1,5 @@
 /**
- * Dependency injection helpers for the confirm route.
+ * Dependency injection helpers for the preview proxy route.
  * Extracted from route.ts to avoid invalid Next.js route exports.
  */
 
@@ -8,23 +8,23 @@ import { createEditorClient } from "@/lib/edit/editorClient";
 import type { EditJobStore } from "@/lib/edit/editJobStore";
 import type { EditorClient } from "@/lib/edit/editorClient";
 
-export interface ConfirmRouteDeps {
+export interface PreviewRouteDeps {
   editJobStore: EditJobStore;
   createClient: () => EditorClient;
 }
 
-const defaultDeps: ConfirmRouteDeps = {
+const defaultDeps: PreviewRouteDeps = {
   editJobStore: editJobsDb,
-  createClient: () => createEditorClient(),
+  createClient: () => createEditorClient({ timeoutMs: 30_000, retry: { maxAttempts: 1 } }),
 };
 
-let currentDeps: ConfirmRouteDeps = defaultDeps;
+let currentDeps: PreviewRouteDeps = defaultDeps;
 
-export function getDeps(): ConfirmRouteDeps {
+export function getDeps(): PreviewRouteDeps {
   return currentDeps;
 }
 
-export function __setDeps(deps: Partial<ConfirmRouteDeps>): void {
+export function __setDeps(deps: Partial<PreviewRouteDeps>): void {
   currentDeps = { ...defaultDeps, ...deps };
 }
 

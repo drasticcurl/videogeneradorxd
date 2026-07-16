@@ -254,7 +254,7 @@ describe("GET /api/edit (listing)", () => {
           mensaje: "Running",
           estado: "en_ejecucion",
         } as any),
-      }),
+      }) as any,
     });
 
     const req = new Request("http://localhost/api/edit?projectId=proj-001");

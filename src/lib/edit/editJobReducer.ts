@@ -2,7 +2,9 @@
  * EditJob reducer — pure state transitions for the edit job lifecycle.
  *
  * The reducer enforces the state machine:
- *   queued → uploading → running → (awaiting_edit ⇄ running) → completed | failed
+ *   queued → uploading → running → (awaiting_* ⇄ running) → completed | failed
+ *   where awaiting_* is one of awaiting_silences / awaiting_subtitles /
+ *   awaiting_final_render.
  *
  * Invariants enforced:
  * - editorJobId is null only in queued, uploading, or pre-accept failed states.
@@ -14,6 +16,12 @@
 
 import type { EditJob, EditJobStatus, EditorProgress, EditJobError } from "./types";
 
+/** The three actionable pause statuses the editor can enter. */
+export type AwaitingStatus =
+  | "awaiting_silences"
+  | "awaiting_subtitles"
+  | "awaiting_final_render";
+
 // ---------------------------------------------------------------------------
 // Action types
 // ---------------------------------------------------------------------------
@@ -22,7 +30,7 @@ export type EditJobAction =
   | { type: "UPLOAD_STARTED" }
   | { type: "UPLOAD_COMPLETED"; editorJobId: string }
   | { type: "PROGRESS_UPDATE"; porcentaje: number; pasoActual: string | null; mensaje: string }
-  | { type: "AWAITING_EDIT"; pasoActual: string | null; mensaje: string }
+  | { type: "AWAITING_EDIT"; status: AwaitingStatus; pasoActual: string | null; mensaje: string }
   | { type: "RESUMED" }
   | { type: "COMPLETED"; outputKey: string }
   | { type: "FAILED"; error: EditJobError };
@@ -34,8 +42,16 @@ export type EditJobAction =
 const VALID_TRANSITIONS: Record<EditJobStatus, EditJobStatus[]> = {
   queued: ["uploading", "failed"],
   uploading: ["running", "failed"],
-  running: ["awaiting_edit", "completed", "failed"],
-  awaiting_edit: ["running", "failed"],
+  running: [
+    "awaiting_silences",
+    "awaiting_subtitles",
+    "awaiting_final_render",
+    "completed",
+    "failed",
+  ],
+  awaiting_silences: ["running", "failed"],
+  awaiting_subtitles: ["running", "failed"],
+  awaiting_final_render: ["running", "failed"],
   completed: [],
   failed: [],
 };
@@ -106,11 +122,11 @@ export function editJobReducer(state: EditJob, action: EditJobAction): EditJob {
     }
 
     case "AWAITING_EDIT": {
-      if (!canTransition(state.status, "awaiting_edit")) return state;
+      if (!canTransition(state.status, action.status)) return state;
       const newPorcentaje = state.progress.porcentaje; // preserve current
       return {
         ...state,
-        status: "awaiting_edit",
+        status: action.status,
         progress: {
           porcentaje: newPorcentaje,
           pasoActual: action.pasoActual,

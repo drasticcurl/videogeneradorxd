@@ -20,9 +20,9 @@ import type { EditJobStatus, ClipOrderEntry } from "./types";
 const ESTADO_MAP: Record<string, EditJobStatus> = {
   en_cola: "queued",
   en_ejecucion: "running",
-  esperando_edicion_silencios: "awaiting_edit",
-  esperando_revision: "awaiting_edit",
-  esperando_edicion_final: "awaiting_edit",
+  esperando_edicion_silencios: "awaiting_silences",
+  esperando_revision: "awaiting_subtitles",
+  esperando_edicion_final: "awaiting_final_render",
   completado: "completed",
   fallido: "failed",
 };
@@ -38,12 +38,14 @@ export interface MapEditorEstadoResult {
  *
  * - EN_COLA → queued
  * - EN_EJECUCION → running
- * - ESPERANDO_EDICION_SILENCIOS / ESPERANDO_REVISION / ESPERANDO_EDICION_FINAL → awaiting_edit
+ * - ESPERANDO_EDICION_SILENCIOS → awaiting_silences
+ * - ESPERANDO_REVISION → awaiting_subtitles
+ * - ESPERANDO_EDICION_FINAL → awaiting_final_render
  * - COMPLETADO → completed
  * - FALLIDO → failed
- * - Unrecognized → failed with error
+ * - Unrecognized → failed with error {paso:"STATUS_MAPPING", motivo}
  *
- * The comparison is case-insensitive and uses the lowercase form.
+ * The comparison is case-insensitive and trimmed.
  */
 export function mapEditorEstado(estado: string): MapEditorEstadoResult {
   const normalized = estado.toLowerCase().trim();

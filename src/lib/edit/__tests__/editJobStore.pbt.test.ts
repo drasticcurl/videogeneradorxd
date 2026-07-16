@@ -96,7 +96,9 @@ const preFailureStatusArb: fc.Arbitrary<EditJobStatus> = fc.constantFrom(
   "queued",
   "uploading",
   "running",
-  "awaiting_edit"
+  "awaiting_silences",
+  "awaiting_subtitles",
+  "awaiting_final_render"
 );
 
 const editJobArb: fc.Arbitrary<EditJob> = fc.record({
