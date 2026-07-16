@@ -7,13 +7,17 @@ substitutions:
   _IMAGE: videogeneradorxd/videogeneradorxd
   _BUCKET: augc-bucket-2725
   _VERTEX_LOCATION: us-central1
+  # Image tag used for build/deploy. Defaults to "latest" so a manual
+  # `gcloud builds submit` works without any trigger-only built-in value.
+  # Override per build with --substitutions=_TAG=<tag>.
+  _TAG: latest
 
 steps:
   - name: gcr.io/cloud-builders/docker
     args:
       - build
       - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$SHORT_SHA
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest
       - .
@@ -30,7 +34,7 @@ steps:
       - run
       - deploy
       - ${_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$SHORT_SHA
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
       - --region=${_REGION}
       - --platform=managed
       - --remove-containers=editor
@@ -51,7 +55,7 @@ steps:
       - --allow-unauthenticated
 
 images:
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest
 
 options:
