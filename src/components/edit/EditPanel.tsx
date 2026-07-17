@@ -15,11 +15,15 @@ import type { EditOptions } from "@/lib/edit/types";
 import {
   apiErrorMessage,
   appendProgressLog,
+  controlEventForStatus,
   controlForStatus,
   encodeMusicFile,
+  formatCorrelationSuffix,
   formatProgressLogLine,
   MUSIC_FILE_ACCEPT,
   parseProgressResponse,
+  recommendedActionForError,
+  type EditProgressView,
   type ProgressLogEntry,
 } from "./editUiData";
 import { SilenceTimeline } from "./SilenceTimeline";
@@ -198,13 +202,13 @@ interface EditProgressProps {
 }
 
 function EditProgress({ editJobId }: EditProgressProps) {
-  const [progress, setProgress] = useState<{
-    porcentaje: number;
-    pasoActual: string;
-    mensaje: string;
-    status: string;
-    error: { paso: string; motivo: string } | null;
-  }>({ porcentaje: 0, pasoActual: "", mensaje: "Iniciando...", status: "queued", error: null });
+  const [progress, setProgress] = useState<EditProgressView>({
+    porcentaje: 0,
+    pasoActual: "",
+    mensaje: "Iniciando...",
+    status: "queued",
+    error: null,
+  });
   // Incrementing this key re-arms the poll loop after a 202 confirmation.
   const [pollKey, setPollKey] = useState(0);
   // Visible play-by-play log accumulated across progress polls.
@@ -233,12 +237,17 @@ function EditProgress({ editJobId }: EditProgressProps) {
             setProgress(parsed);
             setLive(typeof data?.live === "boolean" ? data.live : true);
             // Append a log line only when the observed state actually changed.
+            // The substep and estado are carried through so a substep change at
+            // a constant percentage (e.g. 25%) still appends a distinct line.
             const entry: ProgressLogEntry = {
               time: new Date().toTimeString().slice(0, 8),
               porcentaje: parsed.porcentaje,
               pasoActual: parsed.pasoActual,
+              ...(parsed.subpaso !== undefined ? { subpaso: parsed.subpaso } : {}),
               mensaje: parsed.mensaje,
               status: parsed.status,
+              ...(parsed.estado !== undefined ? { estado: parsed.estado } : {}),
+              ...(parsed.correlation ? { correlation: parsed.correlation } : {}),
             };
             setLog((prev) => appendProgressLog(prev, entry));
             if (parsed.status === "completed" || parsed.status === "failed") {
@@ -259,6 +268,21 @@ function EditProgress({ editJobId }: EditProgressProps) {
   }, [editJobId, pollKey]);
 
   const control = controlForStatus(progress.status);
+
+  // Task 3.5 (Change 4 #8): emit a distinguishable UI mount event when the
+  // interactive control (timeline / subtitle / final) mounts, so an observer
+  // can confirm the pause actually propagated to the UI — resolving category C.
+  // Observation-only (a correlated console event); never renders video content.
+  useEffect(() => {
+    if (control === "silence" || control === "subtitle" || control === "final") {
+      console.info("[edit/ui] mount", {
+        event: controlEventForStatus(progress.status),
+        editJobId,
+        ...(progress.correlation ? { correlation: progress.correlation } : {}),
+      });
+    }
+    // Fire on transition into a mount control; status/editJobId identify it.
+  }, [control, editJobId]);
 
   // Scrollable play-by-play log, shown while the job runs / awaits input.
   const logPanel =
@@ -327,18 +351,35 @@ function EditProgress({ editJobId }: EditProgressProps) {
           </a>
         </div>
       ) : isFailed ? (
-        <div className="rounded-md bg-red-500/10 border border-red-600/40 px-3 py-2 text-xs text-red-300 space-y-1">
-          {progress.error ? (
-            <>
-              <div className="font-semibold">Error en el paso: {progress.error.paso}</div>
-              <div className="text-slate-400">Motivo:</div>
-              <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-red-200">
-                {progress.error.motivo}
-              </pre>
-            </>
-          ) : (
-            <div className="whitespace-pre-wrap break-words">Error: {progress.mensaje}</div>
-          )}
+        <div className="space-y-3">
+          <div className="rounded-md bg-red-500/10 border border-red-600/40 px-3 py-2 text-xs text-red-300 space-y-1">
+            {progress.error ? (
+              <>
+                <div className="font-semibold">
+                  Error en el paso: {progress.error.paso}
+                  {progress.error.subpaso ? ` › ${progress.error.subpaso}` : ""}
+                </div>
+                <div className="text-slate-400">Motivo:</div>
+                <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-red-200">
+                  {progress.error.motivo}
+                </pre>
+                {recommendedActionForError(progress.error) && (
+                  <div className="mt-1 text-amber-300">
+                    <span className="font-semibold">Acción recomendada: </span>
+                    {recommendedActionForError(progress.error)}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="whitespace-pre-wrap break-words">Error: {progress.mensaje}</div>
+            )}
+            {progress.correlation && formatCorrelationSuffix(progress.correlation) && (
+              <div className="mt-1 font-mono text-[10px] text-slate-500">
+                {formatCorrelationSuffix(progress.correlation).replace(/^ · /, "")}
+              </div>
+            )}
+          </div>
+          {logPanel}
         </div>
       ) : (
         // queued | uploading | running → live progress bar
@@ -348,12 +389,26 @@ function EditProgress({ editJobId }: EditProgressProps) {
               <span>{progress.pasoActual || progress.mensaje}</span>
               <span>{progress.porcentaje}%</span>
             </div>
+            {/* Live substep/estado — legible even while the percentage stays at
+                the same value (e.g. 25%), so the user sees what is happening. */}
+            {(progress.subpaso || progress.estado) && (
+              <div className="text-[11px] text-slate-500">
+                {progress.subpaso && <span>{progress.subpaso}</span>}
+                {progress.subpaso && progress.estado && <span> · </span>}
+                {progress.estado && <span className="italic">{progress.estado}</span>}
+              </div>
+            )}
             <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
               <div
                 className="h-full rounded-full bg-indigo-500 transition-all"
                 style={{ width: `${progress.porcentaje}%` }}
               />
             </div>
+            {progress.correlation && formatCorrelationSuffix(progress.correlation) && (
+              <div className="font-mono text-[10px] text-slate-600">
+                {formatCorrelationSuffix(progress.correlation).replace(/^ · /, "")}
+              </div>
+            )}
           </div>
           {logPanel}
         </div>

@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable, Optional
+import os
+from typing import Any, Callable, Dict, Optional
 
 from app import config
 from app.engine.pipeline import (
@@ -95,6 +96,26 @@ class JobRunner:
         self.resolver_musica = resolver_musica
         self.resolver_clip = resolver_clip
         self._inyecciones = inyecciones_pipeline
+
+    def _construir_correlacion(self, job_id: str) -> Dict[str, Any]:
+        """Construye la tupla de correlación de extremo a extremo (Tarea 3.4).
+
+        ``{version, revision, edit_job_id, editor_job_id}`` con la versión/
+        revisión efectivas del entorno (``APP_VERSION``/``K_REVISION``), el
+        ``edit_job_id`` del generador (si lo hay) y el ``job_id`` interno del
+        editor como ``editor_job_id``. Solo identificadores: **nunca** contenido
+        de vídeo. Se adjunta a cada evento del pipeline para que un trabajo
+        atascado en el 25 % sea correlacionable/clasificable (Req 2.5).
+        """
+        correlacion: Dict[str, Any] = {
+            "version": os.environ.get("APP_VERSION")
+            or os.environ.get("NEXT_PUBLIC_APP_VERSION"),
+            "revision": os.environ.get("K_REVISION"),
+            "edit_job_id": self.manager.obtener_edit_job_id(job_id),
+            "editor_job_id": job_id,
+        }
+        # Descartar claves sin valor para no arrastrar ``None`` en los eventos.
+        return {clave: valor for clave, valor in correlacion.items() if valor}
 
     def _crear_reporter(self, job_id: str) -> ReporteProgreso:
         """Crea un reporter que canaliza los eventos del pipeline al Gestor."""
@@ -177,6 +198,12 @@ class JobRunner:
         # por defecto (identidad) el comportamiento no cambia para los tests.
         orden_rutas = [self.resolver_clip(cid) for cid in job_state.orden_clips]
 
+        # Tupla de correlación de extremo a extremo (Tarea 3.4): se registra al
+        # inicio del job (solo ids/estado, nunca contenido de vídeo) y se propaga
+        # a cada evento del pipeline.
+        correlacion = self._construir_correlacion(job_id)
+        logger.info("Iniciando job (correlacion=%s)", correlacion)
+
         resultado: ResultadoPipeline
         # Cuando el pipeline se pausa para la revisión manual de subtítulos NO se
         # limpia el workdir (los intermedios se necesitan al reanudar la fase 2).
@@ -190,6 +217,7 @@ class JobRunner:
                 api_key=api_key,
                 reporter=reporter,
                 runner=self.runner,
+                correlacion=correlacion,
                 **self._inyecciones,
             )
             if resultado.pendiente_edicion_silencios:
@@ -211,6 +239,20 @@ class JobRunner:
                         if resultado.duracion_unido_s is not None
                         else 0.0
                     ),
+                )
+                # Log correlacionado de la transición de pausa → awaiting_silences
+                # (spec unir-step-hang, Tarea 3.5, Change 4 #6): marca que la
+                # pausa se ALCANZÓ y se persistió (subpaso distinguible), con el
+                # conteo de tramos y la duración. Solo ids/counts: nunca contenido
+                # de vídeo. Permite confirmar la categoría C (pausa alcanzada).
+                logger.info(
+                    "runner subpaso evento_tipo=pausa_silencios estado=awaiting_silences "
+                    "tramos=%d duracion=%.3f correlacion=%s",
+                    len(resultado.silencios) if resultado.silencios is not None else 0,
+                    float(resultado.duracion_unido_s)
+                    if resultado.duracion_unido_s is not None
+                    else 0.0,
+                    correlacion,
                 )
                 limpiar = False
                 return resultado
@@ -428,6 +470,7 @@ class JobRunner:
                 api_key=api_key,
                 reporter=reporter,
                 runner=self.runner,
+                correlacion=self._construir_correlacion(job_id),
                 **self._inyecciones,
             )
             if resultado.pendiente_revision:

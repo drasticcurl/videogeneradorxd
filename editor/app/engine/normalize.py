@@ -32,9 +32,63 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
+
+# Claves seguras de la tupla de correlación (spec unir-step-hang, Tarea 3.4):
+# solo identificadores/estado, garantizando que jamás se registre contenido de
+# vídeo en los logs correlacionados.
+_CLAVES_CORRELACION_SEGURAS = (
+    "version",
+    "revision",
+    "edit_job_id",
+    "editor_job_id",
+    "paso",
+    "subpaso",
+    "estado",
+    "event_type",
+)
+
+
+def _correlacion_log(correlacion: Optional[dict]) -> dict:
+    """Filtra la correlación a sus claves seguras para loguearla (Req 2.5)."""
+    if not correlacion:
+        return {}
+    return {c: correlacion[c] for c in _CLAVES_CORRELACION_SEGURAS if c in correlacion}
+
+
+# Prefijo común de los logs de subpaso correlacionados del Paso 1 (UNIR). Todo
+# evento de subpaso (ffprobe/normalización/concat, inicio/fin) se emite con este
+# prefijo para que sea localizable/distinguible en los logs estructurados.
+_PREFIJO_SUBPASO_UNIR: str = "UNIR subpaso"
+
+
+def _emitir_subpaso_unir(
+    evento_tipo: str,
+    subpaso: str,
+    correlacion: Optional[dict],
+    **datos: object,
+) -> None:
+    """Emite un log estructurado y correlacionado de un subpaso de UNIR (Tarea 3.5).
+
+    Cada subpaso del borde inferior del 25 % (materialización/inspección
+    ``ffprobe`` por clip, normalización por clip y concatenación) se registra
+    como un evento DISTINTO y correlacionado (``evento_tipo`` + ``subpaso`` +
+    tupla de correlación), de modo que el último evento confirmado localice un
+    bloqueo de UNIR en la categoría A de la matriz de decisión. Solo se registran
+    identificadores/índices/conteos: **nunca** contenido de vídeo ni rutas
+    (Req 2.3, 2.5).
+    """
+    extra = "".join(" %s=%s" % (clave, valor) for clave, valor in datos.items())
+    logger.info(
+        "%s evento_tipo=%s subpaso=%r%s correlacion=%s",
+        _PREFIJO_SUBPASO_UNIR,
+        evento_tipo,
+        subpaso,
+        extra,
+        _correlacion_log(correlacion),
+    )
 
 # ---------------------------------------------------------------------------
 # Rango de dimensiones válidas (Req 3.2): cada eje es un entero entre 2 y 7680.
@@ -700,6 +754,7 @@ def unir_clips(
     inspector: Inspector = inspeccionar_clip,
     *,
     transiciones: _Optional[AjustesTransiciones] = None,
+    correlacion: _Optional[dict] = None,
 ) -> _Path:
     """Ejecuta el Paso 1 (UNIR): normaliza cada clip y concatena en orden (Req 3).
 
@@ -743,18 +798,35 @@ def unir_clips(
     job.create()
 
     total_clips = len(rutas_clips)
-    logger.info("UNIR: iniciando unión de %d clip(s) a %dx%d @ %d fps",
-                total_clips, ancho_objetivo, alto_objetivo, fps)
+    # Log correlacionado del subpaso UNIR (spec unir-step-hang, Tarea 3.4): solo
+    # counts/tamaños/ids (nunca contenido de vídeo) para localizar el trabajo.
+    logger.info("UNIR: iniciando unión de %d clip(s) a %dx%d @ %d fps (correlacion=%s)",
+                total_clips, ancho_objetivo, alto_objetivo, fps,
+                _correlacion_log(correlacion))
+
+    # Evento de MATERIALIZACIÓN correlacionado (Tarea 3.5, Change 4 #1): marca
+    # que los clips de origen ya están disponibles localmente (resueltos por el
+    # Gestor desde el bucket/volumen) y comienza su procesamiento.
+    _emitir_subpaso_unir("materializacion", "Clips materializados", correlacion,
+                         total=total_clips)
 
     # (1) Inspección previa: un clip inválido detiene la unión sin salida parcial.
     logger.info("UNIR: inspeccionando %d clip(s) con ffprobe", total_clips)
     infos: List[ClipInfo] = []
     for indice, ruta in enumerate(rutas_clips):
         logger.info("UNIR: inspeccionando clip %d/%d: %s", indice + 1, total_clips, ruta)
+        # Evento correlacionado de ffprobe por clip (inicio/fin): permite ver si
+        # un clip quedó "inspeccionando" sin terminar (categoría A).
+        _emitir_subpaso_unir("ffprobe_inicio",
+                             "ffprobe clip %d/%d" % (indice + 1, total_clips),
+                             correlacion, clip=indice + 1, total=total_clips)
         try:
             infos.append(inspector(ruta))
         except ClipInspeccionError as exc:
             raise NormalizacionError(exc.ruta, exc.motivo) from exc
+        _emitir_subpaso_unir("ffprobe_fin",
+                             "ffprobe clip %d/%d" % (indice + 1, total_clips),
+                             correlacion, clip=indice + 1, total=total_clips)
     logger.info("UNIR: inspección de clips completada")
 
     filtro = cadena_filtro_normalizacion(ancho_objetivo, alto_objetivo, fps)
@@ -763,6 +835,9 @@ def unir_clips(
     intermedios: List[_Path] = []
     for indice, (ruta, info) in enumerate(zip(rutas_clips, infos)):
         logger.info("UNIR: normalizando clip %d/%d: %s", indice + 1, total_clips, ruta)
+        _emitir_subpaso_unir("normalizar_inicio",
+                             "Normalizando clip %d/%d" % (indice + 1, total_clips),
+                             correlacion, clip=indice + 1, total=total_clips)
         salida = job.resolve("norm_%03d.mp4" % indice)
         comando = comando_normalizar_clip(
             entrada=ruta,
@@ -779,6 +854,9 @@ def unir_clips(
             detalle = (resultado.stderr or "").strip() or "código de salida distinto de cero"
             raise NormalizacionError(ruta, f"normalización falló: {detalle}")
         intermedios.append(salida)
+        _emitir_subpaso_unir("normalizar_fin",
+                             "Normalizando clip %d/%d" % (indice + 1, total_clips),
+                             correlacion, clip=indice + 1, total=total_clips)
     logger.info("UNIR: normalización de %d clip(s) completada", total_clips)
 
     # (3) Unión en el orden del usuario (Propiedad 5 / Req 3.4).
@@ -790,6 +868,9 @@ def unir_clips(
     nombre_xfade = nombre_transicion_xfade(tipo_transicion)
     if nombre_xfade is not None and len(intermedios) >= 2:
         logger.info("UNIR: uniendo con transiciones (%s)", tipo_transicion)
+        _emitir_subpaso_unir("concat_inicio", "Uniendo con transiciones",
+                             correlacion, intermedios=len(intermedios),
+                             transicion=tipo_transicion)
         duraciones = [_probar_duracion(str(p), runner) for p in intermedios]
         duracion_ms = getattr(transiciones, "duracion_ms", 400)
         duracion_s = _duracion_transicion_efectiva(duraciones, duracion_ms)
@@ -807,10 +888,14 @@ def unir_clips(
             detalle = (resultado.stderr or "").strip() or "código de salida distinto de cero"
             raise NormalizacionError(None, f"unión con transiciones falló: {detalle}")
         logger.info("UNIR: unión con transiciones completada: %s", unido)
+        _emitir_subpaso_unir("concat_fin", "Unión con transiciones completada",
+                             correlacion, intermedios=len(intermedios))
         return unido
 
     # (3b) Corte duro (comportamiento por defecto): demuxer concat + copy.
     logger.info("UNIR: concatenando %d intermedio(s) (corte duro)", len(intermedios))
+    _emitir_subpaso_unir("concat_inicio", "Concatenando (corte duro)",
+                         correlacion, intermedios=len(intermedios))
     concat_txt = job.resolve(NOMBRE_CONCAT_TXT)
     concat_txt.write_text(
         contenido_concat_txt([str(p) for p in intermedios]), encoding="utf-8"
@@ -826,6 +911,8 @@ def unir_clips(
         raise NormalizacionError(None, f"concatenación falló: {detalle}")
 
     logger.info("UNIR: concatenación completada: %s", unido)
+    _emitir_subpaso_unir("concat_fin", "Concatenación completada",
+                         correlacion, intermedios=len(intermedios))
     return unido
 
 

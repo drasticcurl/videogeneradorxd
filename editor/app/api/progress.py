@@ -39,8 +39,32 @@ router = APIRouter(tags=["progreso"])
 PROGRESO_SSE_INTERVALO_S: float = 2.0
 
 
+def _correlacion_progreso(job: JobState) -> Dict[str, Any]:
+    """Tupla de correlación ADITIVA para el progreso (spec unir-step-hang, Tarea 3.4).
+
+    Solo identificadores/estado (``editor_job_id``, ``version``, ``revision``,
+    ``estado``); **nunca** contenido de vídeo. Permite correlacionar el trabajo
+    de extremo a extremo aunque el porcentaje siga en 25 (Req 2.5).
+    """
+    import os
+
+    correlacion: Dict[str, Any] = {
+        "editor_job_id": job.id,
+        "version": os.environ.get("APP_VERSION")
+        or os.environ.get("NEXT_PUBLIC_APP_VERSION"),
+        "revision": os.environ.get("K_REVISION"),
+        "estado": job.progreso.estado.value,
+    }
+    return {clave: valor for clave, valor in correlacion.items() if valor}
+
+
 def _progreso_dict(job: JobState) -> Dict[str, Any]:
-    """Serializa el estado de progreso de un Job al objeto del contrato (Req 10.3)."""
+    """Serializa el estado de progreso de un Job al objeto del contrato (Req 10.3).
+
+    Incluye una clave ADITIVA ``correlacion`` con la tupla de correlación de
+    extremo a extremo (Tarea 3.4). Es opcional para los consumidores previos: el
+    contrato existente (``job_id``/``estado``/``porcentaje``/...) no cambia.
+    """
     prog = job.progreso
     return {
         "job_id": job.id,
@@ -51,6 +75,7 @@ def _progreso_dict(job: JobState) -> Dict[str, Any]:
         "porcentaje": prog.porcentaje,
         "mensaje": prog.mensaje,
         "error": prog.error,
+        "correlacion": _correlacion_progreso(job),
     }
 
 

@@ -216,6 +216,58 @@ revisión nueva quedó activa sin mirar logs de `gcloud`.
 
 ---
 
+## 6c. Verificación post-deploy del plano de control (obligatoria)
+
+Un deploy puede reportarse OK y, aun así, dejar activa una revisión que **no**
+coincide con lo esperado (imagen vieja, CPU con throttling, o `min/max` != 1).
+Eso es exactamente la **categoría D** del diagnóstico de `unir-step-hang`: "una
+revisión antigua o una configuración distinta de la esperada". Por eso la
+verificación se hace **desde el plano de control** (Cloud Run), nunca infiriéndola
+desde dentro del contenedor.
+
+- **Opción C (Cloud Build):** el paso `verify-control-plane` de `cloudbuild.yaml`
+  corre automáticamente después del deploy. Ejecuta `gcloud run services describe`
+  para resolver la revisión que sirve tráfico y comprueba, sobre esa revisión:
+  **CPU always allocated** (`run.googleapis.com/cpu-throttling == false`, es decir
+  `--no-cpu-throttling`), la **etiqueta de imagen** esperada (`${_TAG}`) y
+  `min == max == 1`. Si algo no coincide, el paso **hace fallar el deploy** (sale
+  con código != 0), de modo que una revisión vieja/errónea nunca pasa en silencio.
+
+- **Opciones A y B (deploy manual / desde GitHub):** ejecutá esta misma
+  comprobación a mano tras el deploy. Falla (sale != 0) si algo no coincide:
+
+  ```bash
+  SERVICE=videogeneradorxd
+  REGION=us-central1
+  EXPECTED_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/videogeneradorxd/videogeneradorxd:latest"  # ajustá el _TAG
+
+  REV="$(gcloud run services describe "$SERVICE" --region "$REGION" --platform managed \
+        --format='value(status.traffic[0].revisionName)')"
+  [ -n "$REV" ] || REV="$(gcloud run services describe "$SERVICE" --region "$REGION" --platform managed \
+        --format='value(status.latestReadyRevisionName)')"
+  echo "Revisión activa: $REV"
+
+  CPU="$(gcloud run revisions describe "$REV" --region "$REGION" --platform managed \
+        --format="value(metadata.annotations['run.googleapis.com/cpu-throttling'])")"
+  MIN="$(gcloud run revisions describe "$REV" --region "$REGION" --platform managed \
+        --format="value(metadata.annotations['autoscaling.knative.dev/minScale'])")"
+  MAX="$(gcloud run revisions describe "$REV" --region "$REGION" --platform managed \
+        --format="value(metadata.annotations['autoscaling.knative.dev/maxScale'])")"
+  IMG="$(gcloud run revisions describe "$REV" --region "$REGION" --platform managed \
+        --format='value(spec.containers[0].image)')"
+
+  FAIL=0
+  [ "$CPU" = "false" ] || { echo "FAIL: CPU no always-allocated (cpu-throttling='$CPU')"; FAIL=1; }
+  [ "$MIN" = "1" ]     || { echo "FAIL: minScale='$MIN' (esperado 1)"; FAIL=1; }
+  [ "$MAX" = "1" ]     || { echo "FAIL: maxScale='$MAX' (esperado 1)"; FAIL=1; }
+  [ "$IMG" = "$EXPECTED_IMAGE" ] || { echo "FAIL: imagen '$IMG' != esperada '$EXPECTED_IMAGE'"; FAIL=1; }
+  [ "$FAIL" -eq 0 ] && echo "OK: CPU always allocated, min=max=1, imagen coincide." || exit 1
+  ```
+
+  Complementá con el chequeo de identidad del build (§6b): el header muestra
+  `v0.9123 banana xD` y `GET /api/version` devuelve el mismo identificador para
+  esa misma revisión.
+
 ## 7. Notas / límites
 
 - **Una sola instancia**: la cola de jobs vive en memoria. No escalar a >1 sin externalizar

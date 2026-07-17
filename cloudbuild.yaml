@@ -11,6 +11,9 @@ substitutions:
   # `gcloud builds submit` works without any trigger-only built-in value.
   # Override per build with --substitutions=_TAG=<tag>.
   _TAG: latest
+  # Manual deployment identifier baked into the client bundle beside the
+  # `AUGC Pipeline` title and echoed by GET /api/version (spec `unir-step-hang`).
+  _APP_IDENTIFIER: "v0.9123 banana xD"
 
 steps:
   - name: gcr.io/cloud-builders/docker
@@ -20,6 +23,9 @@ steps:
       # meaningful (NEXT_PUBLIC_APP_VERSION == the deployed tag).
       - --build-arg
       - APP_VERSION=${_TAG}
+      # Bake the manual deployment identifier alongside the image tag.
+      - --build-arg
+      - APP_IDENTIFIER=${_APP_IDENTIFIER}
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}
       - -t
@@ -57,6 +63,77 @@ steps:
       - --add-volume=name=gcsvol,type=cloud-storage,bucket=${_BUCKET}
       - --add-volume-mount=volume=gcsvol,mount-path=/mnt/gcs
       - --allow-unauthenticated
+
+  # Post-deploy control-plane verification (spec `unir-step-hang`, Task 3.7).
+  # Confirms — from the CONTROL PLANE, never inferred from inside the container —
+  # that the revision now serving traffic actually matches the settings this
+  # build deployed: CPU always allocated (`--no-cpu-throttling`), the expected
+  # image tag, and min=max=1. Any mismatch FAILS the deploy so a stale/wrong
+  # revision (diagnostic category D) can never pass silently.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: verify-control-plane
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+
+        EXPECTED_IMAGE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}"
+        echo "Post-deploy control-plane verification for '${_SERVICE}' in '${_REGION}'"
+        echo "Expected image: $$EXPECTED_IMAGE"
+
+        # Resolve the revision actually serving traffic (fall back to the latest
+        # ready revision if the traffic split does not name one).
+        ACTIVE_REVISION="$$(gcloud run services describe ${_SERVICE} \
+          --region ${_REGION} --platform managed \
+          --format='value(status.traffic[0].revisionName)')"
+        if [ -z "$$ACTIVE_REVISION" ]; then
+          ACTIVE_REVISION="$$(gcloud run services describe ${_SERVICE} \
+            --region ${_REGION} --platform managed \
+            --format='value(status.latestReadyRevisionName)')"
+        fi
+        echo "Active (serving) revision: $$ACTIVE_REVISION"
+
+        # Read the effective settings from the serving revision itself.
+        CPU_THROTTLING="$$(gcloud run revisions describe "$$ACTIVE_REVISION" \
+          --region ${_REGION} --platform managed \
+          --format="value(metadata.annotations['run.googleapis.com/cpu-throttling'])")"
+        MIN_SCALE="$$(gcloud run revisions describe "$$ACTIVE_REVISION" \
+          --region ${_REGION} --platform managed \
+          --format="value(metadata.annotations['autoscaling.knative.dev/minScale'])")"
+        MAX_SCALE="$$(gcloud run revisions describe "$$ACTIVE_REVISION" \
+          --region ${_REGION} --platform managed \
+          --format="value(metadata.annotations['autoscaling.knative.dev/maxScale'])")"
+        ACTIVE_IMAGE="$$(gcloud run revisions describe "$$ACTIVE_REVISION" \
+          --region ${_REGION} --platform managed \
+          --format='value(spec.containers[0].image)')"
+
+        echo "Observed: cpu-throttling='$$CPU_THROTTLING' minScale='$$MIN_SCALE' maxScale='$$MAX_SCALE'"
+        echo "Observed image: $$ACTIVE_IMAGE"
+
+        FAIL=0
+        # CPU always allocated => the cpu-throttling annotation must be "false".
+        if [ "$$CPU_THROTTLING" != "false" ]; then
+          echo "FAIL: CPU is not always allocated (cpu-throttling='$$CPU_THROTTLING', expected 'false' i.e. --no-cpu-throttling)"
+          FAIL=1
+        fi
+        if [ "$$MIN_SCALE" != "1" ]; then
+          echo "FAIL: min instances != 1 (minScale='$$MIN_SCALE')"
+          FAIL=1
+        fi
+        if [ "$$MAX_SCALE" != "1" ]; then
+          echo "FAIL: max instances != 1 (maxScale='$$MAX_SCALE')"
+          FAIL=1
+        fi
+        if [ "$$ACTIVE_IMAGE" != "$$EXPECTED_IMAGE" ]; then
+          echo "FAIL: serving image '$$ACTIVE_IMAGE' does not match expected '$$EXPECTED_IMAGE'"
+          FAIL=1
+        fi
+        if [ "$$FAIL" -ne 0 ]; then
+          echo "Post-deploy control-plane verification FAILED: the live revision does not match the expected settings. Failing the deploy."
+          exit 1
+        fi
+        echo "Post-deploy control-plane verification PASSED: CPU always allocated, min=max=1, image tag matches."
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:${_TAG}

@@ -282,6 +282,22 @@ async def procesar(
     if peticion.edit_job_id:
         manager.establecer_edit_job_id(job_id, peticion.edit_job_id)
 
+    # Log de inicio correlacionado de extremo a extremo (spec unir-step-hang,
+    # Tarea 3.4): solo identificadores/counts (NUNCA contenido de vídeo) para
+    # poder reconstruir el trabajo por ``edit_job_id``/``editor_job_id`` (Req 2.5).
+    import os as _os
+    logger.info(
+        "Job aceptado (correlacion=%s)",
+        {
+            "version": _os.environ.get("APP_VERSION")
+            or _os.environ.get("NEXT_PUBLIC_APP_VERSION"),
+            "revision": _os.environ.get("K_REVISION"),
+            "edit_job_id": peticion.edit_job_id,
+            "editor_job_id": job_id,
+            "n_clips": len(orden),
+        },
+    )
+
     # Lanza el pipeline sin bloquear: ``lanzar`` programa la ejecución en el
     # executor y devuelve de inmediato, por lo que la respuesta llega en <= 2 s.
     await runner.lanzar(job_id)
