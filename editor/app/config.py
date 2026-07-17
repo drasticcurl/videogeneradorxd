@@ -278,6 +278,24 @@ DEFAULT_SUBTITULOS_REVISAR: bool = False
 DEFAULT_IDIOMA: str = "es"
 DEFAULT_MODELO: str = "small"
 
+# ---------------------------------------------------------------------------
+# Modelo faster-whisper horneado en la imagen (modo offline en Cloud Run)
+# ---------------------------------------------------------------------------
+# Directorio local donde vive el/los modelos faster-whisper pre-descargados
+# ("horneados") dentro de la imagen Docker. Cuando está seteado, la fábrica de
+# modelo por defecto (``app/engine/transcribe.py``) resuelve el modelo DESDE ese
+# directorio local con ``local_files_only=True`` y NO consulta HuggingFace en
+# runtime. Esto evita el fallo del paso TRANSCRIBIR por rate limit 429 de
+# HuggingFace (``HfHubHTTPError: 429 Too Many Requests``) y por cuelgues al
+# intentar contactar el Hub sin salida a internet.
+#
+# En el Dockerfile de Cloud Run se hornea el modelo ``small`` en
+# ``/opt/models/faster-whisper/small`` y se exporta
+# ``VSE_WHISPER_MODEL_DIR=/opt/models/faster-whisper`` (junto con
+# ``HF_HUB_OFFLINE=1``/``TRANSFORMERS_OFFLINE=1``). Vacío en dev/local => se
+# conserva el comportamiento previo (descarga/caché de HuggingFace).
+WHISPER_MODEL_DIR: str = os.environ.get("VSE_WHISPER_MODEL_DIR", "").strip()
+
 # Subtítulos (Req 6.1, 7.3, 7.4, 7.8, 7.9).
 DEFAULT_MAX_PALABRAS: int = 4
 DEFAULT_TAMANO_FUENTE: int = 72
@@ -361,3 +379,31 @@ def is_cloud_mode() -> bool:
 def is_volume_backend() -> bool:
     """Convenience predicate: True when using the shared-volume storage backend."""
     return get_storage_backend() == "volume"
+
+
+def silence_auto_apply() -> bool:
+    """Return True when detected silences must be auto-applied (no manual pause).
+
+    Controls the behaviour of the silence-edition step in the pipeline
+    (bugfix ``cloud-silencios-cuelga-25``):
+
+    - When True, the runner does NOT pause in ``ESPERANDO_EDICION_SILENCIOS``
+      waiting for a manual ``POST /silencios/{id}``; instead it auto-applies the
+      detected silence spans as cuts and resumes the pipeline immediately
+      (TRANSCRIBIR → subtítulos → ...). This fixes the indefinite hang at 25 %
+      that happened in the combined Cloud Run flow, where the manual silence
+      timeline is never surfaced nor resumed.
+    - When False, the historical behaviour is preserved: the pipeline pauses and
+      waits for the manual silence edition on the timeline (local/standalone).
+
+    Resolution order:
+      1. ``VSE_SILENCE_AUTO_APPLY`` env var, if set to a truthy value
+         (``"1"``/``"true"``/``"yes"``, case-insensitive) → True; any other
+         explicit value → False.
+      2. If the env var is absent (or blank), fall back to :func:`is_cloud_mode`
+         so Cloud Run auto-applies by default while local keeps the manual pause.
+    """
+    raw = os.environ.get("VSE_SILENCE_AUTO_APPLY")
+    if raw is None or not raw.strip():
+        return is_cloud_mode()
+    return raw.strip().lower() in ("1", "true", "yes")

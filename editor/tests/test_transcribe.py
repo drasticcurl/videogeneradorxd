@@ -132,3 +132,86 @@ def test_idioma_y_modelo_validos_no_lanzan_en_validacion() -> None:
 
     ajustes_auto = AjustesTranscripcion(idioma="auto", modelo="tiny")
     validar_idioma_modelo(ajustes_auto)
+
+
+
+# ---------------------------------------------------------------------------
+# Modo offline: fábrica de modelo por defecto resuelve el modelo horneado
+# (bugfix: eliminar la descarga de faster-whisper desde HuggingFace en runtime).
+#
+# Cuando ``config.WHISPER_MODEL_DIR`` está seteado, ``_modelo_factory_por_defecto``
+# debe construir ``WhisperModel`` apuntando al directorio LOCAL horneado y con
+# ``local_files_only=True`` (nunca consulta HuggingFace => no hay 429/cuelgue).
+# Se inyecta un módulo ``faster_whisper`` falso para no depender de la biblioteca
+# real ni descargar nada.
+# ---------------------------------------------------------------------------
+import sys
+import types
+from pathlib import Path
+
+from app import config
+from app.engine.transcribe import _modelo_factory_por_defecto
+
+
+def _instalar_fake_faster_whisper(monkeypatch) -> dict:
+    """Inyecta un ``faster_whisper`` falso y devuelve las llamadas capturadas."""
+    capturado: dict = {}
+
+    class _FakeWhisperModel:
+        def __init__(self, model, **kwargs):  # noqa: D401 - doble de prueba
+            capturado["model"] = model
+            capturado["kwargs"] = kwargs
+
+    modulo = types.ModuleType("faster_whisper")
+    modulo.WhisperModel = _FakeWhisperModel  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "faster_whisper", modulo)
+    return capturado
+
+
+def test_factory_offline_usa_ruta_local_del_modelo_horneado(monkeypatch, tmp_path) -> None:
+    """Con WHISPER_MODEL_DIR seteado y el modelo horneado presente, la fábrica
+    apunta a la ruta local ``<dir>/<modelo>`` con ``local_files_only=True``."""
+    capturado = _instalar_fake_faster_whisper(monkeypatch)
+
+    modelo_dir = tmp_path / "faster-whisper"
+    (modelo_dir / "small").mkdir(parents=True)  # modelo horneado presente
+    monkeypatch.setattr(config, "WHISPER_MODEL_DIR", str(modelo_dir))
+
+    _modelo_factory_por_defecto("small")
+
+    assert capturado["model"] == str(modelo_dir / "small")
+    assert capturado["kwargs"].get("local_files_only") is True
+    assert capturado["kwargs"].get("device") == "cpu"
+    assert capturado["kwargs"].get("compute_type") == "int8"
+
+
+def test_factory_offline_fallback_download_root_local_files_only(monkeypatch, tmp_path) -> None:
+    """Con WHISPER_MODEL_DIR seteado pero SIN el subdirectorio del modelo, la
+    fábrica usa el directorio como ``download_root`` y fuerza ``local_files_only``
+    (nunca consulta la red)."""
+    capturado = _instalar_fake_faster_whisper(monkeypatch)
+
+    modelo_dir = tmp_path / "faster-whisper"
+    modelo_dir.mkdir(parents=True)  # existe el dir base, no el del modelo
+    monkeypatch.setattr(config, "WHISPER_MODEL_DIR", str(modelo_dir))
+
+    _modelo_factory_por_defecto("small")
+
+    assert capturado["model"] == "small"
+    assert capturado["kwargs"].get("download_root") == str(modelo_dir)
+    assert capturado["kwargs"].get("local_files_only") is True
+
+
+def test_factory_local_dev_conserva_comportamiento_por_defecto(monkeypatch) -> None:
+    """Con WHISPER_MODEL_DIR vacío (modo local/dev) se conserva el comportamiento
+    previo: WhisperModel(modelo, device=cpu, int8) SIN forzar ``local_files_only``."""
+    capturado = _instalar_fake_faster_whisper(monkeypatch)
+    monkeypatch.setattr(config, "WHISPER_MODEL_DIR", "")
+
+    _modelo_factory_por_defecto("small")
+
+    assert capturado["model"] == "small"
+    assert capturado["kwargs"].get("device") == "cpu"
+    assert capturado["kwargs"].get("compute_type") == "int8"
+    assert "local_files_only" not in capturado["kwargs"]
+    assert "download_root" not in capturado["kwargs"]
