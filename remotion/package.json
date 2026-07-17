@@ -1,0 +1,29 @@
+{
+  "name": "remotion-shortvideo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Subproyecto Node de Remotion para el motor de render de shorts verticales (composicion ShortVideo).",
+  "type": "module",
+  "scripts": {
+    "render": "node render.mjs",
+    "studio": "remotion studio src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.399",
+    "@remotion/captions": "4.0.399",
+    "@remotion/renderer": "4.0.399",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "remotion": "4.0.399"
+  },
+  "devDependencies": {
+    "@remotion/cli": "4.0.399",
+    "@types/node": "^20.11.0",
+    "@types/react": "19.0.0",
+    "@types/react-dom": "19.0.0",
+    "fast-check": "^3.15.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}

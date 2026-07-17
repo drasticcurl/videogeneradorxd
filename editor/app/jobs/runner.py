@@ -369,9 +369,11 @@ class JobRunner:
                     limpiar = False
                     # Auto-avance de la edición final (bugfix
                     # cloud-edicion-final-cuelga-80): se auto-renderiza con el
-                    # motor por defecto (Remotion, ``MOTOR_RENDER_EDICION_FINAL``)
-                    # vía ``reanudar_render_job``, que gestiona su propio cleanup
-                    # al terminar. En local se conserva la pausa manual.
+                    # motor resuelto por ``config.motor_render_edicion()`` (en la
+                    # nube "ass", porque el subproyecto ``remotion/`` no está
+                    # presente en la imagen y ffmpeg/libass sí lo están) vía
+                    # ``reanudar_render_job``, que gestiona su propio cleanup al
+                    # terminar. En local se conserva la pausa manual.
                     if not config.auto_avanzar_edicion():
                         return resultado
                     if iteraciones >= MAX_AUTO_AVANCE_ITERS:
@@ -389,7 +391,9 @@ class JobRunner:
                     )
                     iteraciones += 1
                     auto_avanzado = True
-                    resultado = self.reanudar_render_job(job_id)
+                    resultado = self.reanudar_render_job(
+                        job_id, motor=config.motor_render_edicion()
+                    )
                     continue
                 # Resultado terminal (éxito o fallo): salir del bucle.
                 break

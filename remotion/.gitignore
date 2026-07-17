@@ -1,0 +1,11 @@
+# Dependencias instaladas (no ejecutamos npm install en este entorno).
+node_modules/
+
+# Artefactos de render (MP4 de salida, bundles temporales, props serializados).
+out/
+
+# Cache del bundler de Remotion.
+.remotion/
+
+# Logs
+*.log

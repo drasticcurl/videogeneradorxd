@@ -12,7 +12,7 @@
  * in-product, the displayed `version` combines the baked Docker image tag with
  * an exact, human-readable manual identifier, space-separated:
  *
- *     "<image-tag> v0.9124 mango xD"
+ *     "<image-tag> v0.9125 kiwi xD"
  *
  * The header beside the title shows the manual identifier, and GET /api/version
  * exposes the same combined `version`, so header and API can be compared for
@@ -25,7 +25,7 @@
  * the Dockerfile / cloudbuild build-arg) with this literal as the fallback so
  * standalone/local builds stay coherent.
  */
-export const MANUAL_IDENTIFIER = "v0.9124 mango xD";
+export const MANUAL_IDENTIFIER = "v0.9125 kiwi xD";
 
 export interface AppVersion {
   /** Combined display identity: "<image-tag> <manual identifier>". */

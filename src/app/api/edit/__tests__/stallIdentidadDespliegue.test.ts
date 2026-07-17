@@ -11,7 +11,7 @@
  * This exploratory check documents the gap that lets a STALE bundle (Category D)
  * go unnoticed: today there is NO in-product coherence check tying the manual
  * identifier shown next to the `AUGC Pipeline` title to `GET /api/version`, and
- * the exact human identifier `v0.9124 mango xD` is not exposed at all. So a
+ * the exact human identifier `v0.9125 kiwi xD` is not exposed at all. So a
  * "nothing changed after deploy" symptom cannot be attributed to a stale/mismatched
  * revision. The coherence assertion is EXPECTED TO FAIL on the current code; it
  * is closed by Task 3.1 (which bakes the identifier and renders it beside the
@@ -21,7 +21,7 @@
  * -------------------------------------------------------------------
  * 1. `getAppVersion()` returns only `{ version, buildTime }` sourced from
  *    `NEXT_PUBLIC_APP_VERSION` / `NEXT_PUBLIC_BUILD_TIME` (fallbacks "dev"/"unknown").
- *    It does NOT expose the manual identifier `v0.9124 mango xD`, so the header
+ *    It does NOT expose the manual identifier `v0.9125 kiwi xD`, so the header
  *    chip and `/api/version` cannot be checked for agreement in-product.
  * 2. `GET /api/version` echoes exactly `getAppVersion()` — so it inherits the
  *    same gap: there is no field a browser/curl can compare against the header
@@ -37,7 +37,7 @@ import { GET as versionGET } from "@/app/api/version/route";
  * and be echoed by `/api/version` for the same build/revision (Req 2.8, 2.9).
  * Task 3.1 bakes this via env; today it is absent.
  */
-const MANUAL_IDENTIFIER = "v0.9124 mango xD";
+const MANUAL_IDENTIFIER = "v0.9125 kiwi xD";
 
 describe("Task 1.3 — deployment identity baseline (build-time only)", () => {
   it("GET /api/version echoes getAppVersion() (shared source, build-time coherence)", async () => {
@@ -58,11 +58,11 @@ describe("Task 1.3 — deployment identity baseline (build-time only)", () => {
 });
 
 describe("Task 1.3 — no in-product identifier coherence (EXPECTED FAIL on current code)", () => {
-  it("exposes the manual identifier `v0.9124 mango xD` coherently via /api/version", async () => {
+  it("exposes the manual identifier `v0.9125 kiwi xD` coherently via /api/version", async () => {
     // GAP: there is no in-product way to confirm the live build/revision because
     // the manual identifier that sits beside `AUGC Pipeline` is not exposed by
     // getAppVersion()/`/api/version`. A stale bundle (Category D) is therefore
-    // easy to misread. Task 3.1 bakes `v0.9124 mango xD` and makes header and
+    // easy to misread. Task 3.1 bakes `v0.9125 kiwi xD` and makes header and
     // `/api/version` coherent for the same build/revision.
     const local = getAppVersion();
     const res = await versionGET();

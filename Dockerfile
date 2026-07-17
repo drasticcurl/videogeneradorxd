@@ -18,7 +18,7 @@ ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION
 # Manual deployment identifier baked once via env, space-separated from the
 # image tag by getAppVersion(). Shown beside the `AUGC Pipeline` title and echoed
 # by GET /api/version for the same build (spec `unir-step-hang`, Property 3).
-ARG APP_IDENTIFIER="v0.9124 mango xD"
+ARG APP_IDENTIFIER="v0.9125 kiwi xD"
 ENV NEXT_PUBLIC_APP_IDENTIFIER=$APP_IDENTIFIER
 COPY --from=node-deps /app/node_modules ./node_modules
 COPY . .
@@ -75,6 +75,9 @@ ENV NODE_ENV=production \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates python3 ffmpeg libass9 bash \
+       libnss3 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+       libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+       libasound2 libpango-1.0-0 libcairo2 libxshmfence1 libx11-xcb1 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=python-deps /opt/venv /opt/venv
@@ -83,6 +86,16 @@ COPY --from=whisper-model /opt/models /opt/models
 COPY --from=next-builder /app/.next/standalone ./
 COPY --from=next-builder /app/.next/static ./.next/static
 COPY editor ./editor
+# Subproyecto Remotion (motor de render final por defecto). Se instala aquí, en
+# la etapa `runner`, para que las dependencias (@remotion/bundler,
+# @remotion/renderer, react/react-dom) y el CLI (@remotion/cli, devDep) queden
+# en la imagen final. `npm ci` usa remotion/package-lock.json para una
+# instalación determinista, y `npx remotion browser ensure` descarga el Chrome
+# Headless Shell en la caché de Remotion bajo el HOME del usuario de build (Cloud
+# Build tiene red), de modo que renderMedia lo encuentra automáticamente en
+# runtime (misma etapa/usuario) sin depender de descargas al arrancar.
+COPY remotion ./remotion
+RUN cd remotion && npm ci && npx remotion browser ensure
 COPY scripts/start-combined.sh ./scripts/start-combined.sh
 RUN chmod 0755 ./scripts/start-combined.sh \
     && mkdir -p /shared /shared/editor-workdir

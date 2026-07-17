@@ -344,6 +344,7 @@ from typing import Literal
 
 StorageBackendMode = Literal["local", "volume"]
 EditModeValue = Literal["local", "cloud"]
+MotorRender = Literal["ass", "remotion"]
 
 
 def get_storage_backend() -> StorageBackendMode:
@@ -440,3 +441,38 @@ def auto_avanzar_edicion() -> bool:
     if raw is None or not raw.strip():
         return is_cloud_mode()
     return raw.strip().lower() in ("1", "true", "yes")
+
+
+def motor_render_edicion() -> MotorRender:
+    """Return the render engine to use for the final edition step.
+
+    Selects between the ffmpeg/libass subtitle-burning engine (``"ass"``,
+    :func:`~app.engine.pipeline.generar_y_quemar_subtitulos`) and the Remotion
+    Node engine (``"remotion"``) for the final render (bugfix
+    ``cloud-edicion-final-cuelga-80``).
+
+    The Remotion Node subproject (``remotion/`` with ``render.mjs`` +
+    ``package.json`` + composition) is now committed in this repo and a headless
+    Chromium is baked into the Docker image at build time (``npm ci`` +
+    ``npx remotion browser ensure`` in the runner stage), so the Remotion engine
+    succeeds in the Cloud Run image. Therefore the final render uses Remotion by
+    default in BOTH cloud and local modes. The ``"ass"`` engine remains fully
+    implemented and its runtime dependencies (ffmpeg, libass9) are still installed
+    in the Docker runner image, so ``VSE_RENDER_ENGINE=ass`` is a supported
+    fallback to the ffmpeg/libass burn-in engine (the documented Cloud Run safety
+    valve if Chromium ever breaks).
+
+    Resolution order:
+      1. ``VSE_RENDER_ENGINE`` env var, if set (non-blank): lowercased/stripped;
+         when it equals ``"ass"`` or ``"remotion"`` it is used verbatim. Any
+         other non-blank (invalid) value is ignored and falls through to step 2.
+      2. If the env var is absent/blank/invalid: return ``"remotion"`` (the
+         default in both cloud and local modes, now that the ``remotion/``
+         subproject and a headless Chromium ship in the image).
+    """
+    raw = os.environ.get("VSE_RENDER_ENGINE")
+    if raw is not None and raw.strip():
+        elegido = raw.strip().lower()
+        if elegido in ("ass", "remotion"):
+            return elegido  # type: ignore[return-value]
+    return "remotion"
