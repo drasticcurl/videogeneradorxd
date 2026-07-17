@@ -1,168 +1,157 @@
 # Implementation Plan
 
-> Bugfix: **UNIR step hang** — migrate the single external-tool subprocess funnel
-> (`app/engine/proc.py::ejecutar_comando`) from an unbounded `subprocess.run`
-> to a `Popen`-based executor that cannot silently hang (stdin from the null
-> device, concurrent output draining, new session/process group, bounded timeout,
-> process-group kill on expiry) and route every call site through a
-> backward-compatible `Runner` adapter. Failures/timeouts propagate to the job
-> `FALLIDO` state with `{paso, motivo}`, and UNIR sub-steps become observable.
+> **Bugfix (iteration 2, diagnostic-first): UNIR / CORTAR_SILENCIOS opaque stall at 25%.**
+> The first iteration already shipped the bounded-`Popen` executor (`editor/app/engine/proc.py`,
+> `editor/app/config.py`), so the timeout hypothesis is **no longer a confirmed cause**. This
+> iteration is **additive and observation-only**: it makes the transitions at the 25% boundary
+> observable, carries a correlation tuple end-to-end, hardens deployment identity, and surfaces a
+> **visual, live log for the user** so the failing step/substep is visible even while the
+> percentage stays at 25%. It MUST NOT change pipeline outputs, ordering, immutability, local-mode
+> behavior, or the isolation of the separate "+7 seconds" flow.
 >
-> **Reminder (bug-condition methodology):** Tasks 1–5 write tests **BEFORE** any
-> production change. Task 1 (Property 1) MUST **FAIL** on the UNFIXED code — that
-> failure confirms the hang exists; do NOT try to fix the test or the code when
-> it fails, and do NOT touch `proc.py` yet. Tasks 2–5 (Properties 2–5) are
-> observation-first preservation baselines that MUST **PASS** on the UNFIXED
-> code. Only after all five tests are written, run, and their expected outcomes
-> documented do we implement the fix (Task 6).
+> **Bug-condition methodology (order is mandatory):**
+> - **Task 1 (Property 1: Bug Condition)** is a reproducible diagnostic written **BEFORE** any
+>   instrumentation. It MUST demonstrate — on the CURRENT code — that at 25% an observer cannot
+>   distinguish `UNIR`-done vs detection-started vs pause-reached, and it MUST reproduce the
+>   un-propagated pause and the `EDITOR_STATE_LOST` path. Do NOT fix code when it fails.
+> - **Task 2 (Property 2: Preservation)** is observation-first: it MUST PASS on the CURRENT code and
+>   pins the behavior that must not regress.
+> - Only after Tasks 1–2 are written, run, and their outcomes documented do we instrument (Task 3).
 >
-> All new tests use `pytest` + `hypothesis` and go under `backend/tests/`.
-> Every test that spawns a real child MUST be wrapped in a hard wall-clock guard
-> (e.g. a watchdog thread / `pytest-timeout`-style cap enforced inside the test)
-> so the suite itself can never hang while reproducing the bug. Real-subprocess
-> tests are POSIX-oriented (session/process-group semantics); guard them with a
-> `sys.platform`/`os.name` skip so standalone/local Windows runs are unaffected
-> (Req 3.3).
+> **Test locations (real):** Python → `editor/tests/` (`pytest` + `hypothesis`);
+> TypeScript → `src/lib/edit/__tests__/`, `src/app/api/edit/__tests__/`, `src/components/edit/__tests__/`
+> (`vitest` + `fast-check`). Every test that drives the boundary uses injected doubles (no real
+> binaries) and a hard wall-clock cap so the suite can never hang. Real-subprocess/POSIX-only tests
+> are guarded so standalone/local runs are unaffected (Req 3.3).
 
 ---
 
-- [x] 1. Write bug-condition exploration test for unbounded / non-terminating external-tool execution
-  - **Property 1: Bug Condition** - Bounded, Non-Hanging Termination of External-Tool Steps
-  - **CRITICAL**: This test MUST FAIL (hang → tripped by the harness wall-clock guard) on the UNFIXED code — the failure confirms the bug exists.
-  - **DO NOT attempt to fix the test or `proc.py` when it fails.** This test encodes the expected bounded-termination behavior and will validate the fix once it passes after Task 6.
-  - **GOAL**: Surface concrete counterexamples reproducing the "stuck at 25 %, zero output" symptom and confirm/refute the ranked root-cause hypotheses in design §"Hypothesized Root Cause".
-  - **Scoped PBT approach**: this is a deterministic block, not a random one, so scope the Hypothesis property to the concrete blocking cases below (small strategies over tiny helper-script variants and requested-timeout values), each executed under a hard wall-clock cap that fails fast rather than hanging the suite.
-  - Create `backend/tests/test_proc_timeout_pbt.py`. Drive `app.engine.proc.ejecutar_comando` (and, for one end-to-end case, `app.engine.ffprobe.inspeccionar_clip`) against a **real** child process (a tiny inline Python script invoked via `sys.executable -c`) for these cases from design §"Bug Details / Examples" and §"Exploratory Bug Condition Checking":
-    - **1a Unbounded wait (headline)**: child sleeps far longer than any deadline; assert the call does not return within a generous wall-clock guard on unfixed code (reproduces the indefinite wait; `timeout=None` funnel).
-    - **1b Blocked-on-inherited-stdin**: child reads `stdin` until EOF while the parent never writes/closes it; demonstrates the inherited-`stdin` stall (motivates `stdin=DEVNULL`).
-    - **1c Grandchild survival**: child spawns a long-lived grandchild in the same group; demonstrates that terminating only the direct child is insufficient (motivates `start_new_session=True` + `os.killpg`).
-  - Assert the post-fix contract the test will later enforce: with a bounded `timeout`, the call terminates within `timeout + grace`, raising `ComandoTimeoutError` (an `OSError` subclass) with an actionable message (command name, timeout value, captured `stderr` tail), and leaves no orphaned grandchild process.
-  - Run on UNFIXED code. **EXPECTED OUTCOME**: FAILS (the guarded cases do not terminate / `ComandoTimeoutError` does not exist yet) — this proves the bug.
-  - Document the observed counterexamples in the test module docstring (which case hung, whether a grandchild survived direct-child termination).
-  - Mark complete when the test is written, run, and the failure is documented.
-  - _Design refs: "Bug Details / Bug Condition + Examples", "Hypothesized Root Cause" (1–3), "Testing Strategy / Exploratory Bug Condition Checking", "Fix Checking"._
-  - _Requirements: 1.1, 1.2, 1.5, 2.1, 2.2, 2.3, 2.6_
+- [x] 1. Write the reproducible bug-condition diagnostic (exploratory checking) — BEFORE any instrumentation
+  - **Property 1: Bug Condition** - Differentiated, Correlated Diagnosability at the 25% Boundary
+  - **CRITICAL**: These tests MUST FAIL / expose the gap on the CURRENT code — the failure confirms the bug (opaque, un-classifiable 25%). **DO NOT** fix the code or the tests when they fail; they encode the expected post-fix behavior and will validate the instrumentation later.
+  - **GOAL**: Surface concrete counterexamples proving that at 25% an observer cannot distinguish `UNIR`-done vs silence-detection-started vs pause-reached, and reproduce the pause-propagation gap and `EDITOR_STATE_LOST`. Confirm/refute the ranked hypotheses (strongest: C/D) from design §"Hypothesized Root Cause".
+  - **Scoped PBT approach**: this is a deterministic diagnosability gap (not random), so scope the property to the concrete boundary cases below, each guarded by a hard wall-clock cap.
+  - [x] 1.1 Python — opaque 25% boundary is indistinguishable
+    - Create `editor/tests/test_stall_diagnostico_pbt.py`. Drive `app.engine.pipeline.ejecutar_pipeline` with silences enabled and injected `fn_unir`/`fn_detectar` doubles (no real binaries), capturing every `EventoProgreso` sent to the reporter.
+    - Assert (on CURRENT code) that `UNIR`-done, `Detectando silencios` (start), detection-done, and `ESPERANDO_EDICION_SILENCIOS` all report **percentage 25** and carry **no** distinguishing step/substep/state/correlation metadata — i.e. the last confirmed event cannot place the job into exactly one of categories A/B/C/D (design §"Diagnostic Decision Matrix").
+    - Document the observed indistinguishable event trail in the module docstring.
+    - _Design refs: "Bug Details / Bug Condition + Examples", "Exploratory Bug Condition Checking" (case 1)._
+    - _Requirements: 1.2, 1.3, 1.5_
+  - [x] 1.2 TypeScript — pause propagation and EDITOR_STATE_LOST
+    - Create `src/lib/edit/__tests__/stallDiagnostico.test.ts`. Drive `reconcileEditJob` (`src/lib/edit/jobReconciler.ts`) with an editor `/progreso` reporting estado `esperando_edicion_silencios`; assert it should map to `awaiting_silences` and that `controlForStatus("awaiting_silences") === "silence"` (timeline should mount) — recording where the current path fails to make the pause visible (category C).
+    - Add a case where the editor returns 404 for a paused job and assert the current code surfaces `failed {paso:"EDITOR_STATE_LOST", motivo}` (reproduces the lost-editor-job propagation).
+    - Document the reproduced counterexamples in the test file header.
+    - _Design refs: "Examples / Category C", "Exploratory Bug Condition Checking" (cases 2–3)._
+    - _Requirements: 1.1, 1.2, 1.3_
+  - [x] 1.3 TypeScript — deployment identity ambiguity (category D)
+    - In `src/app/api/edit/__tests__/` (or `src/components/edit/__tests__/`), add a test asserting that today there is **no** in-product coherence check tying the header identifier to `GET /api/version`, so a stale bundle (category D) is easy to misread. This test documents the gap that Task 3.1 closes.
+    - **EXPECTED OUTCOME (Task 1 overall)**: tests expose the diagnosability gap on unfixed code. Mark complete when written, run, and the counterexamples are documented.
+    - _Design refs: "Examples / Category D", "Exploratory Bug Condition Checking" (case 4)._
+    - _Requirements: 1.6, 1.8_
 
-- [x] 2. Write no-deadlock concurrent-draining characterization test (invariant to preserve)
-  - **Property 3: Preservation** - No-Deadlock Concurrent Output Draining
-  - **IMPORTANT**: Observation-first. This characterizes CURRENT behavior so the `Popen` migration cannot regress into a real pipe-buffer deadlock (design §"Important root-cause honesty note").
-  - **GOAL**: Confirm the current `subprocess.run`/`communicate()` funnel does NOT deadlock on large output, and pin that as a required invariant for the fixed executor.
-  - In `backend/tests/test_proc_timeout_pbt.py` (or a sibling `test_proc_draining_pbt.py`), add a Hypothesis property that generates output sizes — including volumes far exceeding the ~64 KB OS pipe buffer (e.g. 0, 64 KB, several hundred KB) — and a choice of stream (`stdout`, `stderr`, or both). A real child writes exactly that many bytes to the chosen stream(s) and exits 0.
-  - Assert: the executor returns without deadlock (under the wall-clock guard), `returncode == 0`, and the full byte count is captured on the corresponding stream(s).
-  - Run on UNFIXED code. **EXPECTED OUTCOME**: PASSES (baseline invariant confirmed — no current deadlock).
-  - Mark complete when written, run, and passing on unfixed code.
-  - _Design refs: "Important root-cause honesty note", "Correctness Properties / Property 3", "Hypothesized Root Cause" (4), "Property-Based Tests / No-deadlock draining"._
-  - _Requirements: 2.4_
+- [x] 2. Write preservation baseline property tests (observation-first) — BEFORE any instrumentation
+  - **Property 2: Preservation** - Identical Pipeline Behavior for Non-Buggy Inputs
+  - **IMPORTANT**: Observe outputs on CURRENT code first, then encode them as properties. All of these MUST **PASS** on the unfixed code and pin what the instrumentation must not change.
+  - [x] 2.1 Python — order/selection, immutability, pause semantics, monotonic percentage
+    - In `editor/tests/` (extend an existing PBT module such as `test_ordering.py`/`test_pipeline.py` or add `test_preservacion_diagnostico_pbt.py`), add Hypothesis properties over random `orden_clips`: assert `contenido_concat_txt`/`parsear_concat_txt` round-trips element-for-element, `unir_clips` includes all and only the selected clips exactly once in order, source inputs are read-only (outputs/temporaries written to separate destinations), and progress percentage is monotonic non-decreasing while state/substep are independent of it.
+    - _Design refs: "Preservation Requirements", "Preservation Checking", "Property-Based Tests / Order preservation"._
+    - _Requirements: 3.1, 3.2, 3.6, 3.8_
+  - [x] 2.2 Python/TS — local mode and +7s flow isolation
+    - Add tests asserting local mode (`EDIT_MODE=local`, `VSE_STORAGE_BACKEND=local`) behaves independently of Cloud Run metadata, and that the separate "+7 seconds" clip-extension flow shares no triggers/states with the edit flow (both directions).
+    - _Design refs: "Preservation Requirements / Flow isolation, Local mode", "Correctness Properties / Property 2"._
+    - _Requirements: 3.3, 3.4, 3.7_
+  - [x] 2.3 TS — statusMap and control mapping baseline
+    - In `src/lib/edit/__tests__/`, assert `mapEditorEstado("esperando_edicion_silencios") === awaiting_silences`, an unknown estado maps to `failed {paso:"STATUS_MAPPING"}`, and `controlForStatus` yields the correct control for every reachable status. Confirm these PASS on unfixed code.
+    - **EXPECTED OUTCOME (Task 2 overall)**: all baseline tests PASS on unfixed code. Mark complete when written, run, and passing.
+    - _Design refs: "Glossary / statusMap", "Correctness Properties / Property 2"._
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.6, 3.7, 3.8_
 
-- [x] 3. Write preservation property tests for non-buggy runner outcomes (success & non-zero exit)
-  - **Property 2: Preservation** - Identical Behavior for Non-Buggy Inputs
-  - **IMPORTANT**: Observation-first — observe outputs on UNFIXED code via injected `Runner` doubles, then encode them as properties.
-  - **GOAL**: Lock in that tools returning within their deadline (and their error handling) are completely unaffected by the fix.
-  - Create `backend/tests/test_unir_preservation_pbt.py`. Using injected doubles (no real binaries), add Hypothesis properties:
-    - **3a Success equivalence**: a double returning `returncode=0` with generated `stdout`/`stderr` drives `normalize.unir_clips(...)` (hard-cut path, with a fake `inspector` returning a valid `ClipInfo`) to produce `unido.mp4`; assert the produced artifact, the written `concat.txt` contents, and the returned path are identical to the observed unfixed behavior.
-    - **3b Non-zero exit equivalence**: a double returning non-zero still raises the same step-specific error (`NormalizacionError` from `unir_clips`, `ClipInspeccionError` from `inspeccionar_clip`) with the same `ruta`/`motivo`, and no partial `unido.mp4` is referenced as success.
-  - Observe and record the concrete unfixed outputs in the module docstring before asserting.
-  - Run on UNFIXED code. **EXPECTED OUTCOME**: PASSES (baseline behavior confirmed).
-  - Mark complete when written, run, and passing on unfixed code.
-  - _Design refs: "Expected Behavior / Preservation Requirements", "Correctness Properties / Property 2", "Preservation Checking", "Property-Based Tests / Preservation of successful runs"._
-  - _Requirements: 3.1, 3.2, 3.3_
+- [x] 3. Instrument the diagnostic-first fix (additive, observation-only)
 
-- [x] 4. Write order-preservation property test (unchanged concat order)
-  - **Property 4: Preservation** - Order Preservation
-  - **IMPORTANT**: Re-affirm the existing concat-order guarantee against the code paths the fix touches; reuse/extend the existing pure-order Hypothesis property (`normalize.contenido_concat_txt` / `parsear_concat_txt` round-trip) rather than duplicating it.
-  - **GOAL**: Guarantee the fix never reorders, omits, or duplicates clips.
-  - In `backend/tests/test_unir_preservation_pbt.py`, add a Hypothesis property over random `Orden_de_Clips` asserting that `contenido_concat_txt(orden)` parsed back with `parsear_concat_txt` equals `orden` element-for-element, and that a full `unir_clips` run (injected success double) writes intermediates in the exact user order.
-  - Run on UNFIXED code. **EXPECTED OUTCOME**: PASSES.
-  - Mark complete when written, run, and passing on unfixed code.
-  - _Design refs: "Correctness Properties / Property 4", "Property-Based Tests / Order preservation"._
-  - _Requirements: 3.6_
+  - [x] 3.1 Deployment identity next to `AUGC Pipeline` (priority 1)
+    - In `src/app/layout.tsx`, render the exact manual identifier `v0.9123 banana xD` beside the `AUGC Pipeline` title, keeping the fixed bottom-right `VersionBanner` (`src/components/VersionBanner.tsx`) unchanged.
+    - Bake the identifier **once** via env so it is inlined at build time and stays coherent with `getAppVersion()` (`src/lib/version.ts`) and `GET /api/version` (`src/app/api/version/route.ts`) for the same build/revision; **space-separate** the Docker image tag from the manual identifier (e.g. `"<image-tag> v0.9123 banana xD"`). Wire the build-arg through `Dockerfile` / `cloudbuild.yaml`.
+    - Add `K_REVISION` to **server-side** diagnostics only (never rendered, no secrets).
+    - Add coherence tests in `src/app/api/edit/__tests__/` (or equivalent): the header identifier equals the `GET /api/version` value and both correspond to the same build.
+    - _Design refs: "Fix Implementation / Change 1", "Correctness Properties / Property 3"._
+    - _Bug_Condition: category D — stale/mismatched revision undetectable in-product_
+    - _Expected_Behavior: header shows `v0.9123 banana xD`, coherent with /api/version for the same build/revision (Property 3)_
+    - _Requirements: 2.8, 2.9_
 
-- [x] 5. Write backward-compatible runner-injection property test (single-arg doubles)
-  - **Property 5: Preservation** - Backward-Compatible Runner Injection
-  - **IMPORTANT**: Target the CALL SITES (not the not-yet-existing `invocar_runner`) so the test PASSES on unfixed code and continues to pass after the fix routes calls through the adapter.
-  - **GOAL**: Guarantee single-argument injected doubles (`__call__(self, args)` / `def _cmd_ok(args)`) keep working without `TypeError` and return the same `ResultadoComando`.
-  - In `backend/tests/test_unir_preservation_pbt.py`, add a Hypothesis property that generates injected `Runner` doubles of both shapes — single-arg (`args` only) and timeout-aware (`args, timeout=None`) — and asserts that `inspeccionar_clip(ruta, runner=double)` and `unir_clips(..., runner=double, inspector=...)` invoke the double with the same command args and obtain the same result, with no `TypeError`.
-  - Run on UNFIXED code. **EXPECTED OUTCOME**: PASSES for the single-arg shape (current call sites use `runner(comando)`); the timeout-aware shape is exercised so the property is meaningful after the fix.
-  - Mark complete when written, run, and passing on unfixed code.
-  - _Design refs: "Correctness Properties / Property 5", "Fix Implementation / Change 2", "Property-Based Tests / Backward-compatible injection"._
-  - _Requirements: 3.4, 3.5_
+  - [x] 3.2 Visual live log for the user — show exactly what is failing (priority 2)
+    - Extend the editor progress log in `src/components/edit/EditPanel.tsx` and `src/components/edit/editUiData.ts` so the play-by-play panel shows, live and legibly, the current **paso** and **subpaso** (not just percentage), and on failure renders the `{paso, subpaso, motivo}` plus a recommended action — so the user sees exactly what is failing **even while the percentage stays at 25%**.
+    - Extend `EditProgressView`/`ProgressLogEntry` and `parseProgressResponse` to carry `subpaso`, `estado`, and any correlation identifiers (version/revision/`editJobId`/`editorJobId`) when present; keep `appendProgressLog` dedupe keyed on the meaningful tuple (so a substep change appends a new line even at the same percentage). Never render video content.
+    - Add render tests in `src/components/edit/__tests__/` (and/or `editUiData` unit tests) asserting: substep changes at constant 25% append distinct visible log lines; a failed state renders `{paso, subpaso, motivo}` and the recommended action; correlation identifiers appear when provided.
+    - _Design refs: "Fix Implementation / Change 4 (UI, timeline mount)", "Design strategy (3)", "Correctness Properties / Property 1"._
+    - _Bug_Condition: user cannot see which step/substep is stuck at 25%_
+    - _Expected_Behavior: live, human-readable step/substep + actionable {paso, subpaso, motivo}; state independent of percentage (Property 1)_
+    - _Requirements: 2.2, 2.7, 3.8_
 
-- [x] 6. Fix the UNIR-step hang: robust `Popen` executor, backward-compatible `Runner` contract, failure propagation, and UNIR observability
+  - [x] 3.3 Editor preflight for `ffmpeg`/`ffprobe` with versions + structured logs (priority 3)
+    - In `editor/app/deps/checker.py`, extend the checks so `ffmpeg`/`ffprobe` are not only located (`shutil.which`) but **executed** (`-version`) to capture and log their **versions** in a structured form, reusing the bounded `ejecutar_comando` (probe-sized timeout from existing `VSE_PROBE_TIMEOUT_S`); a failure marks the dependency unavailable.
+    - In `editor/main.py` (lifespan), keep the existing "block startup on missing dependency" contract and ensure the failure message is actionable and correlated; do not publish partial results.
+    - Add tests in `editor/tests/` (e.g. `test_deps.py`): preflight logs `ffmpeg`/`ffprobe` versions on success and blocks startup with an actionable message when a binary is missing/incompatible.
+    - _Design refs: "Fix Implementation / Change 2", "Correctness Properties / Property 4"._
+    - _Bug_Condition: category A/D — environment binaries/versions not verified on the effective revision_
+    - _Expected_Behavior: preflight reports versions or blocks startup with actionable correlated failure (Property 4)_
+    - _Requirements: 2.6_
 
-  - [x] 6.1 Add env-overridable subprocess timeout constants
-    - In `app/config.py`, add `VSE_SUBPROCESS_TIMEOUT_S` (general default, e.g. 900 s), `VSE_PROBE_TIMEOUT_S` (short probe deadline, e.g. 60 s), and (optionally) a longer transcription/render default, each read from the environment with a numeric fallback — mirroring the existing `os.environ.get(...)` pattern for `VSE_*` settings.
-    - Keep defaults generous so healthy runs on valid small inputs never trip them (Property 2 / slow-but-healthy edge case).
-    - _Design refs: "Fix Implementation / Change 3"._
-    - _Requirements: 2.2, 2.4, 3.1, 3.3_
+  - [x] 3.4 End-to-end correlated events (priority 4)
+    - Attach the correlation tuple `{version, revision (K_REVISION), editJobId, editorJobId, paso, subpaso, estado, eventType}` to every relevant log/event at job start, per substep, on pause, on timeout, and on failure across FastAPI: `editor/app/api/process.py`, `editor/app/api/progress.py`, `editor/app/jobs/runner.py`, `editor/app/jobs/manager.py`, `editor/app/engine/pipeline.py`, `editor/app/engine/normalize.py`, `editor/app/engine/silence.py`.
+    - On the Next side, thread the same correlation through `src/lib/edit/jobReconciler.ts`, `src/lib/edit/statusMap.ts`, and the `src/app/api/edit/[editJobId]/progress` route. Keep percentage **monotonic** and **never** use it as the state. Never log video content (only ids, counts, durations, sizes, states).
+    - Add unit tests (`editor/tests/`, `src/lib/edit/__tests__/`, `src/app/api/edit/__tests__/`) and a property test asserting step/substep/state may change while percentage stays 25 and remains monotonic, and that no video content is logged.
+    - _Design refs: "Fix Implementation / Change 3", "Correctness Properties / Property 1"._
+    - _Expected_Behavior: correlated differentiated events; state independent of percentage (Property 1)_
+    - _Requirements: 2.1, 2.2, 2.5_
 
-  - [x] 6.2 Replace the executor in `proc.py` with a non-hanging `Popen`-based implementation
-    - In `app/engine/proc.py`, add `class ComandoTimeoutError(OSError)` carrying an actionable message (command name, timeout value, captured `stderr` tail) and export it in `__all__`.
-    - Rewrite `ejecutar_comando(args, timeout=None)` using `subprocess.Popen` with: `stdin=subprocess.DEVNULL`; `stdout=PIPE`, `stderr=PIPE`, `text=True`; `start_new_session=True` on POSIX (Windows fallback: `creationflags=CREATE_NEW_PROCESS_GROUP`); draining both streams concurrently via `proc.communicate(timeout=timeout)` (the no-deadlock invariant from Property 3, made explicit for the `Popen` migration).
-    - On `subprocess.TimeoutExpired`: terminate the **whole process group** (`os.killpg(os.getpgid(proc.pid), SIGTERM)`, then `SIGKILL` after a short grace; Windows: `proc.kill()`), call `communicate()` again to drain remaining buffered output, and raise `ComandoTimeoutError`.
-    - On success, return a byte-for-byte identical `ResultadoComando(returncode, stdout, stderr, args)` (Property 2).
-    - _Design refs: "Fix Implementation / Change 1", "Hypothesized Root Cause" (1–4), "Unit Tests"._
-    - _Bug_Condition: isBugCondition(X) = X.invokesExternalTool AND NOT X.enforcesBoundedTimeout_
-    - _Expected_Behavior: bounded termination — succeed, or raise ComandoTimeoutError after process-group kill; never hang; no partial artifact as success_
-    - _Requirements: 2.1, 2.2, 2.4, 2.6_
+  - [x] 3.5 Unambiguous events for each substep (priority 5)
+    - Emit distinct, correlated events for: bucket materialization; `ffprobe` per clip (start/done); per-clip normalization (start/done); concat (start/done); silence detection (start/done, segment count, duration); `marcar_esperando_edicion_silencios` (pause reached → `awaiting_silences`); reconciliation/state mapping (`reconcileEditJob`/`mapEditorEstado`, including `EDITOR_STATE_LOST`); and timeline mount in the UI.
+    - Files: `editor/app/engine/normalize.py` (`unir_clips`), `editor/app/engine/silence.py` (`detectar_silencios`), `editor/app/engine/pipeline.py`, `editor/app/jobs/runner.py`, plus `src/lib/edit/jobReconciler.ts`/`statusMap.ts` and `EditPanel.tsx`.
+    - Add unit tests asserting each substep emits its distinguishable correlated event.
+    - _Design refs: "Fix Implementation / Change 4", "Diagnostic Decision Matrix", "Correctness Properties / Property 1"._
+    - _Expected_Behavior: last confirmed event localizes the stall into exactly one of A/B/C/D (Property 1)_
+    - _Requirements: 2.2, 2.3_
 
-  - [x] 6.3 Add the backward-compatible `invocar_runner` adapter and widen the `Runner` contract
-    - In `app/engine/proc.py`, widen the `Runner` type alias to `Callable[..., ResultadoComando]` (document the optional `timeout: Optional[float] = None` keyword) and export `invocar_runner`.
-    - Implement `invocar_runner(runner, args, timeout)`: detect (via `inspect.signature`, cached, with a `TypeError` fallback) whether the runner accepts a `timeout` parameter; if so call `runner(args, timeout=timeout)`, otherwise call `runner(args)` exactly as today. This is the preservation-critical seam for single-arg doubles (Property 5).
-    - _Design refs: "Fix Implementation / Change 2", "Correctness Properties / Property 5"._
-    - _Preservation: single-arg runner doubles invoked identically to runner(args); timeout enforced only for timeout-aware runners_
-    - _Requirements: 3.4, 3.5_
+  - [x] 3.6 Preserve and enrich the terminal timeout failure (priority 6)
+    - Keep the existing `ComandoTimeoutError` → step-specific error → `FALLIDO {paso, motivo}` chain unchanged in `editor/app/engine/pipeline.py` (`_fallo`) and `editor/app/jobs/runner.py`; **enrich** the motive with the substep and correlation tuple when missing so a terminal failure is immediately localizable. Do **not** introduce or assume new timeout values.
+    - Add a test asserting an injected `ComandoTimeoutError` during UNIR yields `FALLIDO {paso:"UNIR", subpaso, motivo}` with correlation and no partial `unido.mp4` referenced as success.
+    - _Design refs: "Fix Implementation / Change 5", "Correctness Properties / Property 5"._
+    - _Preservation: existing Popen/timeout guarantees unchanged; no new timeout values (Property 5)_
+    - _Requirements: 2.7, 3.5_
 
-  - [x] 6.4 Route every engine call site through `invocar_runner` with a per-step timeout
-    - Replace `resultado = runner(comando)` with `resultado = invocar_runner(runner, comando, timeout=<paso timeout>)` in: `ffprobe.py::inspeccionar_clip`; `normalize.py::_probar_duracion`, per-clip normalization, transitions, and concat; `silence.py` (`obtener_duracion`, `detectar_silencios`/silencedetect, recorte, `cortar_silencios`/auto-editor); and `transcribe.py`, `music.py`, `subtitles.py`, `risas.py`, `remotion.py`.
-    - Use `VSE_PROBE_TIMEOUT_S` for `ffprobe` inspection/duration and `VSE_SUBPROCESS_TIMEOUT_S` (or the longer transcription/render default) elsewhere.
-    - Leave the surrounding `try/except OSError` blocks unchanged so `ComandoTimeoutError` (an `OSError`) is wrapped into each step-specific error exactly as before.
-    - _Design refs: "Fix Implementation / Change 2 (call-site list)"._
-    - _Preservation: surrounding error handling unchanged; results identical for tools within deadline_
-    - _Requirements: 2.2, 2.4, 3.1, 3.2_
+  - [x] 3.7 Post-deploy control-plane verification (priority 7)
+    - Add a post-deploy verification step in `cloudbuild.yaml` (and/or a runbook in `DEPLOY.md`) that runs `gcloud run services describe` to confirm the live revision has CPU **always allocated** (`--no-cpu-throttling`), the expected image tag, and `min=max=1`; the step **fails the deploy** if any does not match. Never inferred from inside the container.
+    - _Design refs: "Fix Implementation / Change 6", "Correctness Properties / Property 4"._
+    - _Expected_Behavior: deploy fails unless control-plane matches expected settings (Property 4)_
+    - _Requirements: 2.6_
 
-  - [x] 6.5 Confirm timeout/failure propagation to the job `FALLIDO` state with `{paso, motivo}`
-    - Verify (no new production code expected beyond `ComandoTimeoutError` deriving from `OSError`) that a timeout in a UNIR-step tool becomes `NormalizacionError`/`ClipInspeccionError` → `pipeline._fallo` → `EventoProgreso(FALLIDO, error={"paso": ..., "motivo": ...})` → `JobRunner.ejecutar_job` `marcar_fallido`.
-    - Add an integration test (`backend/tests/test_unir_timeout_integracion.py`) driving `ejecutar_pipeline` with an injected runner/inspector that raises `ComandoTimeoutError` during UNIR, asserting the reporter receives `estado=FALLIDO`, `paso_actual=UNIR`, `error={"paso": "UNIR", "motivo": ...}`, that `ResultadoPipeline.exito is False`, and that no partial `unido.mp4` is referenced (Req 2.6).
-    - _Design refs: "Fix Implementation / Change 5", "Integration Tests"._
-    - _Requirements: 2.3, 2.6_
+  - [x] 3.8 Integration tests: full 25% → awaiting_silences → timeline transition + preservation (priority 8)
+    - **Fix checking (Property 1)**: with injected doubles, drive the full transition end-to-end and assert the correlated event trail lets an observer classify the job and that `awaiting_silences` mounts `SilenceTimeline`. Python in `editor/tests/`, TS in `src/lib/edit/__tests__/` and `src/app/api/edit/__tests__/`.
+    - **Preservation (Property 2)**: integration-level assertions for clip order/selection, input immutability, local mode, and +7s-flow separation remain unchanged after instrumentation.
+    - _Design refs: "Integration Tests", "Fix Checking", "Preservation Checking"._
+    - _Requirements: 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4, 3.7_
 
-  - [x] 6.6 Add UNIR sub-step observability (logging + intermediate progress)
-    - In `app/engine/normalize.py::unir_clips`, add `logger.info` markers before/after each sub-step (clip inspection, each per-clip normalization, concat/transitions) so a stall is visible in logs rather than silent (logging does not affect outputs — preservation-safe).
-    - In `app/engine/pipeline.py`, optionally emit intermediate progress within the UNIR range (0–25 %) during multi-clip normalization, keeping the value monotonic non-decreasing per the JobManager contract.
-    - _Design refs: "Fix Implementation / Change 4"._
-    - _Requirements: 2.5_
-
-  - [x] 6.7 Verify the bug-condition exploration test now passes
-    - **Property 1: Expected Behavior** - Bounded, Non-Hanging Termination of External-Tool Steps
-    - **IMPORTANT**: Re-run the SAME test from Task 1 — do NOT write a new test. It encodes the expected bounded-termination behavior.
-    - Run `backend/tests/test_proc_timeout_pbt.py`. **EXPECTED OUTCOME**: PASSES — cases 1a–1c terminate promptly, `ComandoTimeoutError` is raised with an actionable message, and no orphaned grandchild survives.
+  - [x] 3.9 Verify the bug-condition diagnostic now resolves
+    - **Property 1: Expected Behavior** - Differentiated, Correlated Diagnosability at the 25% Boundary
+    - **IMPORTANT**: Re-run the SAME tests from Task 1 — do NOT write new tests. **EXPECTED OUTCOME**: PASS — events are now differentiated and correlated, the job is classifiable into A/B/C/D, the pause propagates to the timeline (or a terminal actionable failure is shown), and state changes independently of the 25% percentage.
     - _Design refs: "Fix Checking"._
-    - _Requirements: 2.1, 2.2, 2.3, 2.6_
+    - _Requirements: 2.1, 2.2, 2.3, 2.5_
 
-  - [x] 6.8 Verify the no-deadlock draining property still holds
-    - **Property 3: Preservation** - No-Deadlock Concurrent Output Draining
-    - **IMPORTANT**: Re-run the SAME test from Task 2 — do NOT write a new test.
-    - **EXPECTED OUTCOME**: PASSES — the `Popen` executor drains large `stdout`/`stderr` concurrently without deadlock and captures full output.
-    - _Requirements: 2.4_
+  - [x] 3.10 Verify the preservation baselines still pass
+    - **Property 2: Preservation** - Identical Pipeline Behavior for Non-Buggy Inputs
+    - **IMPORTANT**: Re-run the SAME tests from Task 2 — do NOT write new tests. **EXPECTED OUTCOME**: PASS (no regressions) — order/selection, immutability, local mode, +7s isolation, pause semantics, and monotonic percentage unchanged.
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.6, 3.7, 3.8_
 
-  - [x] 6.9 Verify the non-buggy preservation properties still hold
-    - **Property 2: Preservation** - Identical Behavior for Non-Buggy Inputs
-    - **IMPORTANT**: Re-run the SAME tests from Task 3 — do NOT write new tests.
-    - **EXPECTED OUTCOME**: PASSES — success equivalence and non-zero-exit equivalence unchanged after the fix.
-    - _Requirements: 3.1, 3.2, 3.3_
+  - [x] 3.11 Verify identity coherence, preflight, and terminal timeout properties
+    - **Property 3: Deployment Identity Coherence** — header identifier equals `/api/version` for the same build (re-run Task 3.1 tests).
+    - **Property 4: Preflight & Deploy-Time Environment Verification** — preflight logs versions/blocks startup (re-run Task 3.3 tests) and the post-deploy check fails on mismatch (Task 3.7).
+    - **Property 5: Terminal Timeout Failure Preserved and Enriched** — timeout → `FALLIDO {paso, subpaso, motivo}` with correlation, no new timeout values (re-run Task 3.6 test).
+    - **EXPECTED OUTCOME**: PASS.
+    - _Requirements: 2.6, 2.7, 2.8, 2.9, 3.5_
 
-  - [x] 6.10 Verify order preservation and backward-compatible injection still hold
-    - **Property 4: Preservation** - Order Preservation
-    - **Property 5: Preservation** - Backward-Compatible Runner Injection
-    - **IMPORTANT**: Re-run the SAME tests from Tasks 4 and 5 — do NOT write new tests. Confirm single-arg doubles route through `invocar_runner` without `TypeError` and clip order is preserved.
-    - **EXPECTED OUTCOME**: PASSES (no regressions).
-    - _Requirements: 3.4, 3.5, 3.6_
-
-- [x] 7. Checkpoint - full regression suite (pytest + hypothesis)
-  - Run the complete `backend/` test suite (`pytest` with the existing `hypothesis` configuration) and confirm all pre-existing guarantees still pass — pure normalization math, order preservation, homogenization, command construction, injectable-runner behavior, silence/subtitles/remotion/render PBTs — alongside the new Property 1–5 tests.
-  - Confirm standalone/local behavior is unaffected (POSIX-only real-subprocess tests are skipped where appropriate).
-  - Ensure all tests pass; ask the user if any question arises.
-  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6_
+- [x] 4. Checkpoint - run the full suites and confirm no regressions
+  - Run the complete Python suite (`editor/` `pytest` + `hypothesis`) and the TypeScript suites (`vitest` + `fast-check`); confirm the Task 1 diagnostics now PASS, the Task 2 baselines still PASS, and all pre-existing guarantees hold. Confirm standalone/local behavior is unaffected (POSIX-only tests skipped where appropriate). Ask the user if any question arises.
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
 
 ---
 
@@ -170,47 +159,45 @@
 
 ```mermaid
 graph TD
-    T1["1. Property 1 — Bug Condition exploration<br/>(unbounded wait / stdin / grandchild)<br/>FAILS on unfixed"]
-    T2["2. Property 3 — No-deadlock draining<br/>characterization — PASSES on unfixed"]
-    T3["3. Property 2 — Preservation<br/>success & non-zero exit — PASSES on unfixed"]
-    T4["4. Property 4 — Order preservation<br/>PASSES on unfixed"]
-    T5["5. Property 5 — Backward-compat runner<br/>injection — PASSES on unfixed"]
+    T1["1. Property 1 — Bug-condition diagnostic (reproducible)<br/>opaque 25% + pause-propagation + EDITOR_STATE_LOST<br/>EXPOSES gap on unfixed"]
+    T2["2. Property 2 — Preservation baselines<br/>order/immutability/local/+7s/monotonic — PASS on unfixed"]
 
-    subgraph FIX["6. Fix implementation"]
-        T61["6.1 config timeout constants"]
-        T62["6.2 Popen executor + ComandoTimeoutError"]
-        T63["6.3 invocar_runner adapter + widen Runner"]
-        T64["6.4 route call sites (per-step timeout)"]
-        T65["6.5 FALLIDO {paso,motivo} propagation + integ test"]
-        T66["6.6 UNIR sub-step logging/progress"]
-        T67["6.7 verify Property 1 PASSES"]
-        T68["6.8 verify Property 3 PASSES"]
-        T69["6.9 verify Property 2 PASSES"]
-        T610["6.10 verify Properties 4 & 5 PASS"]
+    subgraph FIX["3. Instrumentation (additive, observation-only)"]
+        T31["3.1 Deployment identity 'v0.9123 banana xD' (Property 3)"]
+        T32["3.2 Visual live log for the user — paso/subpaso + {paso,subpaso,motivo}"]
+        T33["3.3 Preflight ffmpeg/ffprobe versions + block startup (Property 4)"]
+        T34["3.4 End-to-end correlated events (Property 1)"]
+        T35["3.5 Unambiguous per-substep events (Property 1)"]
+        T36["3.6 Preserve+enrich terminal timeout (Property 5)"]
+        T37["3.7 Post-deploy control-plane check (Property 4)"]
+        T38["3.8 Integration: full 25%→awaiting_silences→timeline + preservation"]
+        T39["3.9 Verify Property 1 PASSES"]
+        T310["3.10 Verify Property 2 PASSES"]
+        T311["3.11 Verify Properties 3/4/5 PASS"]
     end
 
-    T7["7. Checkpoint — full pytest+hypothesis suite"]
+    T4["4. Checkpoint — full pytest+hypothesis / vitest+fast-check"]
 
-    T1 --> T62
-    T2 --> T62
-    T3 --> T64
-    T4 --> T64
-    T5 --> T63
+    T1 --> T34
+    T1 --> T35
+    T1 --> T32
+    T2 --> T38
 
-    T61 --> T62
-    T62 --> T63
-    T63 --> T64
-    T64 --> T65
-    T64 --> T66
-
-    T65 --> T67
-    T66 --> T67
-    T67 --> T68 --> T69 --> T610 --> T7
+    T34 --> T35
+    T34 --> T32
+    T33 --> T34
+    T31 --> T39
+    T32 --> T39
+    T35 --> T39
+    T36 --> T39
+    T38 --> T39
+    T39 --> T310 --> T311 --> T4
+    T33 --> T311
+    T37 --> T311
 ```
 
 **Dependency notes**
-- Tasks 1–5 (all tests) come **before** any production change and can be written in parallel; Task 1 must FAIL and Tasks 2–5 must PASS on the UNFIXED code.
-- `6.1` (config) feeds `6.2`; `6.2` (executor) is the structural root-cause fix and depends on the exploration/characterization insights from Tasks 1–2.
-- `6.3` (adapter) depends on `6.2` and is validated by the Property 5 baseline (Task 5); `6.4` (call sites) depends on `6.3` and is validated by the Property 2/4 baselines (Tasks 3–4).
-- `6.5` (failure propagation) and `6.6` (observability) depend on `6.4`.
-- `6.7`–`6.10` re-run the SAME Task 1–5 tests to confirm the fix and no regressions, gating the Task 7 checkpoint.
+- Tasks **1–2 come before any instrumentation** and can be written in parallel; Task 1 must EXPOSE the diagnosability gap on unfixed code, Task 2 must PASS on unfixed code.
+- Priority order inside Task 3 reflects the user emphasis: **3.1 deployment identity** and **3.2 the user-facing visual log** first (so "which build" and "what is failing at 25%" become visible), then preflight (3.3), correlated/per-substep events (3.4–3.5), terminal-failure enrichment (3.6), and the post-deploy check (3.7).
+- `3.4` (correlation tuple) feeds `3.5` (per-substep events) and `3.2` (the log surfaces those correlated substeps); `3.3` establishes the environment truth the events reference.
+- `3.8` writes the fix-checking + preservation integration tests; `3.9`–`3.11` re-run the SAME Task 1/2/3 tests to confirm the fix and the absence of regressions, gating the Task 4 checkpoint.

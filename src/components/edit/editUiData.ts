@@ -10,12 +10,35 @@ import type {
   EditorTextoExtra,
 } from "@/lib/edit/editorClient";
 
+/**
+ * Correlation identifiers that tie a progress observation to a concrete build,
+ * revision, and job pair. The backend does not emit these yet (that arrives in
+ * later tasks); every field is optional so parsing degrades cleanly to the
+ * current behavior when they are absent.
+ */
+export interface ProgressCorrelation {
+  version?: string;
+  revision?: string;
+  editJobId?: string;
+  editorJobId?: string;
+}
+
 export interface EditProgressView {
   porcentaje: number;
   pasoActual: string;
+  /**
+   * Current substep within `pasoActual`. Optional — omitted (undefined) when the
+   * backend does not report it, so multiple substeps at the same percentage
+   * (e.g. several distinct events at 25%) can still be told apart when present.
+   */
+  subpaso?: string;
   mensaje: string;
   status: string;
-  error: { paso: string; motivo: string } | null;
+  /** Raw editor estado when reported (independent of the numeric percentage). */
+  estado?: string;
+  /** Correlation identifiers when the backend provides them. */
+  correlation?: ProgressCorrelation;
+  error: { paso: string; subpaso?: string; motivo: string } | null;
 }
 
 export interface EditOutputView {
@@ -29,20 +52,73 @@ export function parseProgressResponse(data: unknown): EditProgressView {
   const nested = value.progress && typeof value.progress === "object"
     ? value.progress as Record<string, unknown>
     : {};
-  return {
+  const view: EditProgressView = {
     porcentaje: typeof nested.porcentaje === "number" ? nested.porcentaje : 0,
     pasoActual: typeof nested.pasoActual === "string" ? nested.pasoActual : "",
     mensaje: typeof nested.mensaje === "string" ? nested.mensaje : "",
     status: typeof value.status === "string" ? value.status : "running",
     error: parseProgressError(nested.error),
   };
+
+  // Tolerant, additive fields. Each is attached only when actually present so
+  // the returned view is byte-for-byte identical to the legacy shape otherwise
+  // (undefined keys are ignored by structural equality).
+  const subpaso = firstString(nested.subpaso, nested.subPaso);
+  if (subpaso !== undefined) view.subpaso = subpaso;
+
+  const estado = firstString(nested.estado, value.estado);
+  if (estado !== undefined) view.estado = estado;
+
+  const correlation = parseCorrelation(value, nested);
+  if (correlation) view.correlation = correlation;
+
+  return view;
 }
 
-function parseProgressError(raw: unknown): { paso: string; motivo: string } | null {
+/** Returns the first argument that is a non-empty string, else undefined. */
+function firstString(...candidates: unknown[]): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Extracts correlation identifiers from either the top-level response or the
+ * nested progress object. Returns undefined when none are present so callers
+ * degrade cleanly to the current (no-correlation) behavior.
+ */
+function parseCorrelation(
+  value: Record<string, unknown>,
+  nested: Record<string, unknown>,
+): ProgressCorrelation | undefined {
+  const version = firstString(value.version, nested.version);
+  const revision = firstString(value.revision, nested.revision, value.kRevision, nested.kRevision);
+  const editJobId = firstString(value.editJobId, nested.editJobId);
+  const editorJobId = firstString(value.editorJobId, nested.editorJobId);
+
+  const correlation: ProgressCorrelation = {};
+  if (version !== undefined) correlation.version = version;
+  if (revision !== undefined) correlation.revision = revision;
+  if (editJobId !== undefined) correlation.editJobId = editJobId;
+  if (editorJobId !== undefined) correlation.editorJobId = editorJobId;
+
+  return Object.keys(correlation).length > 0 ? correlation : undefined;
+}
+
+function parseProgressError(
+  raw: unknown,
+): { paso: string; subpaso?: string; motivo: string } | null {
   if (!raw || typeof raw !== "object") return null;
   const error = raw as Record<string, unknown>;
   if (typeof error.paso !== "string" || typeof error.motivo !== "string") return null;
-  return { paso: error.paso, motivo: error.motivo };
+  const result: { paso: string; subpaso?: string; motivo: string } = {
+    paso: error.paso,
+    motivo: error.motivo,
+  };
+  const subpaso = firstString(error.subpaso, error.subPaso);
+  if (subpaso !== undefined) result.subpaso = subpaso;
+  return result;
 }
 
 export function parseOutputListResponse(data: unknown): EditOutputView[] {
@@ -265,15 +341,28 @@ export interface ProgressLogEntry {
   time: string;
   porcentaje: number;
   pasoActual: string;
+  /** Optional substep — a change here appends a new line even at the same %. */
+  subpaso?: string;
   mensaje: string;
   status: string;
+  /** Optional raw editor estado (independent of the percentage). */
+  estado?: string;
+  /** Optional correlation identifiers surfaced when the backend provides them. */
+  correlation?: ProgressCorrelation;
 }
 
-/** Two entries describe the same progress state (ignoring the timestamp). */
+/**
+ * Two entries describe the same progress state (ignoring the timestamp). The
+ * comparison key is the *meaningful* tuple: a change in substep or estado — even
+ * while the percentage stays constant (e.g. 25%) — counts as a new state and is
+ * NOT deduped, so distinct substeps produce distinct visible log lines.
+ */
 function sameProgressState(a: ProgressLogEntry, b: ProgressLogEntry): boolean {
   return (
     a.status === b.status &&
     a.pasoActual === b.pasoActual &&
+    (a.subpaso ?? "") === (b.subpaso ?? "") &&
+    (a.estado ?? "") === (b.estado ?? "") &&
     a.porcentaje === b.porcentaje &&
     a.mensaje === b.mensaje
   );
@@ -300,14 +389,61 @@ export function appendProgressLog(
 /**
  * Formats a log entry as a single monospace line, e.g.
  * `[15:04:05] 25% UNIR — Uniendo y normalizando clips a 9:16 · running`.
+ *
+ * When present, the substep is shown next to the step (`UNIR › Detectando
+ * silencios`) and correlation identifiers are appended as a compact suffix, so
+ * the user sees exactly which substep is active even while the percentage stays
+ * at 25%. When those optional fields are absent the line is identical to the
+ * legacy format.
  */
 export function formatProgressLogLine(entry: ProgressLogEntry): string {
   const paso = entry.pasoActual.trim();
+  const subpaso = (entry.subpaso ?? "").trim();
   const mensaje = entry.mensaje.trim();
   const head = `[${entry.time}] ${entry.porcentaje}%`;
   const step = paso ? ` ${paso}` : "";
+  const sub = subpaso ? ` › ${subpaso}` : "";
   const msg = mensaje ? ` — ${mensaje}` : "";
-  return `${head}${step}${msg} · ${entry.status}`;
+  const corr = formatCorrelationSuffix(entry.correlation);
+  return `${head}${step}${sub}${msg} · ${entry.status}${corr}`;
+}
+
+/**
+ * Compact, human-readable correlation suffix (e.g. ` · rev=abc123 · editor=job-9`).
+ * Returns "" when there is nothing to show, keeping the legacy line unchanged.
+ */
+export function formatCorrelationSuffix(correlation?: ProgressCorrelation): string {
+  if (!correlation) return "";
+  const parts: string[] = [];
+  if (correlation.version) parts.push(`v=${correlation.version}`);
+  if (correlation.revision) parts.push(`rev=${correlation.revision}`);
+  if (correlation.editorJobId) parts.push(`editor=${correlation.editorJobId}`);
+  if (correlation.editJobId) parts.push(`job=${correlation.editJobId}`);
+  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+}
+
+/**
+ * A short, actionable recommendation for a terminal failure, keyed on the step
+ * that failed. This lets the UI tell the user what to do next instead of only
+ * showing the raw motive — so a stall that ends in failure is immediately
+ * actionable.
+ */
+export function recommendedActionForError(
+  error: { paso: string; subpaso?: string; motivo: string } | null,
+): string {
+  if (!error) return "";
+  switch (error.paso) {
+    case "EDITOR_STATE_LOST":
+      return "El trabajo del editor se perdió (posible reinicio del servicio). Vuelve a enviar la edición.";
+    case "STATUS_MAPPING":
+      return "El editor devolvió un estado no reconocido. Verifica que el editor y el generador estén en la misma versión.";
+    case "UNIR":
+      return "Falló la unión de clips. Revisa las versiones de ffmpeg/ffprobe y los clips de origen, luego reintenta.";
+    case "CORTAR_SILENCIOS":
+      return "Falló la detección de silencios. Revisa el video unido y reintenta la edición.";
+    default:
+      return "Revisa el motivo indicado y reintenta la edición; si persiste, revisa los logs correlacionados.";
+  }
 }
 
 
@@ -338,5 +474,37 @@ export function controlForStatus(status: string): EditControl {
       return "error";
     default:
       return "progress";
+  }
+}
+
+/**
+ * Distinguishable UI mount event kind for a status (spec `unir-step-hang`,
+ * Task 3.5, Change 4 #8). When the silence control mounts, the timeline is on
+ * screen — surfaced as `timeline_mount` so an observer can confirm the pause
+ * actually propagated to the UI (category C is resolved when this fires). Pure
+ * and total: every status yields exactly one mount-event kind.
+ */
+export type EditMountEvent =
+  | "timeline_mount"
+  | "subtitle_review_mount"
+  | "final_render_mount"
+  | "download_mount"
+  | "error_mount"
+  | "progress_mount";
+
+export function controlEventForStatus(status: string): EditMountEvent {
+  switch (controlForStatus(status)) {
+    case "silence":
+      return "timeline_mount";
+    case "subtitle":
+      return "subtitle_review_mount";
+    case "final":
+      return "final_render_mount";
+    case "download":
+      return "download_mount";
+    case "error":
+      return "error_mount";
+    default:
+      return "progress_mount";
   }
 }

@@ -1,274 +1,591 @@
-# UNIR Step Hang Bugfix Design
+# UNIR / CORTAR_SILENCIOS Stall — Diagnostic-First Bugfix Design (Iteration 2)
 
 ## Overview
 
-A valid edit job (2 clips of ~8 s each) reaches the **UNIR** step (Paso 1) and freezes at 25 % forever in the combined Cloud Run container (`EDIT_MODE=cloud`, `VSE_STORAGE_BACKEND=volume`). The job neither completes nor fails; the only log activity is the progress-polling loop. This design fixes the **true root-cause mechanism of the indefinite block** in the subprocess executor and adds a bounded timeout **only as a secondary, defense-in-depth safety net**.
+An edit job launched from the generator in Cloud Run (branch
+`feat/gcloud-migration`), over previously generated clips whose source files live
+in the bucket and **with silence editing enabled**, still stalls: the last
+observed progress is **25%**, the UI shows **«Unir»**, and the silence-editing
+timeline never mounts. This is the **second iteration** of the fix.
 
-The single funnel for every external tool invocation (`ffmpeg`, `ffprobe`, `auto-editor`, Remotion/node) is `app/engine/proc.py::ejecutar_comando`, wired through an injectable `Runner`. The fix reworks that executor so that a blocking child can **never** cause an unbounded, silent wait, regardless of tool verbosity or environment, while preserving every existing behavior, injected test double, and property-based guarantee.
+The **first iteration treated an unbounded subprocess wait (`timeout=None`) and
+direct-child-only termination as the confirmed root cause and shipped a
+`Popen`-based executor with `stdin=DEVNULL`, concurrent draining, a process-group
+kill, bounded per-step timeouts, and a `ComandoTimeoutError` that propagates to
+`FALLIDO {paso, motivo}`.** Those mechanisms are now **implemented and present**
+in `app/engine/proc.py` and `app/config.py`. **Therefore the timeout / `Popen`
+hypothesis is no longer a confirmed cause** — the failure persists despite the
+fix. The percentage 25 alone cannot tell us whether `UNIR` finished, whether
+silence detection started, or which step / substep / state is active.
 
-**Design strategy (in priority order):**
+This design is **diagnostic-first**. Its purpose is not to assert a new root
+cause but to make the transitions at the 25% boundary **observable** and to
+gather **correlated evidence** (version, revision, `editJobId`, `editorJobId`,
+step, substep, state, event type) end-to-end across Next.js and FastAPI so any
+affected job can be **classified** into one of four categories — without
+attributing causality that the evidence does not yet support. It also hardens
+**deployment identity** so we can prove *which build/revision* actually served a
+request, and adds a **preflight** that fails fast (with versions) when the
+runtime environment is not what we expect.
 
-1. **Structural (root cause):** make the executor unable to block indefinitely for any healthy tool run — drain `stdout`/`stderr` concurrently (no pipe-buffer coupling), redirect `stdin` from the null device (no tool blocks waiting for input), and run the child in its own process group so it — and every grandchild it spawns — can be terminated as a unit.
-2. **Defense-in-depth (safety net):** enforce a uniform, bounded timeout through the `Runner` contract. On expiry, kill the whole process group, drain whatever output remains, and raise an actionable error. The timeout only *cuts* a hang that should never happen for valid small inputs; the structural fixes are what *prevent* the hang.
-3. **Observability & failure propagation:** surface UNIR sub-steps in logs, and route timeouts/failures to the job's `FALLIDO` state with `{paso, motivo}` for the generator UI.
+### Strongest current hypothesis (explicitly a hypothesis, not a confirmation)
 
-### Important root-cause honesty note
+Because bounded timeouts already exist (a genuinely blocked `ffmpeg`/`ffprobe`
+would now trip `ComandoTimeoutError` → `FALLIDO`, not hang forever) and `UNIR`
+already emits per-substep logs, the **strongest hypothesis** is that a UI stuck
+at 25% is most likely **(c)** a real pause (`ESPERANDO_EDICION_SILENCIOS`) whose
+transition/propagation is **not visible** to the browser (mapping, reconciliation
+timing, monitor lifecycle, or a lost editor job surfaced as `EDITOR_STATE_LOST`),
+**or (d)** the browser is running an **old revision/config** (a deploy that
+didn't actually ship). This is a ranking to guide diagnosis, **not** a confirmed
+diagnosis; the instrumentation must be able to **confirm or refute** it.
 
-The current `ejecutar_comando` calls `subprocess.run(..., stdout=PIPE, stderr=PIPE, text=True, timeout=None)`. `subprocess.run` internally uses `Popen.communicate()`, which **already drains both pipes concurrently** (selector-based on POSIX, threads on Windows). Therefore a *classic pipe-buffer deadlock is not possible in the code as it exists today*. The confirmed defect that produces the observed "stuck at 25 %, zero output" symptom is the **unbounded wait** (`timeout=None`) on a child that blocks (e.g. a stalled GCS-FUSE-backed read, or a tool blocked on inherited `stdin`), compounded by the fact that `subprocess.run`'s own `timeout` — even if we simply set it — kills **only the direct child**, leaving grandchild processes (e.g. `ffmpeg` spawned by `auto-editor`, or helper processes) able to hold the pipes open so `communicate()` can still block.
+### Design strategy (in priority order)
 
-The no-deadlock concurrent-draining guarantee is therefore treated as a **required invariant** the fix must **preserve** — because the fix moves to a `Popen`-based executor (required to kill the *process group* on timeout), and a naive `Popen` with sequential `read()` calls *would* introduce exactly the deadlock the requirements warn against. The design mandates concurrent draining precisely so the migration to `Popen` cannot regress into a real pipe-buffer deadlock.
+1. **Deployment identity** — prove which build/revision is live (manual
+   identifier next to `AUGC Pipeline`, coherent with `getAppVersion()` and
+   `/api/version`; `K_REVISION` in server-side diagnostics).
+2. **Preflight & environment truth** — verify `ffmpeg`/`ffprobe` availability
+   **and versions** at editor startup with structured logs; verify the
+   control-plane "CPU always allocated" / `--no-cpu-throttling` setting with a
+   **post-deploy check** (not by pretending the container can infer it).
+3. **Correlated, unambiguous events** — differentiated events for every substep
+   around the 25% boundary, carrying full correlation, so the last confirmed
+   event localizes the stall. Percentage stays monotonic but is **never** used as
+   the state.
+4. **Classification** — a diagnostic tree/matrix that maps the last confirmed
+   event to one of four categories.
+5. **Failure hardening** — keep the existing terminal timeout failure; enrich its
+   message with substep/correlation when missing.
+
+All of this is **additive and observation-only**: it must not change the
+pipeline's outputs, ordering, immutability guarantees, local-mode behavior, or
+the isolation of the separate "+7 seconds" clip-extension flow.
 
 ## Glossary
 
-- **Bug_Condition (C)**: A pipeline step invokes an external tool through a `Runner` whose subprocess execution does not enforce a bounded execution deadline and/or can block on I/O — so a slow/blocking tool causes an unbounded, silent wait. Formally, `X.invokesExternalTool AND NOT X.enforcesBoundedTimeout`.
-- **Property (P)**: For any input satisfying C, the fixed executor terminates within a bounded time — succeeding, or failing with an actionable `{paso, motivo}` — and never hangs.
-- **Preservation**: For any input **not** satisfying C (tools that return within their deadline, standalone/local runs, injected single-arg runner doubles), the fixed code produces the same observable result as the original.
-- **F**: The original executor/pipeline (`subprocess.run(..., timeout=None)`, `Runner` with no timeout in its contract).
-- **F'**: The fixed executor/pipeline (`Popen`-based, `stdin` from null device, concurrent draining, bounded timeout, process-group kill).
-- **`ejecutar_comando`**: The default `Runner` in `app/engine/proc.py`; the single subprocess funnel for all external tools.
-- **`Runner`**: `Callable[..., ResultadoComando]`, the injectable command-executor contract. Call sites currently invoke it as `runner(comando)`.
-- **Runner double**: A test-provided `Runner` (e.g. `__call__(self, args)` or `_cmd_ok(args, timeout=None)`) used to simulate tool success/failure without the real binaries.
-- **Process group / session**: On POSIX, a child started with `start_new_session=True` becomes a session/process-group leader; `os.killpg(os.getpgid(pid), sig)` terminates the child **and all its descendants** as a unit.
-- **Pipe-buffer deadlock**: When a child writes more than the ~64 KB OS pipe buffer to a stream the parent is not concurrently reading, the child blocks on `write()` and the parent blocks on `read()` → permanent hang. Avoided by concurrent draining of both streams.
-- **UNIR (Paso 1)**: Normalize each clip to 9:16 and concatenate (`app/engine/normalize.py::unir_clips`), preceded by per-clip `ffprobe` inspection.
+- **Bug_Condition (C)**: An edit-job observation in Cloud Run where silences are
+  enabled, the last confirmed progress is 25%, the silence timeline is not
+  mounted, and the system **cannot** yet classify the job (no correlated evidence
+  of version/revision/step/substep/state). Formally `C(X)` below.
+- **Property (P)**: For any `X` satisfying C, the fixed system emits
+  differentiated events with full correlation so `X` is **classifiable** into one
+  of four categories, the pause either **propagates to the timeline** or ends in
+  an **actionable terminal failure**, and neither depends on the raw percentage.
+- **Preservation**: For any input **not** satisfying C — successful runs, silences
+  disabled, local mode, the +7s flow, clip ordering/selection, input
+  immutability, the already-shipped timeout behavior — the fixed code produces
+  the same observable result as today.
+- **F**: The current code on `feat/gcloud-migration` (timeouts + `Popen` executor
+  already present; opaque at 25%, un-classifiable).
+- **F'**: The instrumented code (deployment identity, preflight with versions,
+  correlated differentiated events, enriched terminal failure, classification).
+- **25% boundary**: In `app/engine/pipeline.py`, `RANGOS_PASOS` assigns
+  `UNIR = (0, 25)` and `CORTAR_SILENCIOS = (25, 40)`. After `fn_unir`/`unir_clips`
+  the pipeline reports UNIR's upper edge (25%, «Clips unidos»); with silences
+  enabled it then reports CORTAR_SILENCIOS's lower edge (still **25%**) for
+  «Detectando silencios» and again for «Esperando edición manual de silencios».
+  **Multiple distinct substeps therefore share the value 25.**
+- **UNIR (`unir_clips`)**: `app/engine/normalize.py`; per-clip `ffprobe`
+  inspection → per-clip normalization to 9:16 → concat (`concat.txt` + demuxer or
+  `xfade`/`acrossfade`). Already logs `UNIR: …` markers per substep.
+- **CORTAR_SILENCIOS — FASE A (detection)**: `detectar_silencios`
+  (`app/engine/silence.py`) runs `silencedetect` (or VAD) on the **joined** video
+  **without cutting**, then the pipeline returns
+  `ResultadoPipeline(pendiente_edicion_silencios=True, unido, silencios,
+  duracion_unido_s)`.
+- **`marcar_esperando_edicion_silencios`**: `JobRunner.ejecutar_job` (via
+  `JobManager`) persists state `ESPERANDO_EDICION_SILENCIOS` and does **not** clean
+  the workdir (intermediates are needed to resume).
+- **`statusMap.ts`**: maps editor estado `esperando_edicion_silencios` →
+  `awaiting_silences`; an unknown estado → `failed` with
+  `{paso:"STATUS_MAPPING", motivo}`.
+- **`jobReconciler.ts`**: `reconcileEditJob` polls the editor `/progreso`,
+  checks durable output first, maps estado via `statusMap`, and on a 404
+  (`EditorPermanentError`) for a paused job sets `failed`
+  `{paso:"EDITOR_STATE_LOST", motivo}`. `launchEditJobMonitor` runs a detached
+  in-process poll loop with backoff.
+- **`controlForStatus` / `SilenceTimeline`**: `EditPanel.tsx` mounts
+  `SilenceTimeline` when `controlForStatus(status) === "silence"` (i.e.
+  `awaiting_silences`), while polling `/api/edit/[id]/progress` every 2 s.
+- **Deployment identity**: `getAppVersion()` (`src/lib/version.ts`) reads
+  `NEXT_PUBLIC_APP_VERSION` / `NEXT_PUBLIC_BUILD_TIME` (baked at build time via the
+  Dockerfile `APP_VERSION` build-arg fed by `cloudbuild.yaml` `_TAG`);
+  `VersionBanner` (`src/components/VersionBanner.tsx`) is the fixed bottom-right
+  chip; `GET /api/version` (`src/app/api/version/route.ts`) returns the same
+  values; the title `AUGC Pipeline` lives in `src/app/layout.tsx`.
+- **Manual identifier**: the exact human string `v0.9123 banana xD`, shown next
+  to `AUGC Pipeline`, baked once via env, separate (space-delimited) from the
+  Docker image tag.
+- **K_REVISION**: the Cloud Run revision name injected by the platform into the
+  container environment; used only in **server-side** diagnostics, never exposing
+  secrets.
+- **CPU always allocated**: a Cloud Run **control-plane** property
+  (`--no-cpu-throttling`), **not** something the container can reliably infer;
+  verified by a **post-deploy** check.
+- **Correlation tuple**: `{version, revision (K_REVISION), editJobId,
+  editorJobId, step (paso), substep (subpaso), state (estado), eventType}` — the
+  fields every diagnostic event must carry. **Video content is never logged.**
 
 ## Bug Details
 
 ### Bug Condition
 
-The bug manifests whenever a pipeline step invokes an external tool through the `Runner` and the underlying subprocess execution cannot be bounded: `ejecutar_comando` passes `timeout=None`, its `Runner` type signature carries no `timeout` parameter, and every call site invokes `runner(comando)` with no deadline. When the child blocks (a stalled FUSE read on the volume backend, a tool waiting on inherited `stdin`, or any tool that fails to make progress), the executor waits forever. Because the pipeline runs in a background executor thread (`loop.run_in_executor`), the step freezes with no progress update and no failure — exactly the "stuck at 25 %, zero output" symptom.
+The bug manifests when an edit job runs in Cloud Run cloud mode
+(`EDIT_MODE=cloud`, `VSE_STORAGE_BACKEND=volume`) over bucket-backed clips with
+silences enabled, the last confirmed progress observation is **25%**, the
+silence-editing timeline has **not** mounted, and the available evidence is
+**insufficient to classify** the job. Concretely, the observer cannot tell —
+from the percentage alone or from the current logs/progress — whether `UNIR`
+completed, whether silence detection started or finished, whether the pause
+`ESPERANDO_EDICION_SILENCIOS` was reached and mapped to `awaiting_silences`, or
+whether the browser is even running the expected build/revision.
 
 **Formal Specification:**
 ```
 FUNCTION isBugCondition(X)
-  INPUT: X of type PipelineStepExecution
+  INPUT: X of type EditJobObservation
   OUTPUT: boolean
 
-  RETURN X.invokesExternalTool
-     AND NOT X.enforcesBoundedTimeout
+  RETURN X.mode == "cloud"
+     AND X.silencesEnabled
+     AND X.lastConfirmedPercent == 25
+     AND NOT X.timelineMounted
+     AND NOT canClassify(X)   // no correlated evidence assigns X to a category
+END FUNCTION
+
+// canClassify requires a correlation tuple + a "last confirmed event" that
+// places X into exactly one of {A, B, C, D} (see Diagnostic Matrix).
+FUNCTION canClassify(X)
+  RETURN hasCorrelationTuple(X)
+     AND hasLastConfirmedEvent(X)
+     AND category(X) IN {A, B, C, D}
+END FUNCTION
+```
+
+**Expected behavior for a buggy input (the target of the fix):**
+```
+FUNCTION expectedBehavior(X, result)
+  RETURN emitsDifferentiatedEvents(result)  // UNIR-done, detect-start, detect-done, pause
+     AND carriesCorrelation(result)         // version, revision, editJobId, editorJobId, step, substep, state, eventType
+     AND classifiable(result INTO {A, B, C, D})
+     AND ( pausePropagatedToTimeline(result)   // awaiting_silences → SilenceTimeline mounts
+           OR terminalActionableFailure(result) )  // FALLIDO {paso, subpaso, motivo}
+     AND stateIndependentOfPercent(result)    // step/substep/state can change while % stays 25
 END FUNCTION
 ```
 
 ### Examples
 
-- **Counterexample (headline):** Job with 2 valid ~8 s clips in cloud mode; the UNIR-step `ffprobe`/`ffmpeg` read blocks on the GCS-FUSE-backed input. Expected: UNIR completes in seconds (or fails with an actionable motive). Actual: job stuck at 25 % forever, zero tool output.
-- **Large-stderr stress (invariant we must not regress):** a tool emits > 64 KB to `stderr` while the parent is not concurrently draining it. Expected: parent keeps reading, tool finishes normally. Actual under a naive `Popen`-with-sequential-reads implementation: pipe-buffer deadlock. (The current `subprocess.run` avoids this; F' must too.)
-- **Blocked on stdin:** a tool reads from an inherited `stdin` that never yields EOF. Expected: tool never blocks on input (stdin is the null device). Actual (before fix): potential indefinite wait.
-- **Slow-but-healthy tool (edge case):** a legitimately long transcription that finishes just under its deadline. Expected: completes successfully; the timeout does not fire.
+- **Headline (opaque stall):** Cloud Run, 2 valid ~8 s bucket clips, silences on.
+  UI sits at 25% «Unir», no timeline. Current logs/progress cannot say whether
+  `UNIR` finished or detection started. *Expected after F':* the last confirmed
+  event pinpoints the substep, and the job is classified A/B/C/D.
+- **Category C (un-propagated pause):** FastAPI reached
+  `ESPERANDO_EDICION_SILENCIOS` and persisted it, but the browser never showed the
+  timeline (mapping/reconciliation/monitor timing, or a 404 →
+  `EDITOR_STATE_LOST`). *Expected:* `awaiting_silences` events with correlation
+  make the pause visible, or an actionable `EDITOR_STATE_LOST` failure is shown.
+- **Category D (stale deploy):** the browser runs an old bundle; the header does
+  not show `v0.9123 banana xD`, or the header value disagrees with
+  `/api/version`. *Expected:* identity mismatch is immediately visible.
+- **Category A/B (genuine block):** if `ffprobe`/`ffmpeg` or detection truly
+  blocked, the existing bounded timeout should now produce a terminal
+  `FALLIDO {paso, motivo}`; the enriched message adds substep/correlation. A
+  persistent 25% with **no** timeout firing is itself evidence *against* A/B and
+  *for* C/D.
+- **Edge (silences disabled):** no pause; the pipeline proceeds past 25% to
+  TRANSCRIBIR. Must be unaffected.
 
 ## Expected Behavior
 
 ### Preservation Requirements
 
-**Unchanged Behaviors:**
-- Successful tool runs that complete within their deadline return the identical `ResultadoComando` (same `returncode`, `stdout`, `stderr`, `args`) and the pipeline produces the same correct 9:16 output and step progression.
-- Non-zero exit codes continue to raise the existing step-specific errors (`NormalizacionError`, `ClipInspeccionError`, `SilenceProcessingError`, …) with the responsible clip and motive, and no partial output is referenced as success.
-- Standalone/local mode (`EDIT_MODE=local`, `VSE_STORAGE_BACKEND=local`) behaves exactly as today for valid inputs.
-- The exact `Orden_de_Clips` is preserved in concatenation (no reorder/omit/duplicate).
-- Injected `Runner` doubles — including **single-argument** doubles `__call__(self, args)` — keep working without accepting a `timeout` parameter.
-- All existing pytest + Hypothesis guarantees (pure normalization math, order preservation, homogenization, command construction, injectable-runner behavior, signal-code interpretation) continue to hold.
+**Unchanged behaviors (must not regress):**
+- Clip **selection and order** — all and only the selected clips, exactly once,
+  in the requested order (`orden_clips` → `unir_clips`/`contenido_concat_txt`).
+- **Input immutability** — source objects are read byte-for-byte; outputs and
+  temporaries are written only to separate destinations (workdir / output).
+- **Local mode** (`EDIT_MODE=local`, `VSE_STORAGE_BACKEND=local`) works
+  independently of Cloud Run metadata/services.
+- **Flow isolation** — the silence/edit flow and the separate "+7 seconds"
+  clip-extension flow stay decoupled in both directions (no shared triggers,
+  states, or changes).
+- **Existing timeout/`Popen` guarantees** — `stdin=DEVNULL`, concurrent
+  draining, process-group kill, bounded per-step timeouts, and
+  `ComandoTimeoutError` → `FALLIDO {paso, motivo}` remain; **no new timeout
+  values are introduced or assumed.**
+- **Pause semantics** — with silences enabled and detection complete, the joined
+  video and detected segments are preserved during the pause, the timeline is
+  presented, and transcription/later steps do not start before the pause ends;
+  with silences disabled, no pause and no timeline.
+- **Monotonic percentage** — progress percentage stays monotonic non-decreasing;
+  state/substep are independent of it and may change while it stays at 25.
 
-**Scope:**
-All inputs that do NOT satisfy the bug condition must be completely unaffected by this fix. This includes:
-- Tool invocations that return (success or non-zero) within their deadline.
-- Any run using an injected `Runner` double (these never spawn real subprocesses, so timeout/draining/process-group logic is bypassed).
-- Pure/deterministic helpers (`plan_normalizacion`, `contenido_concat_txt`, `calcular_segmentos_conservar`, `parsear_silencedetect`, …) which perform no subprocess I/O.
-
-The actual expected correct behavior for buggy inputs is defined in the Correctness Properties section below.
+**Scope:** every input that does NOT satisfy the bug condition must be completely
+unaffected. Diagnostic changes are **observation-only** (logging, event
+metadata, a startup preflight, a UI/text identifier, a post-deploy check) and
+must not alter pipeline outputs. The concrete correct behavior for buggy inputs
+is defined in the Correctness Properties below.
 
 ## Hypothesized Root Cause
 
-Based on the bug analysis and direct inspection of `proc.py` and every call site, ranked from most to least likely:
+Ranked from most to least likely, given that timeouts/`Popen` are **already
+shipped** and `UNIR` already logs per-substep. **These are hypotheses to confirm
+or refute with the new instrumentation, not confirmed causes.**
 
-1. **Unbounded wait (confirmed, primary).** `ejecutar_comando` uses `subprocess.run(..., timeout=None)`. If the child blocks — a stalled read on the GCS-FUSE-backed volume being the most likely cloud trigger — `communicate()` waits forever. The `Runner` type (`Callable[[Sequence[str]], ResultadoComando]`) does not even carry a `timeout`, and no call site passes one, so there is no deadline anywhere in the funnel.
+1. **(C) Reached-but-un-propagated pause — STRONGEST HYPOTHESIS (not a
+   confirmation).** FastAPI likely reaches `ESPERANDO_EDICION_SILENCIOS` and
+   persists it, but the browser never mounts `SilenceTimeline`. Candidate
+   mechanisms to examine: `reconcileEditJob`/`launchEditJobMonitor` timing or
+   lifecycle; the estado→status mapping; a small race with `detectDurableOutput`;
+   or a 404 on the editor job (container/in-memory loss) surfaced as
+   `EDITOR_STATE_LOST`. The 25% freeze with **no timeout firing** points here
+   rather than at a genuine tool block.
+2. **(D) Stale revision/config deployed — STRONG HYPOTHESIS (not a
+   confirmation).** The browser may be running an old build (deploy didn't ship,
+   cached bundle, wrong revision serving). Today there is no unambiguous,
+   in-product way to confirm the live build/revision, so a "nothing changed after
+   deploy" symptom is easy to misread.
+3. **(A) `ffmpeg`/`ffprobe` blocked before `UNIR` completes (less likely now).**
+   A genuine block should now be cut by the bounded per-step timeout →
+   `ComandoTimeoutError` → `FALLIDO`. Still possible if the block occurs outside a
+   bounded call, or if the environment differs (missing/incompatible binary,
+   CPU-throttled revision), which the preflight/post-deploy check targets.
+4. **(B) Silence detection blocked (less likely now).** Same reasoning as A for
+   the detection substep (`silencedetect`/VAD + `obtener_duracion`).
 
-2. **Direct-child-only termination (confirmed, why "just add a timeout" is insufficient).** Even if `subprocess.run(timeout=X)` were used, on expiry it kills only the immediate child and then re-enters draining; grandchildren (e.g. `ffmpeg` launched by `auto-editor`, or worker/helper processes) can keep the pipe write-ends open, so the parent can still block. Bounded termination requires killing the **whole process group**, which requires `Popen` + `start_new_session=True` + `os.killpg`.
-
-3. **Inherited `stdin` (contributing).** Neither `stdout`/`stderr` capture nor `subprocess.run` redirects `stdin`; the child inherits the parent's. A tool that reads `stdin` (ffmpeg reads it for interactive control; some tools block waiting for input) can stall. Redirecting `stdin` from the null device removes this class of hang.
-
-4. **Pipe-buffer deadlock (NOT the current mechanism, but a regression risk to guard against).** `subprocess.run`/`communicate()` already drains both pipes concurrently, so the current code cannot deadlock on a full pipe. However, the fix migrates to `Popen` to obtain process-group control; if that migration used sequential single-stream reads it would introduce the deadlock. The design mandates concurrent draining to prevent this.
+**Four diagnostic categories (requirement 2.3 / 1.3):**
+- **A** — ffmpeg/ffprobe blocked before finishing `UNIR`.
+- **B** — silence detection blocked.
+- **C** — union & detection complete, but pause transition/propagation not
+  visible (mapping/reconciliation/monitor/`EDITOR_STATE_LOST`).
+- **D** — an old revision or a different-than-expected configuration is deployed.
 
 ## Correctness Properties
 
-Property 1: Bug Condition — Bounded, Non-Hanging Termination of External-Tool Steps
+Property 1: Bug Condition — Differentiated, Correlated Diagnosability at the 25% Boundary
 
-_For any_ step execution where the bug condition holds (`isBugCondition` returns true: an external tool that would block or exceed its deadline), the fixed executor SHALL terminate within a bounded time — either returning a `ResultadoComando`, or raising an actionable error that the pipeline maps to the `FALLIDO` state with `{paso, motivo}` — and SHALL NOT wait indefinitely. On timeout it SHALL terminate the entire process group and SHALL NOT reference any partial artifact as a successful result.
+_For any_ edit-job observation where the bug condition holds (`isBugCondition`
+returns true), the fixed system SHALL emit **differentiated** events for
+UNIR-completion, silence-detection start, silence-detection completion, and the
+`ESPERANDO_EDICION_SILENCIOS` pause — each carrying the full correlation tuple
+(version, revision/`K_REVISION`, `editJobId`, `editorJobId`, step, substep,
+state, event type) — such that the job is **classifiable** into exactly one of
+the four categories A/B/C/D from its last confirmed event, and the step/substep/
+state change independently of the percentage (which stays 25). Video content
+SHALL NOT be logged.
 
-**Validates: Requirements 2.1, 2.2, 2.3, 2.6**
+**Validates: Requirements 2.1, 2.2, 2.3, 2.5**
 
-Property 2: Preservation — Identical Behavior for Non-Buggy Inputs
+Property 2: Preservation — Identical Pipeline Behavior for Non-Buggy Inputs
 
-_For any_ input where the bug condition does NOT hold (tools that return within their deadline, standalone/local runs, injected runner doubles), the fixed code SHALL produce the same observable result as the original function — the same `ResultadoComando` on success, the same step-specific error on non-zero exit, the same produced artifacts and pipeline progression — preserving all current behavior.
+_For any_ input where the bug condition does NOT hold (successful runs, silences
+disabled, local mode, the +7s flow, any clip ordering/selection), the fixed code
+SHALL produce the same observable result as the original: same selected clips in
+the same order, byte-for-byte input immutability, unchanged pause/no-pause
+semantics, unchanged local-mode behavior, unchanged flow isolation, and a
+monotonic percentage — preserving all current behavior. Diagnostic additions are
+observation-only and SHALL NOT change outputs.
 
-**Validates: Requirements 3.1, 3.2, 3.3**
+**Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.6, 3.7, 3.8**
 
-Property 3: No-Deadlock Concurrent Output Draining
+Property 3: Deployment Identity Coherence
 
-_For any_ subprocess execution — regardless of how much data the tool writes to `stdout` and/or `stderr` (including volumes far exceeding the OS pipe buffer) — the fixed executor SHALL drain both streams concurrently so the child can never block on `write()` while the parent blocks on `read()`. A tool emitting arbitrarily large `stderr` SHALL still be allowed to run to completion without deadlock, and its full output SHALL be captured.
+_For any_ served page and API response from a given build/revision, the header
+next to `AUGC Pipeline` SHALL display the exact manual identifier
+`v0.9123 banana xD` (with the bottom `VersionBanner` preserved), and `GET
+/api/version` SHALL expose the same identifier; both SHALL correspond to the same
+build and the same revision serving the request. The Docker image tag SHALL be
+space-separated from the manual identifier, and `K_REVISION` SHALL appear only in
+server-side diagnostics without exposing secrets.
 
-**Validates: Requirements 2.4**
+**Validates: Requirements 2.8, 2.9**
 
-Property 4: Order Preservation (Unchanged)
+Property 4: Preflight & Deploy-Time Environment Verification
 
-_For any_ user-provided `Orden_de_Clips`, the fixed pipeline SHALL preserve the exact clip order in concatenation, without reordering, omitting, or duplicating clips — identical to the original behavior.
+_For any_ revision about to process edit jobs, the editor (FastAPI) SHALL verify
+in the **effective** environment that `ffmpeg` and `ffprobe` are available, can
+execute, and **report their versions** (structured logs); if this preflight
+fails it SHALL prevent processing with an actionable, correlated failure and no
+partial results. The "CPU always allocated" / `--no-cpu-throttling` control-plane
+setting SHALL be verified by a **post-deploy** step (e.g. `gcloud run services
+describe` / a Cloud Build or runbook check) that **fails if it does not match** —
+never inferred from inside the container.
 
-**Validates: Requirements 3.6**
+**Validates: Requirements 2.6**
 
-Property 5: Backward-Compatible Runner Injection
+Property 5: Terminal Timeout Failure Preserved and Enriched
 
-_For any_ injected `Runner` double — including single-argument doubles with signature `__call__(self, args)` that do not accept a `timeout` parameter — the fixed call sites SHALL invoke it successfully with the same arguments and obtain the same `ResultadoComando` as before, without raising `TypeError`. Timeout enforcement SHALL apply only to runners that accept a `timeout`, and the real default runner SHALL enforce it.
+_For any_ operation that reaches its timeout without completing, the system SHALL
+continue to drive the job to the terminal `FALLIDO` state (existing behavior,
+discarding partial output) and SHALL enrich the failure message with the substep
+and correlation tuple when missing — without introducing or assuming new timeout
+values.
 
-**Validates: Requirements 3.4, 3.5**
+**Validates: Requirements 2.7, 3.5**
 
 ## Fix Implementation
 
-### Changes Required
+Assuming the diagnostic-first plan is correct. All changes are **additive and
+observation-only** unless stated; none alter pipeline outputs.
 
-Assuming the root-cause analysis is correct.
+### Change 1 — Deployment identity next to `AUGC Pipeline`
 
-#### Change 1 — Robust `Popen`-based executor (`app/engine/proc.py::ejecutar_comando`)
+**Files:** `src/app/layout.tsx`, `src/lib/version.ts`, `src/app/api/version/route.ts`
+(behavioral confirmation), `src/components/VersionBanner.tsx` (kept as-is),
+Dockerfile / `cloudbuild.yaml` (build-arg wiring).
 
-Replace the `subprocess.run` implementation with a `Popen`-based one that structurally cannot hang for a healthy tool and can forcibly bound an unhealthy one:
+- Render the exact manual identifier `v0.9123 banana xD` beside the `AUGC
+  Pipeline` title in `layout.tsx`, keeping the fixed bottom-right `VersionBanner`.
+- Bake the identifier **once** via env so it is inlined at build time and stays
+  consistent with `getAppVersion()` and `GET /api/version` for the same build.
+- **Separate** the Docker image tag from the manual identifier with spaces (e.g.
+  `"<image-tag> v0.9123 banana xD"`) so both are visible and unambiguous.
+- Add `K_REVISION` to **server-side** diagnostics only (never rendered as a
+  secret, never exposing credentials).
 
-1. **Redirect `stdin` from the null device**: `stdin=subprocess.DEVNULL` — no tool blocks waiting for input.
-2. **Own process group / session**: `start_new_session=True` (POSIX) so the child and all descendants can be terminated as a unit on timeout. (Windows fallback: `creationflags=CREATE_NEW_PROCESS_GROUP`; termination via `proc.kill()`.)
-3. **Concurrent draining of `stdout` and `stderr`**: retain concurrent draining (via `proc.communicate(timeout=...)`, which drains both streams concurrently) so a large-output tool can never deadlock — this is the invariant preserved from the current `subprocess.run` behavior, made explicit for the `Popen` migration.
-4. **Bounded timeout**: accept `timeout: Optional[float]` (already in the signature) and pass it to `communicate`. On `subprocess.TimeoutExpired`:
-   - kill the **entire process group** (`os.killpg(os.getpgid(proc.pid), SIGTERM)`; after a short grace period, `SIGKILL`);
-   - call `communicate()` again to drain any remaining buffered output;
-   - raise `ComandoTimeoutError` with an actionable message (command name, timeout value, tail of captured `stderr`).
-5. **Actionable, propagating error type**: define `class ComandoTimeoutError(OSError)`. Because every call site already wraps `OSError` into its step-specific error (`NormalizacionError`, `ClipInspeccionError`, `SilenceProcessingError`, `MusicaError`, `TranscripcionError`, `SubtitulosError`, `RemotionError`), a timeout automatically propagates into `{paso, motivo}` with **no change to any call site's except-handling** — the pipeline's existing `_fallo` path then transitions the job to `FALLIDO` (Requirements 2.3, 5.x from bugfix analysis).
+### Change 2 — Editor preflight with `ffmpeg`/`ffprobe` versions + structured logs
 
-Return value on success is byte-for-byte the same `ResultadoComando(returncode, stdout, stderr, args)` as before (Property 2).
+**Files:** `editor/app/deps/checker.py`, `editor/main.py` (lifespan), possibly a
+small helper in `editor/app/engine/proc.py` (reuse `ejecutar_comando`).
 
-#### Change 2 — Carry timeout in the `Runner` contract without breaking single-arg doubles
+- Extend the startup verification so `ffmpeg`/`ffprobe` are not only located
+  (`shutil.which`, current behavior) but **executed with `-version`** to capture
+  and log their versions in a **structured** form. Keep the bounded execution via
+  the existing `ejecutar_comando` (with a probe-sized timeout); a failure marks
+  the dependency unavailable and **blocks startup** (existing `main.py` contract),
+  producing an actionable, correlated message.
+- **CPU always allocated is NOT inferred in-container.** Document and implement a
+  **post-deploy** verification step (Change 6) that inspects the control-plane
+  setting; the container preflight only records the environment it actually sees.
 
-1. Widen the `Runner` type alias to `Callable[..., ResultadoComando]` and document the optional keyword `timeout: Optional[float] = None`.
-2. Add a small adapter in `proc.py`:
-   ```
-   FUNCTION invocar_runner(runner, args, timeout)
-     IF runner accepts a `timeout` parameter (via inspect.signature, cached):
-        RETURN runner(args, timeout=timeout)
-     ELSE:
-        RETURN runner(args)          // single-arg test double → unchanged
-   END FUNCTION
-   ```
-   Detection uses `inspect.signature` (with a `TypeError` fallback) so that single-argument doubles (`__call__(self, args)`) are called exactly as today (Property 5). This is the preservation-critical seam: for the default real runner the timeout is enforced; for single-arg doubles the call is identical to `runner(args)`.
-3. Update every engine call site from `resultado = runner(comando)` to `resultado = invocar_runner(runner, comando, timeout=<paso timeout>)`:
-   - `ffprobe.py::inspeccionar_clip`
-   - `normalize.py::_probar_duracion`, per-clip normalization, transitions, concat
-   - `silence.py::obtener_duracion`, `detectar_silencios` (silencedetect), recorte, `cortar_silencios` (auto-editor)
-   - `transcribe.py`, `music.py`, `subtitles.py`, `risas.py`, `remotion.py`
-   The wrapped call preserves the existing surrounding `try/except OSError` blocks unchanged.
+### Change 3 — End-to-end correlated events (Next.js + FastAPI)
 
-#### Change 3 — Uniform, configurable timeout values (`app/config.py`)
+**Files (FastAPI):** `editor/app/api/process.py` (`/procesar`),
+`editor/app/api/progress.py`, `editor/app/jobs/runner.py`,
+`editor/app/jobs/manager.py`, `editor/app/engine/pipeline.py`.
+**Files (Next.js):** `src/lib/edit/jobReconciler.ts`, `src/lib/edit/statusMap.ts`,
+`src/components/edit/EditPanel.tsx` (+ `editUiData.ts`),
+`src/app/api/edit/[editJobId]/progress` route.
 
-Add env-overridable defaults so operators can tune per environment without code changes:
-- `VSE_SUBPROCESS_TIMEOUT_S` — general default (e.g. 900 s).
-- `VSE_PROBE_TIMEOUT_S` — short deadline for `ffprobe` inspection/duration (e.g. 60 s), since a valid small clip must probe in well under a second.
-- (Optionally) a longer deadline for transcription/render steps.
-These bound the fail-fast net; they are intentionally generous so healthy runs on valid inputs never trip them (Property 2 / edge case).
+- Attach the **correlation tuple** `{version, revision (K_REVISION), editJobId,
+  editorJobId, step, substep, state, eventType}` to every relevant log/event at
+  job start, per substep, on pause, on timeout, and on failure — across
+  `/procesar`, progress polling, and reconciliation.
+- **Never log video content**; log only identifiers, counts, durations, sizes,
+  and states.
 
-#### Change 4 — UNIR sub-step observability (`app/engine/normalize.py`, `app/engine/pipeline.py`)
+### Change 4 — Unambiguous events for each substep; percentage ≠ state
 
-- Add `logger.info` markers in `unir_clips` before/after each sub-step (clip inspection, each per-clip normalization, concat/transitions) so a stall is visible in logs rather than silent (Requirement 2.5). Logging has no effect on outputs (preservation-safe).
-- Optionally emit intermediate progress within the UNIR range (0–25 %) so the UI advances during multi-clip normalization; the value stays monotonic non-decreasing per the JobManager contract.
+**Files:** `editor/app/engine/normalize.py` (`unir_clips`),
+`editor/app/engine/silence.py` (`detectar_silencios`),
+`editor/app/engine/pipeline.py`, `editor/app/jobs/runner.py`
+(`marcar_esperando_edicion_silencios`), and the Next reconciler/UI.
 
-#### Change 5 — No partial output referenced on timeout (already structurally satisfied)
+Emit distinct, correlated events for:
+1. **Materialization** from the bucket (cloud/volume input resolution).
+2. **`ffprobe` per clip** (inspection start/done, per clip).
+3. **Normalization per clip** (start/done, per clip).
+4. **Concat** (start/done).
+5. **Silence detection** (start/done, segment count, duration).
+6. **`marcar_esperando_edicion_silencios`** (pause reached, `awaiting_silences`).
+7. **Reconciliation / state mapping** (`reconcileEditJob`, `mapEditorEstado`,
+   including `EDITOR_STATE_LOST`).
+8. **Timeline mount** in the UI (`controlForStatus === "silence"` →
+   `SilenceTimeline` mounted).
 
-On timeout mid-normalization, `ComandoTimeoutError` → step-specific error → pipeline `_fallo`; the `unido`/`cortado` path is never returned as success, and `JobRunner` cleans the workdir. This design confirms and preserves that guarantee (Requirement 2.6); no new code is required beyond the propagating error type.
+The percentage remains **monotonic** but is **never** used as the state; the
+step/substep/state carry the truth and can change while the percentage stays 25.
+
+### Change 5 — Preserve and enrich the terminal timeout failure
+
+**Files:** `editor/app/engine/pipeline.py` (`_fallo`), `editor/app/jobs/runner.py`.
+
+- Keep the existing `ComandoTimeoutError` → step-specific error →
+  `FALLIDO {paso, motivo}` chain unchanged. **Enrich** the motive with the
+  substep and correlation tuple when they are missing, so a terminal failure is
+  immediately localizable. Do **not** introduce or assume new timeout values.
+
+### Change 6 — Post-deploy control-plane verification (runbook + check)
+
+**Files:** `cloudbuild.yaml` (a post-deploy verification step) and/or a runbook
+in `DEPLOY.md`.
+
+- After deploy, verify with `gcloud run services describe` (or an equivalent
+  Cloud Build step) that the live revision has **CPU always allocated**
+  (`--no-cpu-throttling`), the expected image tag, and `min=max=1`. The step
+  **fails the deploy** if the setting does not match — closing the gap between
+  declared config and effective revision.
 
 ### Files touched (summary)
 
-- `app/engine/proc.py` — new executor, `ComandoTimeoutError`, `invocar_runner`, widened `Runner` type.
-- `app/config.py` — timeout constants.
-- `app/engine/{ffprobe,normalize,silence,transcribe,music,subtitles,risas,remotion}.py` — call sites routed through `invocar_runner` with a per-step timeout.
-- `app/engine/{normalize,pipeline}.py` — UNIR sub-step logging/progress.
+- **Next.js:** `src/app/layout.tsx`, `src/lib/version.ts`,
+  `src/app/api/version/route.ts` (confirm), `src/components/VersionBanner.tsx`
+  (unchanged), `src/lib/edit/jobReconciler.ts`, `src/lib/edit/statusMap.ts`,
+  `src/components/edit/EditPanel.tsx`, `src/components/edit/editUiData.ts`,
+  `src/app/api/edit/[editJobId]/progress` route.
+- **FastAPI:** `editor/app/deps/checker.py`, `editor/main.py`,
+  `editor/app/api/process.py`, `editor/app/api/progress.py`,
+  `editor/app/jobs/runner.py`, `editor/app/jobs/manager.py`,
+  `editor/app/engine/normalize.py`, `editor/app/engine/silence.py`,
+  `editor/app/engine/pipeline.py`.
+- **Deploy:** `Dockerfile` / `cloudbuild.yaml` / `DEPLOY.md` (identifier baking +
+  post-deploy check).
 
-No changes required to `JobManager`/`JobRunner`/`pipeline` failure routing — the existing `OSError`→step-error→`_fallo`→`FALLIDO {paso, motivo}` chain carries timeouts once `ComandoTimeoutError` derives from `OSError`.
+## Diagnostic Decision Matrix
+
+From the **last confirmed correlated event**, classify the affected job:
+
+| Last confirmed event (correlated)                                             | Timeout fired? | Timeline mounted? | Category | Interpretation |
+|-------------------------------------------------------------------------------|:--------------:|:-----------------:|:--------:|----------------|
+| `ffprobe`/normalization/concat **started** for `UNIR`, never a "done" event   | no             | no                | **A**    | ffmpeg/ffprobe blocked before `UNIR` finished |
+| `UNIR` **done**; silence-detection **started**, never "done"                  | no             | no                | **B**    | silence detection blocked |
+| silence-detection **done** and/or `ESPERANDO_EDICION_SILENCIOS` **persisted** | no             | no                | **C**    | pause reached but transition/propagation not visible (mapping/reconcile/monitor/`EDITOR_STATE_LOST`) |
+| header/`/api/version` identifier **mismatch** or missing `v0.9123 banana xD`  | n/a            | no                | **D**    | old revision / different config deployed |
+| any substep reached its bound and produced `FALLIDO {paso, subpaso, motivo}`  | **yes**        | no                | A or B   | genuine block — already cut by the existing timeout; read `{paso, subpaso}` |
+
+Guidance consistent with the strongest hypothesis: a persistent 25% with **no
+timeout firing** argues **against A/B** and **for C or D**.
+
+## Operational Diagnostic Checklist (guidance only — do NOT execute or modify infra here)
+
+Suggested read-only observations to gather correlated evidence for the current
+deploy on `feat/gcloud-migration` (run manually, outside this design task; do not
+change infrastructure):
+
+- Confirm the live build/revision: open the app and check the header shows
+  `v0.9123 banana xD`; `curl` `GET /api/version` and confirm it matches.
+- Inspect the running revision and its CPU/throttling/instances:
+  `gcloud run services describe <service> --region <region>` and confirm
+  *CPU always allocated* / `--no-cpu-throttling` and `min=max=1`.
+- Tail structured logs for the affected `editJobId`/`editorJobId` and read the
+  **last confirmed event** (step/substep/state) to place the job in A/B/C/D.
+- Confirm the editor preflight logged `ffmpeg`/`ffprobe` **versions** at startup.
+- Check whether reconciliation surfaced `EDITOR_STATE_LOST` (points to C via a
+  lost editor job) versus a genuine `FALLIDO {paso, motivo}` (points to A/B).
+
+These are **observations**, not fixes; none of them execute here and none change
+infrastructure.
 
 ## Testing Strategy
 
 ### Validation Approach
 
-Two-phase: first surface counterexamples that demonstrate the hang/deadlock behavior on the UNFIXED code, then verify the fix bounds termination, drains without deadlock, and preserves all existing behavior.
+Two-phase: first surface counterexamples that reproduce the "opaque at 25%,
+un-classifiable" symptom on the current code; then verify the instrumentation
+makes the transitions observable and classifiable **without** changing pipeline
+outputs, ordering, immutability, local mode, or the +7s flow.
+
+Real test locations:
+- **Python:** `editor/tests/` (`pytest` + `hypothesis`).
+- **TypeScript:** `src/lib/edit/__tests__/` and `src/app/api/edit/__tests__/`
+  (`vitest` + `fast-check`).
 
 ### Exploratory Bug Condition Checking
 
-**Goal**: Surface counterexamples that demonstrate the unbounded wait BEFORE implementing the fix, and confirm/refute the root-cause hypotheses.
+**Goal:** Surface counterexamples that demonstrate the un-classifiable 25% stall
+BEFORE instrumenting, and confirm/refute the ranked hypotheses (strongest: C/D).
 
-**Test Plan**: Drive `ejecutar_comando` (and a call site such as `inspeccionar_clip`) with a **real** child process that blocks (e.g. a tiny script that sleeps far longer than any reasonable deadline, or reads `stdin` forever), under a bounded wall-clock guard in the test harness. On UNFIXED code the executor never returns within the guard; on FIXED code it raises `ComandoTimeoutError` promptly. A separate exploratory test spawns a child that writes a large volume to `stderr` to characterize draining behavior.
+**Test Plan:** Drive the pipeline to the 25% boundary with silences enabled using
+injected doubles (no real binaries) and assert that, on the **current** code,
+there is **no** correlated event sequence that lets an observer distinguish
+UNIR-done vs detection-started vs pause-reached (all report percentage 25). On
+the Next side, drive `reconcileEditJob` with an editor progress of
+`esperando_edicion_silencios` and assert the mapping/monitor path; drive a 404 to
+observe `EDITOR_STATE_LOST`.
 
-**Test Cases**:
-1. **Unbounded wait (headline)**: a child that sleeps effectively forever; assert the call does not return within a generous wall-clock guard on unfixed code (will hang), and returns/raises quickly once a timeout is enforced.
-2. **Blocked-on-stdin**: a child that reads `stdin` until EOF while the parent never writes; demonstrates the inherited-stdin stall on unfixed code.
-3. **Grandchild survival**: a child that spawns a long-lived grandchild; demonstrates that killing only the direct child is insufficient (motivates process-group kill).
-4. **Large-stderr characterization**: a child emitting > 64 KB to `stderr`; confirm current `subprocess.run` does not deadlock (refuting a *current* pipe-buffer deadlock) and pin this as an invariant the `Popen` fix must preserve.
+**Test Cases (expected to expose the gap on current code):**
+1. **Opaque 25% (Python):** run `ejecutar_pipeline` with silences on and
+   injected `fn_unir`/`fn_detectar`; assert three progress events at 25% that are
+   currently indistinguishable by step/substep/state metadata.
+2. **Pause propagation (TS):** `reconcileEditJob` with estado
+   `esperando_edicion_silencios` → assert it should map to `awaiting_silences`
+   and mount the timeline (`controlForStatus === "silence"`).
+3. **Lost editor job (TS):** editor 404 for a paused job → assert
+   `EDITOR_STATE_LOST` failure is surfaced (category C).
+4. **Identity mismatch (TS):** header identifier vs `GET /api/version` disagree →
+   assert this is detectable (category D).
 
-**Expected Counterexamples**:
-- On unfixed code, cases 1–2 do not terminate within the guard (silent, no output surfaced) — reproducing "stuck at 25 %, zero logs".
-- Case 3 shows an orphaned grandchild after direct-child termination.
-- Case 4 confirms no current deadlock, so the deadlock property is a preservation/regression guard for the migration to `Popen`.
-
-Because this bug is a deterministic block (not random), scope the property-based exploration test to the concrete blocking cases above for reproducibility, guarded by a hard wall-clock cap so the test suite itself never hangs.
+Because this is a deterministic diagnosability gap (not random), scope the
+property-based exploration to the concrete boundary cases above, each guarded by
+a hard wall-clock cap so the suite never hangs.
 
 ### Fix Checking
 
-**Goal**: For all inputs where the bug condition holds, the fixed executor produces bounded termination.
+**Goal:** For all inputs where the bug condition holds, the instrumented system
+emits differentiated correlated events, is classifiable, and propagates the pause
+or fails terminally.
 
 **Pseudocode:**
 ```
-FOR ALL input WHERE isBugCondition(input) DO
-  result := ejecutar_comando'(input.args, timeout=input.deadline)
-  ASSERT terminates_within(result, input.deadline + grace)
-  ASSERT result.succeeded
-      OR (result RAISED ComandoTimeoutError
-          AND pipeline maps it to FALLIDO with {paso, motivo}
-          AND process_group_terminated(input)
-          AND no_partial_output_referenced(input))
+FOR ALL X WHERE isBugCondition(X) DO
+  result := run_instrumented(X)
+  ASSERT emitsDifferentiatedEvents(result)
+  ASSERT carriesCorrelation(result)
+  ASSERT classifiable(result INTO {A, B, C, D})
+  ASSERT pausePropagatedToTimeline(result) OR terminalActionableFailure(result)
+  ASSERT stateIndependentOfPercent(result)
 END FOR
 ```
 
 ### Preservation Checking
 
-**Goal**: For all inputs where the bug condition does NOT hold, the fixed executor/pipeline behaves identically to the original.
+**Goal:** For all inputs where the bug condition does NOT hold, the instrumented
+code behaves identically to today.
 
 **Pseudocode:**
 ```
-FOR ALL input WHERE NOT isBugCondition(input) DO
-  ASSERT ejecutar_comando(input) == ejecutar_comando'(input)     // same ResultadoComando
-  ASSERT pipeline(input) == pipeline'(input)                     // same artifacts, order, errors
+FOR ALL X WHERE NOT isBugCondition(X) DO
+  ASSERT pipeline(X)  == pipeline'(X)     // same artifacts, order, immutability
+  ASSERT localMode(X) == localMode'(X)    // unchanged standalone behavior
+  ASSERT plus7sFlow(X) == plus7sFlow'(X)  // isolation preserved
+  ASSERT percentMonotonic(X)              // unchanged monotonic percentage
 END FOR
 ```
 
-**Testing Approach**: Property-based testing is recommended for preservation because the guarantees are universal ("for all non-buggy inputs / all injected doubles / all clip orders"). Observe behavior on UNFIXED code first, then encode it.
-
-**Test Plan**: Observe outputs on unfixed code for (a) successful runs via injected doubles, (b) non-zero exits, (c) clip-order round-trips, then write property-based tests asserting the fixed code matches.
-
-**Test Cases**:
-1. **Successful-run equivalence**: injected runner returning `returncode=0` yields the same `ResultadoComando` and the same produced artifacts before and after the fix.
-2. **Non-zero exit equivalence**: injected runner returning non-zero still raises the same step-specific error with the same motive.
-3. **Order preservation**: for random `Orden_de_Clips`, `contenido_concat_txt` / `unir_clips` preserve order identically (existing Hypothesis property must still pass).
-4. **Single-arg double compatibility**: a runner double with `__call__(self, args)` (no `timeout`) is invoked through `invocar_runner` without `TypeError`, identical to `runner(args)`.
-5. **Standalone/local unaffected**: local-mode configuration path unchanged.
+**Testing Approach:** Property-based testing (Hypothesis / fast-check) for the
+universal preservation guarantees (all clip orders, all non-buggy inputs,
+identifier coherence), observation-first: record current outputs, then assert the
+instrumented code matches.
 
 ### Unit Tests
 
-- `ejecutar_comando` success path returns exact `ResultadoComando`; `stdin` is the null device; child runs in its own process group.
-- Timeout path raises `ComandoTimeoutError`, kills the process group (no orphaned grandchildren), and includes an actionable message with captured `stderr` tail.
-- `ComandoTimeoutError` is an `OSError` and is wrapped by each call site into its step-specific error (spot-check `NormalizacionError`, `ClipInspeccionError`, `SilenceProcessingError`).
-- `invocar_runner` dispatches with/without `timeout` based on the double's signature.
-- Config timeout constants respect env overrides.
+- **Python (`editor/tests/`):** differentiated correlated events emitted by
+  `unir_clips` (per-clip `ffprobe`/normalization/concat), `detectar_silencios`
+  (start/done), and `marcar_esperando_edicion_silencios` (pause); preflight logs
+  `ffmpeg`/`ffprobe` versions and blocks startup on failure; enriched terminal
+  timeout message carries substep/correlation.
+- **TS (`src/lib/edit/__tests__/`):** `mapEditorEstado` →
+  `esperando_edicion_silencios` = `awaiting_silences`, unknown → `STATUS_MAPPING`
+  failure; `controlForStatus("awaiting_silences") === "silence"`.
+- **TS (`src/app/api/edit/__tests__/`):** `/api/version` value equals the header
+  identifier; progress route carries correlation.
 
 ### Property-Based Tests
 
-- **No-deadlock draining (Property 3)**: for generated output sizes (including >> pipe buffer), the executor captures full output and terminates without deadlock.
-- **Backward-compatible injection (Property 5)**: for generated runner doubles of both shapes (single-arg and timeout-aware), `invocar_runner` succeeds and returns the double's result.
-- **Order preservation (Property 4)**: existing concat-order Hypothesis property re-run against fixed code.
-- **Preservation of successful runs (Property 2)**: generated injected-runner scenarios produce identical results pre/post fix.
+- **Diagnosability (Property 1):** generated boundary sequences at 25% always
+  yield distinguishable, correlated events classifiable into A/B/C/D.
+- **Order preservation (Property 2):** for random `orden_clips`,
+  `contenido_concat_txt`/`parsear_concat_txt` round-trip equals input and
+  `unir_clips` preserves order (reuse existing property).
+- **Identity coherence (Property 3):** for generated build identifiers, header
+  and `/api/version` agree; the manual identifier and image tag stay
+  space-separated.
+- **State ≠ percentage (Property 1):** step/substep/state may change while the
+  percentage stays 25 and remains monotonic.
 
 ### Integration Tests
 
-- Full UNIR step with injected doubles: two valid clips → `unido.mp4` produced, order preserved, progress advances through the UNIR sub-steps.
-- Timeout during UNIR (injected/real blocking tool) → job transitions to `FALLIDO` with `error = {"paso": "UNIR", "motivo": ...}` surfaced via the progress reporter, and the workdir is cleaned (no partial artifact referenced).
-- Standalone/local end-to-end smoke path behaves as before for valid inputs.
+- **Full transition (Python + TS):** silences on → 25% → `awaiting_silences` →
+  `SilenceTimeline` mounted, driven end-to-end with injected doubles; assert the
+  correlated event trail and the timeline mount.
+- **Preflight failure:** editor startup with a missing/incompatible `ffprobe`
+  blocks with an actionable, correlated message and no partial output.
+- **Terminal timeout:** an injected `ComandoTimeoutError` during `UNIR` →
+  `FALLIDO {paso: "UNIR", subpaso, motivo}` with correlation; no partial
+  `unido.mp4` referenced as success.
+- **Isolation & local mode:** the +7s flow and local mode behave exactly as
+  before.
+- **Post-deploy check (runbook/CI):** the control-plane verification fails the
+  deploy when `--no-cpu-throttling` / `min=max=1` / image tag do not match.

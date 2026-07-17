@@ -3,8 +3,15 @@ import { editJobsDb, type EditJobStore } from "./editJobStore";
 import { createEditorClient, type EditorClient } from "./editorClient";
 import { createEditStorageAdapter } from "./storageFactory";
 import type { StorageAdapter } from "./storageAdapter";
-import { mapEditorEstado } from "./statusMap";
+import {
+  mapEditorEstado,
+  buildCorrelation,
+  reconcileEventForStatus,
+  type EditCorrelation,
+  type ReconcileEventType,
+} from "./statusMap";
 import { EditorPermanentError } from "./retry";
+import { getServerDiagnostics } from "../version";
 import type { EditJob, EditJobError, EditorProgress } from "./types";
 
 interface EditorRawProgress {
@@ -25,6 +32,21 @@ export interface ReconcileResult {
   job: EditJob;
   live: boolean;
   message?: string;
+  /**
+   * End-to-end correlation tuple for this observation (spec `unir-step-hang`,
+   * Task 3.4). Threaded onto every reconcile result so an affected job at the
+   * opaque 25% boundary is observable/classifiable (category C) from a
+   * correlated event, independent of the (monotonic) percentage.
+   */
+  correlation?: EditCorrelation;
+  /**
+   * Differentiated reconcile event kind for this observation (spec
+   * `unir-step-hang`, Task 3.5). Distinguishes the reached-but-un-propagated
+   * pause (`reconcile_awaiting_silences`, category C) from a lost editor job
+   * (`editor_state_lost`) and a status-mapping failure, so the last confirmed
+   * reconciliation event localizes the stall.
+   */
+  eventType?: ReconcileEventType;
 }
 
 /** The three actionable pause statuses treated as live, non-terminal states. */
@@ -81,8 +103,37 @@ async function detectDurableOutput(
  * Reconcile one generator EditJob with durable storage and FastAPI state.
  * Durable output is checked first so a process restart cannot turn an already
  * completed video into a failure merely because FastAPI's in-memory job is gone.
+ *
+ * Every result is stamped with the end-to-end correlation tuple (version,
+ * revision, editJobId, editorJobId) so the observation is classifiable
+ * end-to-end (spec `unir-step-hang`, Task 3.4). The correlation carries only
+ * identifiers/state — never video content and never the percentage as state.
  */
 export async function reconcileEditJob(
+  editJobId: string,
+  deps: ReconcileDeps = defaultDeps
+): Promise<ReconcileResult | undefined> {
+  const result = await reconcileEditJobCore(editJobId, deps);
+  if (!result) return result;
+  return {
+    ...result,
+    correlation: correlationForJob(result.job),
+    eventType: reconcileEventForStatus(result.job.status, result.job.error),
+  };
+}
+
+/** Builds the correlation tuple for a job from build/revision diagnostics. */
+function correlationForJob(job: EditJob): EditCorrelation {
+  const diag = getServerDiagnostics();
+  return buildCorrelation({
+    editJobId: job.id,
+    editorJobId: job.editorJobId,
+    version: diag.version,
+    revision: diag.revision,
+  });
+}
+
+async function reconcileEditJobCore(
   editJobId: string,
   deps: ReconcileDeps = defaultDeps
 ): Promise<ReconcileResult | undefined> {

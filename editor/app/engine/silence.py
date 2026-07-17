@@ -845,6 +845,27 @@ def _normalizar_y_fusionar_tramos(
     return fusionados
 
 
+def _correlacion_log(correlacion: Optional[dict]) -> dict:
+    """Filtra la correlación a sus claves seguras para loguearla (Tarea 3.4, Req 2.5).
+
+    Devuelve solo identificadores/estado conocidos, garantizando que nunca se
+    registre contenido de vídeo en los logs correlacionados.
+    """
+    if not correlacion:
+        return {}
+    claves = (
+        "version",
+        "revision",
+        "edit_job_id",
+        "editor_job_id",
+        "paso",
+        "subpaso",
+        "estado",
+        "event_type",
+    )
+    return {c: correlacion[c] for c in claves if c in correlacion}
+
+
 def detectar_silencios(
     entrada: Union[str, Path],
     *,
@@ -853,6 +874,7 @@ def detectar_silencios(
     modo: str = "db",
     runner: Runner = ejecutar_comando,
     detector_voz=deteccion_voz_silero,
+    correlacion: Optional[dict] = None,
 ) -> ResultadoDeteccionSilencios:
     """Detecta los tramos de silencio del vídeo **sin recortarlo** (Req 1.1).
 
@@ -890,6 +912,13 @@ def detectar_silencios(
     entrada_path = Path(entrada)
 
     logger.info("ffmpeg resuelto en: %s", shutil.which("ffmpeg") or "(no encontrado)")
+    # Log correlacionado del subpaso de detección (spec unir-step-hang, Tarea
+    # 3.4): solo modo/ids (nunca contenido de vídeo) para localizar el trabajo.
+    logger.info(
+        "CORTAR_SILENCIOS: detectando silencios (modo=%s, correlacion=%s)",
+        modo,
+        _correlacion_log(correlacion),
+    )
     _loguear_archivo_entrada(entrada_path)
 
     if modo == "voz":
@@ -936,6 +965,18 @@ def detectar_silencios(
 
     # (4) Normaliza/clamp/ordena/fusiona para cumplir la garantía de Req 1.1.
     silencios = _normalizar_y_fusionar_tramos(silencios_brutos, duracion)
+    # Log correlacionado de FIN de detección (spec unir-step-hang, Tarea 3.5):
+    # subpaso distinguible con el conteo de tramos y la duración, para localizar
+    # que la detección TERMINÓ (categoría C) frente a quedar bloqueada
+    # (categoría B). Solo counts/duraciones/ids: nunca contenido de vídeo.
+    logger.info(
+        "CORTAR_SILENCIOS subpaso evento_tipo=deteccion_fin modo=%s "
+        "tramos=%d duracion=%.3f correlacion=%s",
+        modo,
+        len(silencios),
+        duracion,
+        _correlacion_log(correlacion),
+    )
     return ResultadoDeteccionSilencios(silencios=silencios, duracion=duracion)
 
 

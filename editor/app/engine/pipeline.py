@@ -157,6 +157,21 @@ class EventoProgreso:
     Es la unidad de información que el Gestor de Jobs consume como fuente de
     verdad del progreso (Req 10.5). ``error`` solo se rellena en estado
     ``FALLIDO`` con la forma ``{"paso": ..., "motivo": ...}`` (Req 10.7).
+
+    Campos de diagnóstico correlacionado (spec ``unir-step-hang``, Tarea 3.4,
+    ADITIVOS y opcionales para no cambiar el contrato existente):
+
+    * ``subpaso``: subpaso legible dentro de ``paso_actual`` (p. ej. "Clips
+      unidos", "Detectando silencios"). Permite distinguir varios eventos que
+      comparten el porcentaje 25 sin usar el porcentaje como estado (Req 2.2).
+    * ``evento_tipo``: tipo estructurado del evento (``unir_inicio``,
+      ``unir_fin``, ``deteccion_inicio``, ``pausa_silencios``, ``fallo``, ...)
+      para clasificar el trabajo desde el último evento confirmado (Req 2.3).
+    * ``correlacion``: tupla de correlación de extremo a extremo
+      ``{version, revision, edit_job_id, editor_job_id}`` (solo identificadores/
+      estado; **nunca** contenido de vídeo) (Req 2.5).
+
+    Todos por defecto ``None`` para que los eventos y tests previos no cambien.
     """
 
     estado: JobStatus
@@ -165,6 +180,9 @@ class EventoProgreso:
     porcentaje: int
     mensaje: str
     error: Optional[Dict[str, Any]] = None
+    subpaso: Optional[str] = None
+    evento_tipo: Optional[str] = None
+    correlacion: Optional[Dict[str, Any]] = None
 
 
 # Firma del reporter de progreso inyectable.
@@ -173,6 +191,77 @@ ReporteProgreso = Callable[[EventoProgreso], None]
 
 def _reporter_noop(_evento: EventoProgreso) -> None:
     """Reporter por defecto que descarta los eventos (sin efectos)."""
+
+
+# Claves permitidas de la tupla de correlación (spec unir-step-hang, Tarea 3.4).
+# Solo identificadores/estado; garantiza que jamás se registre contenido de vídeo.
+_CLAVES_CORRELACION_SEGURAS: Tuple[str, ...] = (
+    "version",
+    "revision",
+    "edit_job_id",
+    "editor_job_id",
+    "paso",
+    "subpaso",
+    "estado",
+    "event_type",
+)
+
+
+def _correlacion_segura(correlacion: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Filtra la correlación a sus claves seguras para poder loguearla (Req 2.5).
+
+    Devuelve un dict solo con identificadores/estado conocidos, de modo que
+    ningún campo inesperado (p. ej. una ruta o contenido de vídeo) se registre.
+    """
+    if not correlacion:
+        return {}
+    return {
+        clave: correlacion[clave]
+        for clave in _CLAVES_CORRELACION_SEGURAS
+        if clave in correlacion
+    }
+
+
+# Claves CANÓNICAS de la tupla de correlación de extremo a extremo (spec
+# unir-step-hang, Tarea 3.4/3.5): las cuatro que todo evento diferenciado del
+# borde del 25 % debe llevar SIEMPRE para ser correlacionable/clasificable
+# (Req 2.5). Se mantienen EXACTAMENTE estas cuatro (sin ``paso``/``subpaso``/
+# ``estado``/``event_type``, que ya viajan como campos propios del evento) para
+# garantizar que la correlación nunca arrastre contenido de vídeo.
+_CLAVES_CORRELACION_CANONICAS: Tuple[str, ...] = (
+    "version",
+    "revision",
+    "edit_job_id",
+    "editor_job_id",
+)
+
+
+def _correlacion_completa(
+    correlacion: Optional[Dict[str, Any]],
+    job: Optional[JobWorkdir] = None,
+) -> Dict[str, Any]:
+    """Normaliza la correlación para que lleve SIEMPRE las cuatro claves canónicas.
+
+    Task 3.5 (Req 2.5): cada evento diferenciado del borde del 25 %
+    (materialización, UNIR fin, detección inicio/fin, pausa) debe ser
+    correlacionable de extremo a extremo aunque el llamador no aporte una tupla
+    completa. Rellena las claves ausentes desde el entorno efectivo
+    (``APP_VERSION``/``NEXT_PUBLIC_APP_VERSION`` y ``K_REVISION``) y usa el
+    ``job_id`` del workdir como ``editor_job_id`` por defecto. El resultado se
+    restringe EXACTAMENTE a las cuatro claves canónicas, de modo que nunca se
+    filtre contenido de vídeo ni campos inesperados.
+    """
+    base: Dict[str, Any] = dict(correlacion) if correlacion else {}
+    valores: Dict[str, Any] = {
+        "version": base.get("version")
+        or os.environ.get("APP_VERSION")
+        or os.environ.get("NEXT_PUBLIC_APP_VERSION"),
+        "revision": base.get("revision") or os.environ.get("K_REVISION"),
+        "edit_job_id": base.get("edit_job_id"),
+        "editor_job_id": base.get("editor_job_id")
+        or (getattr(job, "job_id", None) if job is not None else None),
+    }
+    return {clave: valores[clave] for clave in _CLAVES_CORRELACION_CANONICAS}
 
 
 @dataclass
@@ -237,6 +326,12 @@ def ejecutar_pipeline(
     runner: Runner = ejecutar_comando,
     inspector: Callable[[str], Any] = inspeccionar_clip,
     existe_salida: Optional[Callable[[Path], bool]] = None,
+    # Tupla de correlación de extremo a extremo (spec unir-step-hang, Tarea 3.4):
+    # ``{version, revision, edit_job_id, editor_job_id}``. ADITIVA y opcional; el
+    # Gestor de Jobs/runner la inyecta para que cada evento del borde del 25 %
+    # (inicio, subpaso, pausa, fallo) sea correlacionable. Solo identificadores/
+    # estado; NUNCA contenido de vídeo.
+    correlacion: Optional[Dict[str, Any]] = None,
     # Pasos inyectables (por defecto, las implementaciones reales del motor).
     fn_unir: Callable[..., Path] = unir_clips,
     fn_detectar: Callable[..., ResultadoDeteccionSilencios] = detectar_silencios,
@@ -292,6 +387,12 @@ def ejecutar_pipeline(
     """
     job.create()
 
+    # Normaliza la tupla de correlación para que TODO evento diferenciado del
+    # borde del 25 % lleve las cuatro claves canónicas, aunque el llamador no
+    # aporte una tupla completa (Tarea 3.5, Req 2.5). Solo identificadores/
+    # estado; nunca contenido de vídeo.
+    correlacion = _correlacion_completa(correlacion, job)
+
     resolucion = ajustes.generales.resolucion
     ancho = resolucion.ancho
     alto = resolucion.alto
@@ -301,20 +402,40 @@ def ejecutar_pipeline(
 
     # -------------------- Paso 1: UNIR --------------------
     inicio, fin = RANGOS_PASOS[PipelineStep.UNIR]
+    # Evento de MATERIALIZACIÓN de los clips de origen (Tarea 3.5, Change 4 #1):
+    # marca, en el borde inferior de UNIR, que el pipeline ha comenzado a
+    # materializar/preparar los clips de entrada (resueltos por el Gestor desde
+    # el bucket/volumen). Es un subpaso distinguible y correlacionado, previo a
+    # ``unir_inicio``, para que el primer evento del trabajo sea localizable.
     _reportar(reporter, JobStatus.EN_EJECUCION, 1, PipelineStep.UNIR, inicio,
-              "Uniendo y normalizando clips a 9:16")
+              "Materializando clips de origen",
+              subpaso="Materializando clips de origen",
+              evento_tipo="materializacion", correlacion=correlacion)
+    _reportar(reporter, JobStatus.EN_EJECUCION, 1, PipelineStep.UNIR, inicio,
+              "Uniendo y normalizando clips a 9:16",
+              subpaso="Uniendo y normalizando clips a 9:16",
+              evento_tipo="unir_inicio", correlacion=correlacion)
     # Solo se pasa ``transiciones`` a ``fn_unir`` cuando hay un efecto real
     # (tipo != "ninguna"); así el corte duro por defecto mantiene la firma previa
     # (compatibilidad con dobles de test que no aceptan el kwarg).
+    # NOTA: la tupla de correlación NO se reenvía a ``fn_unir``/``fn_detectar``
+    # para no romper la firma de los dobles de test existentes (contrato
+    # estable). Los eventos gruesos del borde (materialización, UNIR inicio/fin,
+    # detección inicio/fin, pausa) ya viajan como :class:`EventoProgreso`
+    # correlacionados; ``unir_clips``/``detectar_silencios`` aceptan ``correlacion``
+    # para sus logs de subpaso finos cuando se invocan directamente.
     unir_kwargs: Dict[str, Any] = {"runner": runner, "inspector": inspector}
     if ajustes.transiciones is not None and ajustes.transiciones.tipo != "ninguna":
         unir_kwargs["transiciones"] = ajustes.transiciones
     try:
         unido = fn_unir(job, orden_clips, ancho, alto, fps, **unir_kwargs)
     except Exception as exc:  # noqa: BLE001 - se traduce a fallo de Job (Req 10.7)
-        return _fallo(reporter, 1, PipelineStep.UNIR, exc, inicio)
+        return _fallo(reporter, 1, PipelineStep.UNIR, exc, inicio,
+                      subpaso="Uniendo y normalizando clips a 9:16",
+                      correlacion=correlacion)
     _reportar(reporter, JobStatus.EN_EJECUCION, 1, PipelineStep.UNIR, fin,
-              "Clips unidos")
+              "Clips unidos", subpaso="Clips unidos", evento_tipo="unir_fin",
+              correlacion=correlacion)
 
     # -------------------- Paso 2: CORTAR_SILENCIOS — FASE A (detección) --------
     # El paso CORTAR_SILENCIOS se parte en dos fases (spec edicion-avanzada-shorts,
@@ -338,7 +459,9 @@ def ejecutar_pipeline(
             "unido, sin pausa de edición (Req 1.5)"
         )
         _reportar(reporter, JobStatus.EN_EJECUCION, 2, PipelineStep.CORTAR_SILENCIOS,
-                  fin, "Corte de silencios desactivado")
+                  fin, "Corte de silencios desactivado",
+                  subpaso="Corte de silencios desactivado",
+                  evento_tipo="deteccion_desactivada", correlacion=correlacion)
         return _continuar_desde_transcribir(
             job,
             unido,
@@ -352,7 +475,8 @@ def ejecutar_pipeline(
 
     # Silencios ACTIVADOS: detectar los tramos SIN recortar (Req 1.1) y pausar.
     _reportar(reporter, JobStatus.EN_EJECUCION, 2, PipelineStep.CORTAR_SILENCIOS,
-              inicio, "Detectando silencios")
+              inicio, "Detectando silencios", subpaso="Detectando silencios",
+              evento_tipo="deteccion_inicio", correlacion=correlacion)
     # Método de detección: "voz" usa el motor VAD (IA); cualquier otro valor usa
     # el umbral de dB ("db"). El margen NO se aplica en la detección (se aplica al
     # calcular los segmentos a conservar durante la aplicación del corte).
@@ -390,21 +514,53 @@ def ejecutar_pipeline(
                 fn_risas=fn_risas,
             )
         # Comportamiento por defecto (Req 10.7): el Job pasa a fallido.
-        return _fallo(reporter, 2, PipelineStep.CORTAR_SILENCIOS, exc, inicio)
+        return _fallo(reporter, 2, PipelineStep.CORTAR_SILENCIOS, exc, inicio,
+                      subpaso="Detectando silencios", correlacion=correlacion)
     except Exception as exc:  # noqa: BLE001
-        return _fallo(reporter, 2, PipelineStep.CORTAR_SILENCIOS, exc, inicio)
+        return _fallo(reporter, 2, PipelineStep.CORTAR_SILENCIOS, exc, inicio,
+                      subpaso="Detectando silencios", correlacion=correlacion)
+
+    # FIN de la detección de silencios (Tarea 3.5, Change 4 #5, CRÍTICO): se
+    # emite un evento DISTINTO ``deteccion_fin`` ANTES del evento de pausa, con
+    # el conteo de tramos y la duración del vídeo unido. Este evento es el que
+    # permite distinguir la categoría B ("detección bloqueada": se vio
+    # ``deteccion_inicio`` pero NUNCA ``deteccion_fin``) de la categoría C
+    # ("detección completada, pausa no propagada": se vio ``deteccion_fin`` y/o
+    # ``pausa_silencios``) en la matriz de decisión del diseño. Comparte el
+    # porcentaje 25 con la detección de inicio y la pausa, pero es un subpaso/
+    # evento_tipo estructurado y correlacionado distinto (el porcentaje NUNCA es
+    # el estado, Req 2.2, 2.3). Solo counts/duraciones/ids: nunca contenido de
+    # vídeo (Req 2.5).
+    _reportar(reporter, JobStatus.EN_EJECUCION, 2, PipelineStep.CORTAR_SILENCIOS,
+              inicio,
+              "Silencios detectados: %d tramo(s), %.3f s"
+              % (len(deteccion.silencios), deteccion.duracion),
+              subpaso="Silencios detectados",
+              evento_tipo="deteccion_fin", correlacion=correlacion)
+    logger.info(
+        "CORTAR_SILENCIOS: detección completada (%d tramos, duración %.3f s, "
+        "correlacion=%s)",
+        len(deteccion.silencios),
+        deteccion.duracion,
+        _correlacion_segura(correlacion),
+    )
 
     # PAUSA (Req 1.2, 1.3, 1.4): se registra en el borde inferior del rango
     # CORTAR_SILENCIOS (25 %). Se devuelven los tres artefactos que el Gestor de
     # Jobs persistirá con ``marcar_esperando_edicion_silencios`` (tarea 4.3). La
     # lista de tramos puede ser vacía si no se detectó ningún silencio (Req 1.4).
     _reportar(reporter, JobStatus.EN_EJECUCION, 2, PipelineStep.CORTAR_SILENCIOS,
-              inicio, "Esperando edición manual de silencios")
+              inicio, "Esperando edición manual de silencios",
+              subpaso="Esperando edición manual de silencios",
+              evento_tipo="pausa_silencios", correlacion=correlacion)
+    # Log de pausa correlacionado: solo ids/counts/duraciones/estado (nunca
+    # contenido de vídeo), para localizar la pausa por ``editor_job_id`` (Req 2.5).
     logger.info(
         "Pipeline en pausa para edición manual de silencios "
-        "(%d tramos, duración %.3f s)",
+        "(%d tramos, duración %.3f s, correlacion=%s)",
         len(deteccion.silencios),
         deteccion.duracion,
+        _correlacion_segura(correlacion),
     )
     return ResultadoPipeline(
         exito=False,
@@ -571,6 +727,7 @@ def reanudar_desde_silencios(
     api_key: Optional[str] = None,
     reporter: ReporteProgreso = _reporter_noop,
     runner: Runner = ejecutar_comando,
+    correlacion: Optional[Dict[str, Any]] = None,
     fn_aplicar: Callable[..., Path] = aplicar_tramos_borrado,
     fn_transcribir: Callable[..., List[Any]] = transcribir,
     fn_risas: Callable[..., Any] = eliminar_risas,
@@ -638,7 +795,9 @@ def reanudar_desde_silencios(
     inicio, fin = RANGOS_PASOS[PipelineStep.CORTAR_SILENCIOS]
     medio = inicio + (fin - inicio) // 2  # ~30 %
     _reportar(reporter, JobStatus.EN_EJECUCION, 2, PipelineStep.CORTAR_SILENCIOS,
-              medio, "Aplicando cortes de silencio")
+              medio, "Aplicando cortes de silencio",
+              subpaso="Aplicando cortes de silencio",
+              evento_tipo="aplicar_cortes_inicio", correlacion=correlacion)
     try:
         cortado = fn_aplicar(
             unido_path,
@@ -650,11 +809,14 @@ def reanudar_desde_silencios(
     except SilenceProcessingError as exc:
         # Fallo al recortar (Req 16.6, diseño §10): el Job pasa a FALLIDO en
         # CORTAR_SILENCIOS con motivo accionable, conservando el workdir.
-        return _fallo(reporter, 2, PipelineStep.CORTAR_SILENCIOS, exc, inicio)
+        return _fallo(reporter, 2, PipelineStep.CORTAR_SILENCIOS, exc, inicio,
+                      subpaso="Aplicando cortes de silencio", correlacion=correlacion)
     except Exception as exc:  # noqa: BLE001
-        return _fallo(reporter, 2, PipelineStep.CORTAR_SILENCIOS, exc, inicio)
+        return _fallo(reporter, 2, PipelineStep.CORTAR_SILENCIOS, exc, inicio,
+                      subpaso="Aplicando cortes de silencio", correlacion=correlacion)
     _reportar(reporter, JobStatus.EN_EJECUCION, 2, PipelineStep.CORTAR_SILENCIOS,
-              fin, "Silencios recortados")
+              fin, "Silencios recortados", subpaso="Silencios recortados",
+              evento_tipo="aplicar_cortes_fin", correlacion=correlacion)
 
     # Continuar el flujo secuencial: TRANSCRIBIR → SUBTÍTULOS → edición final.
     return _continuar_desde_transcribir(
@@ -1146,8 +1308,18 @@ def _reportar(
     paso: Optional[PipelineStep],
     porcentaje: int,
     mensaje: str,
+    *,
+    subpaso: Optional[str] = None,
+    evento_tipo: Optional[str] = None,
+    correlacion: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Emite un evento de progreso hacia el ``reporter`` (sin error)."""
+    """Emite un evento de progreso hacia el ``reporter`` (sin error).
+
+    Acepta metadatos de diagnóstico correlacionado ADITIVOS (``subpaso``,
+    ``evento_tipo``, ``correlacion``) que se adjuntan al :class:`EventoProgreso`
+    cuando se proporcionan (spec ``unir-step-hang``, Tarea 3.4). Son opcionales
+    y por defecto ``None`` para no alterar los eventos previos.
+    """
     reporter(
         EventoProgreso(
             estado=estado,
@@ -1155,8 +1327,42 @@ def _reportar(
             paso_actual=paso,
             porcentaje=porcentaje,
             mensaje=mensaje,
+            subpaso=subpaso,
+            evento_tipo=evento_tipo,
+            correlacion=dict(correlacion) if correlacion else None,
         )
     )
+
+
+def _motivo_localizable(
+    motivo: str,
+    subpaso: Optional[str],
+    corr_segura: Dict[str, Any],
+) -> str:
+    """Enriquece el ``motivo`` con el subpaso y la correlación **cuando falten**.
+
+    Tarea 3.6 (spec ``unir-step-hang``, Change 5, Req 2.7/3.5): un fallo terminal
+    debe ser inmediatamente **localizable** incluso leyendo solo el ``motivo``,
+    porque el Gestor de Jobs reconstruye ``error = {paso, motivo}`` en
+    :meth:`JobManager.marcar_fallido` (descartando las claves ``subpaso``/
+    ``correlacion`` del dict de error), de modo que el texto del ``motivo`` es lo
+    único que sobrevive esa reconstrucción.
+
+    Es una función **aditiva** y sin efectos sobre los plazos: NO introduce ni
+    presupone valores de timeout; solo antepone/añade metadatos ya conocidos
+    (subpaso e identificadores de correlación) al mensaje del error original
+    cuando ese texto todavía no los contiene. Solo identificadores/estado:
+    **nunca** contenido de vídeo (la correlación ya viene filtrada por
+    :func:`_correlacion_segura`).
+    """
+    extra: List[str] = []
+    if subpaso and subpaso not in motivo:
+        extra.append(f"subpaso={subpaso}")
+    if corr_segura and "correlacion=" not in motivo:
+        extra.append(f"correlacion={corr_segura}")
+    if not extra:
+        return motivo
+    return f"{motivo} [{'; '.join(extra)}]"
 
 
 def _fallo(
@@ -1165,14 +1371,41 @@ def _fallo(
     paso: PipelineStep,
     exc: BaseException,
     porcentaje: int,
+    *,
+    subpaso: Optional[str] = None,
+    correlacion: Optional[Dict[str, Any]] = None,
 ) -> ResultadoPipeline:
     """Reporta un evento ``FALLIDO`` y devuelve un resultado sin éxito (Req 10.7).
 
     El evento incluye ``error = {"paso": <paso>, "motivo": <motivo>}`` para que
-    el Gestor de Jobs lo exponga en ``GET /progreso`` (Req 10.7).
+    el Gestor de Jobs lo exponga en ``GET /progreso`` (Req 10.7). La cadena
+    ``ComandoTimeoutError`` → error de paso → ``FALLIDO {paso, motivo}`` se
+    mantiene **intacta** (Preservación, Propiedad 5).
+
+    Cuando se dispone de ``subpaso``/``correlacion`` (spec ``unir-step-hang``,
+    Tareas 3.4/3.6) el fallo se **enriquece** para que sea localizable de extremo
+    a extremo:
+
+    * el ``error`` del evento añade la clave ``subpaso`` y la tupla de
+      correlación segura (``correlacion``), y el evento transporta además la
+      correlación completa;
+    * el ``motivo`` se enriquece con el subpaso y la correlación **cuando
+      falten** (:func:`_motivo_localizable`), de modo que un fallo terminal siga
+      siendo localizable aunque el Gestor reconstruya ``{paso, motivo}`` y
+      descarte las claves extra del dict de error.
+
+    Es un cambio ADITIVO y observacional: **no** introduce ni presupone nuevos
+    valores de timeout y **nunca** registra contenido de vídeo.
     """
-    motivo = str(exc)
+    motivo_base = str(exc)
+    corr_segura = _correlacion_segura(correlacion)
+    motivo = _motivo_localizable(motivo_base, subpaso, corr_segura)
     logger.warning("Paso %s falló: %s", paso.value, motivo)
+    error: Dict[str, Any] = {"paso": paso.value, "motivo": motivo}
+    if subpaso:
+        error["subpaso"] = subpaso
+    if corr_segura:
+        error["correlacion"] = corr_segura
     reporter(
         EventoProgreso(
             estado=JobStatus.FALLIDO,
@@ -1180,7 +1413,10 @@ def _fallo(
             paso_actual=paso,
             porcentaje=porcentaje,
             mensaje=f"Falló el paso {paso.value}",
-            error={"paso": paso.value, "motivo": motivo},
+            error=error,
+            subpaso=subpaso,
+            evento_tipo="fallo",
+            correlacion=dict(correlacion) if correlacion else None,
         )
     )
     return ResultadoPipeline(exito=False, paso_fallido=paso, motivo=motivo)
