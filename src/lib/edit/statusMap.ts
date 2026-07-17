@@ -33,6 +33,95 @@ export interface MapEditorEstadoResult {
   error: { paso: string; motivo: string } | null;
 }
 
+// ---------------------------------------------------------------------------
+// End-to-end correlation tuple (spec `unir-step-hang`, Task 3.4)
+//
+// Every relevant progress event/log carries this correlation so a job at the
+// opaque 25% boundary is observable and classifiable end-to-end (design
+// "Correlation tuple", Req 2.5). It is state metadata only — NEVER video
+// content, and NEVER the numeric percentage used as state. All fields are
+// optional so the tuple degrades cleanly when a value is unknown (e.g. no
+// editorJobId yet, or version/revision not baked in a local build).
+// ---------------------------------------------------------------------------
+
+/** Identifiers that tie a progress observation to a concrete build/revision/job pair. */
+export interface EditCorrelation {
+  /** Build/display version identifier (getAppVersion().version). */
+  version?: string;
+  /** Cloud Run revision name (K_REVISION), server-side diagnostics only. */
+  revision?: string;
+  /** Generator-side edit job id. */
+  editJobId?: string;
+  /** Editor-side (FastAPI) job id, when assigned. */
+  editorJobId?: string;
+}
+
+/**
+ * Builds the correlation tuple from the pieces available during reconciliation.
+ * Only truthy fields are included so the result is byte-for-byte minimal and a
+ * missing editorJobId/version/revision simply omits that key.
+ */
+export function buildCorrelation(params: {
+  editJobId: string;
+  editorJobId?: string | null;
+  version?: string | null;
+  revision?: string | null;
+}): EditCorrelation {
+  const correlation: EditCorrelation = { editJobId: params.editJobId };
+  if (params.editorJobId) correlation.editorJobId = params.editorJobId;
+  if (params.version) correlation.version = params.version;
+  if (params.revision) correlation.revision = params.revision;
+  return correlation;
+}
+
+// ---------------------------------------------------------------------------
+// Differentiated reconciliation events (spec `unir-step-hang`, Task 3.5)
+//
+// Each reconcile tick maps the resulting job status (+ any terminal error) to a
+// DISTINGUISHABLE, structured event kind, so the last confirmed reconciliation
+// event localizes a stall into exactly one of the design's categories A/B/C/D:
+// a reached-but-un-propagated pause surfaces as `reconcile_awaiting_silences`
+// (category C) and a lost editor job as `editor_state_lost` (category C via the
+// EDITOR_STATE_LOST path). It carries no video content — only the event kind.
+// ---------------------------------------------------------------------------
+
+/** Structured reconcile event kinds (mirrors the Python `evento_tipo`). */
+export type ReconcileEventType =
+  | "reconcile_awaiting_silences"
+  | "reconcile_awaiting_subtitles"
+  | "reconcile_awaiting_final_render"
+  | "reconcile_completed"
+  | "editor_state_lost"
+  | "status_mapping_failed"
+  | "reconcile_failed"
+  | "reconcile_progress";
+
+/**
+ * Maps a reconciled job status (and any terminal error) to a differentiated
+ * reconcile event kind. Pure and total: every status yields exactly one kind.
+ */
+export function reconcileEventForStatus(
+  status: EditJobStatus,
+  error?: { paso?: string; motivo?: string } | null,
+): ReconcileEventType {
+  switch (status) {
+    case "awaiting_silences":
+      return "reconcile_awaiting_silences";
+    case "awaiting_subtitles":
+      return "reconcile_awaiting_subtitles";
+    case "awaiting_final_render":
+      return "reconcile_awaiting_final_render";
+    case "completed":
+      return "reconcile_completed";
+    case "failed":
+      if (error?.paso === "EDITOR_STATE_LOST") return "editor_state_lost";
+      if (error?.paso === "STATUS_MAPPING") return "status_mapping_failed";
+      return "reconcile_failed";
+    default:
+      return "reconcile_progress";
+  }
+}
+
 /**
  * Maps an editor estado string to the normalized EditJobStatus.
  *

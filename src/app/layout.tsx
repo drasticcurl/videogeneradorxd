@@ -3,6 +3,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE } from "@/lib/auth";
 import { VersionBanner } from "@/components/VersionBanner";
+import { getAppVersion } from "@/lib/version";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,6 +19,11 @@ export default function RootLayout({
 }) {
   // Mostramos "Salir" solo si hay una cookie de sesión (auth activa y logueado).
   const hasSession = Boolean(cookies().get(AUTH_COOKIE)?.value);
+  // Deployment identity: the exact manual identifier baked at build time, shown
+  // beside the title so the live build/revision is unambiguous (coherent with
+  // GET /api/version for the same build). The bottom-right VersionBanner is kept
+  // unchanged. (spec `unir-step-hang`, Property 3.)
+  const { identifier: appIdentifier } = getAppVersion();
   return (
     <html lang="es">
       <body className="min-h-screen">
@@ -28,6 +34,13 @@ export default function RootLayout({
                 A
               </span>
               <span>AUGC Pipeline</span>
+              <span
+                className="font-mono text-xs font-normal text-slate-400"
+                title="Identificador de despliegue (coherente con /api/version)"
+                data-testid="deployment-identifier"
+              >
+                {appIdentifier}
+              </span>
             </Link>
             <nav className="flex items-center gap-4 text-sm text-slate-300">
               <Link href="/" className="hover:text-white">

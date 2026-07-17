@@ -18,6 +18,7 @@ ffprobe / auto-editor ni del paquete faster-whisper instalado).
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
 import subprocess
@@ -35,8 +36,10 @@ from app.deps.checker import (
     DependenciasFaltantesError,
     ResultadoVerificacion,
     comprobar_binario,
+    comprobar_binario_version,
     verificar_dependencias,
 )
+from app.engine.proc import ComandoTimeoutError, ResultadoComando
 from app.deps import path_setup
 from app.deps.path_setup import (
     RUTAS_LOCALES_MACOS,
@@ -247,8 +250,10 @@ def test_comprobador_por_defecto_usa_shutil_which_ausente(monkeypatch) -> None:
 
 
 def test_verificacion_completa_rapida_con_which(monkeypatch) -> None:
-    """Con los comprobadores por defecto (which + find_spec), la verificación
-    completa es prácticamente instantánea y NO agota el presupuesto de 10 s."""
+    """Con los comprobadores por defecto (which + `-version` + find_spec), la
+    verificación completa es prácticamente instantánea y NO agota el presupuesto
+    de 10 s. El preflight de ffmpeg/ffprobe se acota con un ejecutor inyectado
+    (sin binarios reales)."""
     # ffmpeg/ffprobe/auto-editor -> presentes vía which; faster_whisper -> import.
     monkeypatch.setattr(
         "app.deps.checker.shutil.which",
@@ -257,6 +262,16 @@ def test_verificacion_completa_rapida_con_which(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.deps.checker.importlib.util.find_spec",
         lambda modulo: object(),
+    )
+    # El preflight de ffmpeg/ffprobe ejecuta `-version`; se sustituye el ejecutor
+    # real por un doble instantáneo que informa una versión (sin subprocess real).
+    monkeypatch.setattr(
+        "app.deps.checker.ejecutar_comando",
+        lambda args, timeout=None: ResultadoComando(
+            returncode=0,
+            stdout=f"{os.path.basename(args[0])} version 6.1.1\n",
+            args=list(args),
+        ),
     )
 
     inicio = time.monotonic()
@@ -492,3 +507,195 @@ def test_preparar_auto_editor_compone_permisos_y_confianza(monkeypatch) -> None:
     preparar_auto_editor()
 
     assert orden == ["permisos", "confianza"]
+
+
+
+# ---------------------------------------------------------------------------
+# Tarea 3.3 (bugfix unir-step-hang): preflight de ffmpeg/ffprobe con versiones
+# Validates: Req 2.6 (Property 4 — Preflight & Deploy-Time Environment Verification)
+#
+# El preflight no solo LOCALIZA ffmpeg/ffprobe (shutil.which) sino que los
+# EJECUTA (`-version`) para capturar y registrar su versión en forma
+# estructurada; un fallo (ausente, no ejecutable, incompatible o timeout) marca
+# la dependencia como no utilizable y bloquea el arranque con un mensaje
+# accionable. Los comprobadores se inyectan (sin binarios reales).
+# ---------------------------------------------------------------------------
+def _runner_version(
+    salidas: Dict[str, str], returncode: int = 0
+):
+    """Crea un runner inyectable que simula ``<bin> -version`` sin binarios reales.
+
+    ``salidas`` mapea el nombre base del ejecutable a la salida estándar que
+    debe emitir su ``-version``.
+    """
+
+    def _run(args, timeout=None) -> ResultadoComando:
+        binario = os.path.basename(str(args[0]))
+        stdout = salidas.get(binario, f"{binario} version 0.0.0\n")
+        return ResultadoComando(returncode=returncode, stdout=stdout, args=list(args))
+
+    return _run
+
+
+def _comprobadores_con_preflight(
+    runner_ffmpeg, runner_ffprobe
+) -> Dict[str, Comprobador]:
+    """Comprobadores por defecto pero con preflight real (inyectado) de binarios."""
+    comprobadores = _comprobadores_desde_faltantes(set())
+    comprobadores["ffmpeg"] = comprobar_binario_version("ffmpeg", runner=runner_ffmpeg)
+    comprobadores["ffprobe"] = comprobar_binario_version(
+        "ffprobe", runner=runner_ffprobe
+    )
+    return comprobadores
+
+
+def test_preflight_registra_versiones_ffmpeg_ffprobe_en_exito(monkeypatch, caplog) -> None:
+    """En éxito, el preflight ejecuta ``-version`` y registra la versión de
+    ffmpeg y ffprobe de forma estructurada (Req 2.6)."""
+    monkeypatch.setattr(
+        "app.deps.checker.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+    )
+    runner = _runner_version(
+        {
+            "ffmpeg": "ffmpeg version 6.1.1 Copyright (c) 2000-2024 the FFmpeg developers\n",
+            "ffprobe": "ffprobe version 6.1.1 Copyright (c) 2007-2024 the FFmpeg developers\n",
+        }
+    )
+    comprobadores = _comprobadores_con_preflight(runner, runner)
+
+    with caplog.at_level(logging.INFO, logger="app.deps.checker"):
+        resultado = verificar_dependencias(comprobadores=comprobadores)
+
+    assert resultado.ok is True
+    assert resultado.debe_bloquear is False
+    texto = caplog.text
+    # Ambas versiones quedan registradas en forma estructurada (clave=valor).
+    assert "binario=ffmpeg version=6.1.1" in texto
+    assert "binario=ffprobe version=6.1.1" in texto
+
+
+def test_preflight_por_defecto_ejecuta_version(monkeypatch, caplog) -> None:
+    """Los comprobadores por defecto ejecutan realmente ``<bin> -version`` a
+    través del ejecutor acotado (monkepatcheado) y registran la versión."""
+    monkeypatch.setattr(
+        "app.deps.checker.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+    )
+    monkeypatch.setattr(
+        "app.deps.checker.importlib.util.find_spec", lambda modulo: object()
+    )
+    llamadas: List[List[str]] = []
+
+    def _fake_ejecutar(args, timeout=None) -> ResultadoComando:
+        llamadas.append(list(args))
+        return ResultadoComando(
+            returncode=0,
+            stdout=f"{os.path.basename(args[0])} version 7.0\n",
+            args=list(args),
+        )
+
+    monkeypatch.setattr("app.deps.checker.ejecutar_comando", _fake_ejecutar)
+
+    with caplog.at_level(logging.INFO, logger="app.deps.checker"):
+        resultado = verificar_dependencias()
+
+    assert resultado.ok is True
+    # Se ejecutó `-version` para ambos binarios.
+    assert ["ffmpeg", "-version"] in llamadas
+    assert ["ffprobe", "-version"] in llamadas
+    assert "version=7.0" in caplog.text
+
+
+def test_preflight_bloquea_si_binario_ausente(monkeypatch) -> None:
+    """Si ffmpeg no se encuentra en el PATH efectivo, se marca no utilizable y
+    el arranque se bloquea con un mensaje accionable que lo nombra (Req 2.6)."""
+
+    def _which(cmd: str):
+        return None if cmd == "ffmpeg" else f"/usr/bin/{cmd}"
+
+    monkeypatch.setattr("app.deps.checker.shutil.which", _which)
+    runner = _runner_version({"ffprobe": "ffprobe version 6.1.1\n"})
+    comprobadores = _comprobadores_con_preflight(runner, runner)
+
+    resultado = verificar_dependencias(comprobadores=comprobadores)
+
+    assert "ffmpeg" in resultado.faltantes
+    assert resultado.debe_bloquear is True
+    # El mensaje del error de arranque nombra la dependencia no utilizable.
+    error = DependenciasFaltantesError(resultado.faltantes)
+    assert "ffmpeg" in str(error)
+
+
+def test_preflight_bloquea_si_version_incompatible(monkeypatch) -> None:
+    """Si ``-version`` devuelve un código de salida distinto de 0 (binario roto o
+    incompatible), la dependencia se marca no utilizable y bloquea (Req 2.6)."""
+    monkeypatch.setattr(
+        "app.deps.checker.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+    )
+
+    def _run_incompatible(args, timeout=None) -> ResultadoComando:
+        return ResultadoComando(
+            returncode=1,
+            stderr="Unrecognized option '-version'\n",
+            args=list(args),
+        )
+
+    runner_ok = _runner_version({"ffprobe": "ffprobe version 6.1.1\n"})
+    comprobadores = _comprobadores_con_preflight(_run_incompatible, runner_ok)
+
+    resultado = verificar_dependencias(comprobadores=comprobadores)
+
+    ffmpeg = next(r for r in resultado.resultados if r.nombre == "ffmpeg")
+    assert ffmpeg.disponible is False
+    assert "ffmpeg" in resultado.faltantes
+    assert resultado.debe_bloquear is True
+
+
+def test_preflight_timeout_marca_no_utilizable_y_bloquea(monkeypatch) -> None:
+    """Un ``ComandoTimeoutError`` al ejecutar ``-version`` marca la dependencia
+    como no utilizable y bloquea el arranque (Req 2.6, reutilizando el ejecutor
+    acotado)."""
+    monkeypatch.setattr(
+        "app.deps.checker.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+    )
+
+    def _run_colgado(args, timeout=None) -> ResultadoComando:
+        raise ComandoTimeoutError(list(args), float(timeout or 60.0), "colgado")
+
+    runner_ok = _runner_version({"ffprobe": "ffprobe version 6.1.1\n"})
+    comprobadores = _comprobadores_con_preflight(_run_colgado, runner_ok)
+
+    resultado = verificar_dependencias(comprobadores=comprobadores)
+
+    ffmpeg = next(r for r in resultado.resultados if r.nombre == "ffmpeg")
+    assert ffmpeg.disponible is False
+    assert "ffmpeg" in resultado.faltantes
+    assert resultado.debe_bloquear is True
+
+
+def test_preflight_usa_plazo_probe(monkeypatch) -> None:
+    """El preflight reenvía un plazo de tamaño *probe* (acotado a
+    ``VSE_PROBE_TIMEOUT_S`` y al presupuesto restante) al ejecutar ``-version``."""
+    monkeypatch.setattr(
+        "app.deps.checker.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+    )
+    plazos: List[float] = []
+
+    def _run(args, timeout=None) -> ResultadoComando:
+        plazos.append(timeout)
+        return ResultadoComando(
+            returncode=0, stdout="ffmpeg version 6.1.1\n", args=list(args)
+        )
+
+    comprobar = comprobar_binario_version("ffmpeg", runner=_run)
+    # Presupuesto restante amplio => se usa VSE_PROBE_TIMEOUT_S íntegro.
+    assert comprobar(config.VSE_PROBE_TIMEOUT_S * 10) is True
+    assert plazos and plazos[0] == config.VSE_PROBE_TIMEOUT_S
+
+
+def test_extraer_version_binario_parsea_primera_linea() -> None:
+    """El extractor devuelve el token de versión de la primera línea de salida."""
+    from app.deps.checker import _extraer_version_binario
+
+    salida = "ffmpeg version 6.1.1 Copyright (c) 2000-2024\nbuilt with clang\n"
+    assert _extraer_version_binario(salida) == "6.1.1"
+    assert _extraer_version_binario("") == "desconocida"

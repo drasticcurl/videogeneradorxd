@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import re
 import shutil
 import subprocess
 import time
@@ -46,6 +47,12 @@ from typing import Callable, Dict, List, Mapping, Optional
 
 from app import config
 from app.deps.path_setup import asegurar_path_local
+from app.engine.proc import (
+    ComandoTimeoutError,
+    Runner,
+    ejecutar_comando,
+    invocar_runner,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +165,117 @@ def comprobar_binario(comando: str) -> Comprobador:
     return _comprobar
 
 
+def _extraer_version_binario(salida: str) -> str:
+    """Extrae una cadena de versión legible de la salida de ``<bin> -version``.
+
+    ``ffmpeg``/``ffprobe`` emiten en su primera línea algo como
+    ``ffmpeg version 6.1.1 Copyright (c) ...``. Se devuelve el token que sigue a
+    ``version`` cuando existe; en su defecto, la primera línea no vacía; y si no
+    hay salida, ``"desconocida"``.
+    """
+    primera = ""
+    for linea in (salida or "").splitlines():
+        if linea.strip():
+            primera = linea.strip()
+            break
+    if not primera:
+        return "desconocida"
+    coincidencia = re.search(r"version\s+(\S+)", primera, re.IGNORECASE)
+    if coincidencia:
+        return coincidencia.group(1)
+    return primera
+
+
+def comprobar_binario_version(
+    comando: str,
+    runner: Optional[Runner] = None,
+    timeout: Optional[float] = None,
+) -> Comprobador:
+    """Crea un comprobador que localiza ``comando`` **y además lo ejecuta** (``-version``).
+
+    A diferencia de :func:`comprobar_binario` (que solo localiza el ejecutable
+    con :func:`shutil.which`), este comprobador —pensado para ``ffmpeg`` y
+    ``ffprobe`` (bugfix ``unir-step-hang``, Req 2.6)— verifica que el binario
+    esté realmente **presente y sea ejecutable en el entorno efectivo** de la
+    revisión, ejecutando ``<comando> -version`` a través del ejecutor acotado
+    :func:`app.engine.proc.ejecutar_comando` (mismo mecanismo de ``Popen`` con
+    ``stdin`` nulo, drenaje concurrente y plazo). Cuando tiene éxito, **captura y
+    registra la versión en forma estructurada**; ante cualquier fallo (no
+    encontrado, no ejecutable, código de salida distinto de 0, o timeout) marca
+    la dependencia como **no utilizable** devolviendo ``False``.
+
+    El plazo de ejecución es de tamaño *probe* y reutiliza el existente
+    :data:`app.config.VSE_PROBE_TIMEOUT_S`, acotado además al presupuesto de
+    tiempo restante de la verificación global.
+
+    El ``runner`` es **inyectable** (por defecto :func:`ejecutar_comando`,
+    resuelto en tiempo de llamada para poder mockearlo), de modo que los tests no
+    dependan de los binarios reales.
+    """
+
+    def _comprobar(timeout_restante: float) -> bool:
+        ruta = shutil.which(comando)
+        if ruta is None:
+            logger.error(
+                "Preflight '%s': ejecutable no encontrado en el PATH efectivo; "
+                "dependencia no utilizable.",
+                comando,
+            )
+            return False
+
+        ejecutor: Runner = runner if runner is not None else ejecutar_comando
+        # Plazo tipo "probe" (Req 2.6): reutiliza VSE_PROBE_TIMEOUT_S y se acota
+        # al presupuesto de tiempo restante de la verificación global.
+        plazo = timeout if timeout is not None else config.VSE_PROBE_TIMEOUT_S
+        if timeout_restante and timeout_restante > 0:
+            plazo = min(plazo, timeout_restante)
+
+        try:
+            resultado = invocar_runner(ejecutor, [comando, "-version"], timeout=plazo)
+        except ComandoTimeoutError as exc:
+            logger.error(
+                "Preflight '%s': la ejecución de '-version' superó el plazo de "
+                "%.1f s y fue terminada; dependencia no utilizable (%s).",
+                comando,
+                plazo,
+                exc,
+            )
+            return False
+        except (FileNotFoundError, OSError) as exc:
+            logger.error(
+                "Preflight '%s': no se pudo ejecutar '-version' (%s); "
+                "dependencia no utilizable.",
+                comando,
+                exc,
+            )
+            return False
+
+        if not getattr(resultado, "ok", resultado.returncode == 0):
+            cola = (resultado.stderr or resultado.stdout or "").strip()[-300:]
+            logger.error(
+                "Preflight '%s': '-version' devolvió código %d; binario no "
+                "utilizable o incompatible%s.",
+                comando,
+                resultado.returncode,
+                f" | {cola}" if cola else "",
+            )
+            return False
+
+        version = _extraer_version_binario(resultado.stdout or resultado.stderr or "")
+        # Registro estructurado de la versión capturada (Req 2.6): clave=valor
+        # legible por humanos y fácil de correlacionar en logs.
+        logger.info(
+            "Preflight '%s' disponible | binario=%s version=%s ruta=%s",
+            comando,
+            comando,
+            version,
+            ruta,
+        )
+        return True
+
+    return _comprobar
+
+
 def comprobar_importable(modulo: str) -> Comprobador:
     """Crea un comprobador de importabilidad de un módulo Python.
 
@@ -175,8 +293,11 @@ def comprobar_importable(modulo: str) -> Comprobador:
 def _comprobadores_por_defecto() -> Dict[str, Comprobador]:
     """Devuelve el mapeo de comprobadores reales para producción."""
     return {
-        DEP_FFMPEG: comprobar_binario("ffmpeg"),
-        DEP_FFPROBE: comprobar_binario("ffprobe"),
+        # ffmpeg/ffprobe: además de localizarse, se EJECUTAN (`-version`) para
+        # verificar que son utilizables en el entorno efectivo y registrar su
+        # versión de forma estructurada (bugfix unir-step-hang, Req 2.6).
+        DEP_FFMPEG: comprobar_binario_version("ffmpeg"),
+        DEP_FFPROBE: comprobar_binario_version("ffprobe"),
         DEP_AUTO_EDITOR: comprobar_binario("auto-editor"),
         # faster-whisper se importa como ``faster_whisper``.
         DEP_FASTER_WHISPER: comprobar_importable("faster_whisper"),

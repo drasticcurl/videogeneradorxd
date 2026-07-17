@@ -101,19 +101,33 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     Cuando todas están disponibles, cede el control y la app comienza a servir
     peticiones (Req 12.5).
     """
+    # Revisión desplegada para correlacionar el fallo de arranque (server-side
+    # only, sin exponer secretos): en Cloud Run el nombre de la revisión llega
+    # en K_REVISION (bugfix unir-step-hang, Req 2.5/2.6).
+    revision = os.environ.get("K_REVISION", "desconocida")
+
     resultado = verificar_dependencias()
     if resultado.debe_bloquear:
         faltantes = resultado.faltantes
+        # Fallo accionable y correlacionado (Req 2.6): identifica la revisión y,
+        # por nombre, cada dependencia faltante o no utilizable. Se lanza ANTES
+        # de ceder el control (yield), de modo que el Backend NO llega a servir
+        # peticiones ni publica resultados parciales.
         logger.error(
-            "No se puede iniciar el Backend: faltan dependencias requeridas: %s",
+            "No se puede iniciar el Backend [revision=%s]: faltan o no son "
+            "utilizables dependencias requeridas: %s",
+            revision,
             ", ".join(faltantes),
         )
-        # Pista accionable para resolver cada tipo de dependencia (Req 12.4).
+        # Pista accionable para resolver cada tipo de dependencia (Req 12.4, 2.6).
         binarios = {"ffmpeg", "ffprobe"}
         if binarios.intersection(faltantes):
             logger.error(
-                "  - Para ffmpeg/ffprobe instala ffmpeg con Homebrew: "
-                "`brew install ffmpeg`."
+                "  - ffmpeg/ffprobe deben estar instalados y ser EJECUTABLES: el "
+                "preflight ejecuta `-version` y registra su versión. Instala "
+                "ffmpeg (p. ej. `brew install ffmpeg` o el paquete del sistema) y "
+                "verifica que `ffmpeg -version` / `ffprobe -version` respondan "
+                "correctamente en esta revisión."
             )
         if "auto-editor" in faltantes or "faster-whisper" in faltantes:
             logger.error(
