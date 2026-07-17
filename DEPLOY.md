@@ -17,6 +17,16 @@ Resumen del diseño en la nube:
 - **Editor de video**: ffmpeg, ffprobe, libass, auto-editor y faster-whisper están incluidos en
   la imagen combinada. El ingress de Next.js se inicia solo después de que `/salud` confirme
   que FastAPI y sus dependencias están listos, con un plazo máximo de 60 segundos.
+- **Modelo de transcripción (whisper) horneado / offline**: el modelo faster-whisper `small`
+  (`Systran/faster-whisper-small`) se **pre-descarga en build-time** dentro de la imagen
+  (`/opt/models/faster-whisper/small`). En runtime se corre **100% offline**
+  (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, `VSE_WHISPER_MODEL_DIR=/opt/models/faster-whisper`),
+  de modo que el paso TRANSCRIBIR **nunca** consulta HuggingFace. Esto evita el fallo por rate
+  limit `429 Too Many Requests` del Hub (y los cuelgues sin salida a internet) que aparecía al
+  activar subtítulos en Cloud Run. Si se cambia el modelo en ajustes a **otro no horneado**,
+  habría que hornear también ese modelo en el Dockerfile (o quitar el modo offline y proveer un
+  `HF_TOKEN` con acceso al Hub). Si la descarga falla en el build, el build falla (te enterás en
+  build-time, no en runtime).
 
 ---
 
@@ -139,6 +149,7 @@ commit desde la configuración del trigger).
 | `VSE_WORKDIR` | `/shared/editor-workdir` | temporales del pipeline de edición |
 | `VSE_OUTPUT` | `/mnt/gcs/output/edit-output` | copia durable producida por FastAPI (`edit-output/<editJobId>/final.mp4`) |
 | `EDITOR_BASE_URL` | `http://127.0.0.1:8000` | editor interno, sin ingress público |
+| `VSE_SILENCE_AUTO_APPLY` | *(sin setear)* | auto-aplica los silencios detectados sin pausar por edición manual. Truthy (`1`/`true`/`yes`) → siempre auto-aplica; falsy explícito → siempre pausa. Si NO se setea, usa `EDIT_MODE` como default (en `cloud` auto-aplica, en `local` pausa). Evita el cuelgue indefinido al 25 % cuando "cortar silencios" está activado en Cloud Run |
 | `PIPELINE_AUTO_APPROVE` | `true`/`false` | aprobar jobs solos (opcional) |
 | `APP_PASSWORD` | tu contraseña | activa el login de la app (ver §4) |
 | `APP_AUTH_SECRET` | hex aleatorio largo | firma de la sesión (ver §4) |

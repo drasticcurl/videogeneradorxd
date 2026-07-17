@@ -255,6 +255,30 @@ class JobRunner:
                     correlacion,
                 )
                 limpiar = False
+                # Bugfix (cloud-silencios-cuelga-25): en modo cloud (o bajo el
+                # flag ``VSE_SILENCE_AUTO_APPLY``) NO se pausa esperando la
+                # edición manual del timeline de silencios —que el flujo integrado
+                # de Cloud Run no surface ni reanuda, provocando la espera infinita
+                # al 25 %—. En su lugar se AUTO-APLICAN los tramos detectados y se
+                # continúa el pipeline de inmediato reanudando de forma
+                # **síncrona** (``reanudar_silencios_job`` es un método síncrono;
+                # ya corremos en un hilo del executor, así que no hace falta bucle
+                # de eventos ni ``lanzar_reanudacion_silencios``). En modo
+                # local/standalone (flag falsy) se conserva la pausa manual.
+                if config.silence_auto_apply():
+                    logger.info(
+                        "runner subpaso evento_tipo=auto_aplicar_silencios "
+                        "estado=en_ejecucion tramos=%d correlacion=%s",
+                        len(resultado.silencios)
+                        if resultado.silencios is not None
+                        else 0,
+                        correlacion,
+                    )
+                    # El workdir lo gestiona ``reanudar_silencios_job`` (conserva
+                    # en pausa, limpia solo ante fallo); aquí no se limpia.
+                    return self.reanudar_silencios_job(
+                        job_id, resultado.silencios or []
+                    )
                 return resultado
             if resultado.pendiente_revision:
                 # Pausa por revisión manual: guardar grupos + video cortado y

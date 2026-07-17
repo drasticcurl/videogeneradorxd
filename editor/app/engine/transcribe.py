@@ -135,8 +135,43 @@ def _modelo_factory_por_defecto(modelo: str) -> Any:
 
     Se importa faster-whisper de forma diferida para no exigir la biblioteca al
     importar este módulo (los tests inyectan su propia fábrica).
+
+    **Modo offline (Cloud Run):** si ``config.WHISPER_MODEL_DIR`` está seteado
+    (variable de entorno ``VSE_WHISPER_MODEL_DIR``), el modelo se resuelve DESDE
+    el directorio local horneado en la imagen y **nunca** se consulta HuggingFace
+    en runtime (``local_files_only=True``). Esto evita el fallo del paso
+    TRANSCRIBIR por rate limit 429 del Hub y los cuelgues sin salida a internet.
+    Se prefiere pasar la ruta local concreta del modelo (``<dir>/<modelo>``)
+    cuando existe; si no, se usa el directorio como ``download_root`` con
+    ``local_files_only=True``.
+
+    **Modo local/dev:** si ``WHISPER_MODEL_DIR`` está vacío se conserva el
+    comportamiento previo (faster-whisper descarga/usa su caché del Hub).
     """
     from faster_whisper import WhisperModel  # import diferido
+
+    model_dir = (getattr(config, "WHISPER_MODEL_DIR", "") or "").strip()
+    if model_dir:
+        # Modo offline: resolver el modelo desde el directorio horneado local.
+        ruta_modelo = Path(model_dir) / modelo
+        if ruta_modelo.is_dir():
+            # El modelo concreto ya vive en ``<dir>/<modelo>``: se pasa su ruta
+            # local directamente (faster-whisper la usa tal cual, sin Hub).
+            return WhisperModel(
+                str(ruta_modelo),
+                device="cpu",
+                compute_type="int8",
+                local_files_only=True,
+            )
+        # Respaldo: usar el directorio como raíz de descarga/caché, pero forzando
+        # que solo se usen archivos locales (nunca red).
+        return WhisperModel(
+            modelo,
+            device="cpu",
+            compute_type="int8",
+            download_root=model_dir,
+            local_files_only=True,
+        )
 
     return WhisperModel(modelo, device="cpu", compute_type="int8")
 
