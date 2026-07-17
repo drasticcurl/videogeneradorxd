@@ -227,6 +227,12 @@ class Ajustes(BaseModel):
     transcripcion: AjustesTranscripcion = Field(default_factory=AjustesTranscripcion)
     subtitulos: AjustesSubtitulos = Field(default_factory=AjustesSubtitulos)
     musica: Optional[AjustesMusica] = Field(default=None)
+    # Edición manual por Job (opt-in): cuando es ``True``, el runner NO
+    # auto-avanza las pausas manuales del editor (silencios, revisión de
+    # subtítulos y edición final/render) para este Job, incluso en modo cloud,
+    # de modo que el usuario pueda editar. Por defecto ``False`` para NO alterar
+    # el comportamiento automático actual (en cloud las pausas se auto-avanzan).
+    edicion_manual: bool = Field(default=False)
     # Nuevas capacidades (spec subtitulos-ia-remotion): corrección con IA
     # (opt-in) y ajustes del motor de render. Se añaden con default_factory para
     # mantener compatibilidad hacia atrás con configuraciones ya persistidas.
