@@ -327,18 +327,23 @@ function EditProgress({ editJobId }: EditProgressProps) {
           </a>
         </div>
       ) : isFailed ? (
-        <div className="rounded-md bg-red-500/10 border border-red-600/40 px-3 py-2 text-xs text-red-300 space-y-1">
-          {progress.error ? (
-            <>
-              <div className="font-semibold">Error en el paso: {progress.error.paso}</div>
-              <div className="text-slate-400">Motivo:</div>
-              <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-red-200">
-                {progress.error.motivo}
-              </pre>
-            </>
-          ) : (
-            <div className="whitespace-pre-wrap break-words">Error: {progress.mensaje}</div>
-          )}
+        <div className="space-y-3">
+          <div className="rounded-md bg-red-500/10 border border-red-600/40 px-3 py-2 text-xs text-red-300 space-y-1">
+            {progress.error ? (
+              <>
+                <div className="font-semibold">Error en el paso: {progress.error.paso}</div>
+                <div className="text-slate-400">Motivo:</div>
+                <pre className="whitespace-pre-wrap break-words font-mono text-[11px] text-red-200">
+                  {progress.error.motivo}
+                </pre>
+              </>
+            ) : (
+              <div className="whitespace-pre-wrap break-words">Error: {progress.mensaje}</div>
+            )}
+          </div>
+          {/* El registro del pipeline se conserva visible tras el fallo para
+              ver la secuencia completa (paso a paso) que llevó al error. */}
+          {logPanel}
         </div>
       ) : (
         // queued | uploading | running → live progress bar
