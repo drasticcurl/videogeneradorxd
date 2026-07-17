@@ -44,6 +44,7 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
   const [source, setSource] = useState<SourceType>("clips");
   const [silenceCut, setSilenceCut] = useState(true);
   const [subtitles, setSubtitles] = useState(true);
+  const [editManual, setEditManual] = useState(false);
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +60,7 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
         options: {
           silenceCut,
           subtitles,
+          editManual,
           ...(source === "clips"
             ? { ordering: clipIds.map((id, i) => ({ index: i, clipId: id, isBroll: false })) }
             : {}),
@@ -94,7 +96,7 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
     } finally {
       setLaunching(false);
     }
-  }, [projectId, source, clipIds, silenceCut, subtitles, musicFile]);
+  }, [projectId, source, clipIds, silenceCut, subtitles, editManual, musicFile]);
 
   if (editJobId) {
     return <EditProgress editJobId={editJobId} />;
@@ -158,6 +160,21 @@ export function EditPanel({ projectId, clipIds, hasFinal }: EditPanelProps) {
             Subtítulos
           </label>
         </div>
+        <label className="flex items-start gap-2 text-xs text-slate-300">
+          <input
+            type="checkbox"
+            checked={editManual}
+            onChange={(e) => setEditManual(e.target.checked)}
+            className="mt-0.5 rounded"
+          />
+          <span>
+            Editar manualmente (silencios, subtítulos y render)
+            <span className="mt-0.5 block text-slate-500">
+              Pausa el proceso para que ajustes los cortes, revises los
+              subtítulos y elijas el render.
+            </span>
+          </span>
+        </label>
       </div>
 
       {/* Music upload */}

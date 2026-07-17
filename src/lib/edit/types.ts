@@ -75,6 +75,13 @@ export interface EditOptions {
   silenceCut: boolean;
   /** Enable subtitle generation (TRANSCRIBIR + SUBTÍTULOS). */
   subtitles: boolean;
+  /**
+   * Enable manual editing for this job. When true, the editor pauses at each
+   * manual step (silences, subtitle review, final render) so the user can edit
+   * — even in cloud mode. Maps to the editor's `edicion_manual` Ajustes field.
+   * Defaults to false (fully automatic in cloud).
+   */
+  editManual?: boolean;
   /** Optional music track identifier (from uploaded bank or new upload). */
   musicTrackId?: string;
   /** Explicit clip ordering. If omitted, clips are used in their natural order. */

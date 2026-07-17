@@ -77,6 +77,7 @@ const EDITOR_DEFAULTS = {
     motor_preferido: "ass",
     combine_tokens_ms: 1200,
   },
+  edicion_manual: false,
 } as const;
 
 /**
@@ -129,10 +130,15 @@ export function buildAjustes(opts: BuildAjustesOptions): Record<string, unknown>
     musica: null,
     revision_ia: { ...EDITOR_DEFAULTS.revision_ia },
     render: { ...EDITOR_DEFAULTS.render },
+    edicion_manual: EDITOR_DEFAULTS.edicion_manual,
   };
 
   // Apply silence-cut toggle (Req 2.1)
   (ajustes.silencios as Record<string, unknown>).activado = editOptions.silenceCut;
+
+  // Apply per-job manual-edit toggle. When true, the editor pauses at each
+  // manual step (silences, subtitle review, final render) even in cloud mode.
+  ajustes.edicion_manual = editOptions.editManual === true;
 
   // Apply subtitles toggle (Req 2.1) — when disabled, we still include the
   // section with defaults but the pipeline will skip subtitle steps if there's

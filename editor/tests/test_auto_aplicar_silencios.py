@@ -267,3 +267,51 @@ def test_silence_auto_apply_env_ausente_local(monkeypatch) -> None:
     monkeypatch.delenv("VSE_SILENCE_AUTO_APPLY", raising=False)
     monkeypatch.delenv("EDIT_MODE", raising=False)
     assert config.silence_auto_apply() is False
+
+
+
+# ===========================================================================
+# (4) Edición manual por Job: fuerza la pausa aun en modo cloud
+# ===========================================================================
+def test_edicion_manual_fuerza_pausa_silencios_en_cloud(monkeypatch) -> None:
+    """Con modo cloud (auto-apply activo por defecto) pero ``ajustes.edicion_manual
+    =True``, un job con silencios activados DEBE pausar en
+    ESPERANDO_EDICION_SILENCIOS (no se auto-aplica), para que el usuario edite los
+    cortes. El control con ``edicion_manual=False`` conserva el auto-avance."""
+    monkeypatch.setenv("EDIT_MODE", "cloud")
+    manager = JobManager()
+
+    # (a) edicion_manual=True → se fuerza la pausa manual de silencios.
+    dobles_manual = _Dobles(silencios=[(1.0, 2.0)], duracion=10.0)
+    runner_manual = _runner(manager, dobles_manual)
+    ajustes_manual = _ajustes(silencios_activado=True, revisar=False)
+    ajustes_manual.edicion_manual = True
+    manager.crear_job("job-manual", ["c1"], ajustes_manual, workdir="wd")
+
+    resultado_manual = runner_manual.ejecutar_job("job-manual")
+
+    assert resultado_manual.pendiente_edicion_silencios is True
+    assert (
+        manager.obtener("job-manual").progreso.estado
+        == JobStatus.ESPERANDO_EDICION_SILENCIOS
+    )
+    # NO se auto-aplicó el corte.
+    assert dobles_manual.tramos_aplicados is None
+    assert "APLICAR" not in dobles_manual.llamadas
+
+    # (b) Control: edicion_manual=False → auto-avanza como hasta hoy (no se
+    # queda en la pausa de silencios).
+    dobles_auto = _Dobles(silencios=[(1.0, 2.0)], duracion=10.0)
+    runner_auto = _runner(manager, dobles_auto)
+    ajustes_auto = _ajustes(silencios_activado=True, revisar=False)
+    ajustes_auto.edicion_manual = False
+    manager.crear_job("job-auto2", ["c1"], ajustes_auto, workdir="wd")
+
+    resultado_auto = runner_auto.ejecutar_job("job-auto2")
+
+    assert resultado_auto.pendiente_edicion_silencios is False
+    assert (
+        manager.obtener("job-auto2").progreso.estado
+        != JobStatus.ESPERANDO_EDICION_SILENCIOS
+    )
+    assert dobles_auto.tramos_aplicados == [(1.0, 2.0)]

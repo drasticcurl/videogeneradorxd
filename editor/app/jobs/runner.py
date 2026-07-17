@@ -293,7 +293,14 @@ class JobRunner:
                     # los tramos detectados y se continúa reanudando de forma
                     # **síncrona** (ya corremos en un hilo del executor). En modo
                     # local/standalone (flag falsy) se conserva la pausa manual.
-                    if not config.silence_auto_apply():
+                    #
+                    # Edición manual por Job: si ``ajustes.edicion_manual`` es
+                    # ``True`` se FUERZA la pausa (aun en cloud) para que el
+                    # usuario edite los cortes de silencio en el timeline.
+                    if not (
+                        config.silence_auto_apply()
+                        and not job_state.ajustes.edicion_manual
+                    ):
                         return resultado
                     if iteraciones >= MAX_AUTO_AVANCE_ITERS:
                         # Guarda anti-loop: se deja el Job en la pausa persistida.
@@ -332,7 +339,14 @@ class JobRunner:
                     # Auto-avance de la revisión (bugfix cloud-edicion-final-cuelga-80):
                     # se aprueban los grupos tal cual y se reanuda hacia la edición
                     # final. En local se conserva la pausa manual.
-                    if not config.auto_avanzar_edicion():
+                    #
+                    # Edición manual por Job: si ``ajustes.edicion_manual`` es
+                    # ``True`` se FUERZA la pausa (aun en cloud) para que el
+                    # usuario revise/corrija los subtítulos a mano.
+                    if not (
+                        config.auto_avanzar_edicion()
+                        and not job_state.ajustes.edicion_manual
+                    ):
                         return resultado
                     if iteraciones >= MAX_AUTO_AVANCE_ITERS:
                         logger.warning(
@@ -374,7 +388,14 @@ class JobRunner:
                     # presente en la imagen y ffmpeg/libass sí lo están) vía
                     # ``reanudar_render_job``, que gestiona su propio cleanup al
                     # terminar. En local se conserva la pausa manual.
-                    if not config.auto_avanzar_edicion():
+                    #
+                    # Edición manual por Job: si ``ajustes.edicion_manual`` es
+                    # ``True`` se FUERZA la pausa (aun en cloud) para que el
+                    # usuario ajuste la previsualización y elija el render.
+                    if not (
+                        config.auto_avanzar_edicion()
+                        and not job_state.ajustes.edicion_manual
+                    ):
                         return resultado
                     if iteraciones >= MAX_AUTO_AVANCE_ITERS:
                         logger.warning(
