@@ -95,7 +95,7 @@ COPY editor ./editor
 # Build tiene red), de modo que renderMedia lo encuentra automáticamente en
 # runtime (misma etapa/usuario) sin depender de descargas al arrancar.
 COPY remotion ./remotion
-RUN cd remotion && npm ci && npx remotion browser ensure
+RUN cd remotion && npm ci && node ensure-browser.mjs
 COPY scripts/start-combined.sh ./scripts/start-combined.sh
 RUN chmod 0755 ./scripts/start-combined.sh \
     && mkdir -p /shared /shared/editor-workdir
