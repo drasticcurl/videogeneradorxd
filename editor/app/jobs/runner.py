@@ -208,6 +208,13 @@ class JobRunner:
         # Cuando el pipeline se pausa para la revisión manual de subtítulos NO se
         # limpia el workdir (los intermedios se necesitan al reanudar la fase 2).
         limpiar = True
+        # ``auto_avanzado`` marca que el runner encadenó al menos una reanudación
+        # (``reanudar_*``) para auto-avanzar una pausa. En ese caso el estado
+        # terminal (COMPLETADO/FALLIDO) y la limpieza del workdir ya los gestionó
+        # el propio método ``reanudar_*``, así que la finalización de este método
+        # NO debe repetir ``_complete_with_persisted_output``/``marcar_fallido``
+        # ni volver a limpiar (evita doble persistencia y doble cleanup).
+        auto_avanzado = False
         try:
             resultado = ejecutar_pipeline(
                 job_wd,
@@ -220,52 +227,83 @@ class JobRunner:
                 correlacion=correlacion,
                 **self._inyecciones,
             )
-            if resultado.pendiente_edicion_silencios:
-                # Pausa por edición manual de silencios (spec edicion-avanzada-shorts,
-                # Req 1.2, 1.3, 16.2): tras UNIR, el pipeline detectó los tramos de
-                # silencio sobre el vídeo **unido** (sin recortar) y se detuvo a la
-                # espera de que el usuario los edite en el timeline y confirme con
-                # ``POST /silencios/{id}``. Se persiste el estado
-                # ESPERANDO_EDICION_SILENCIOS con los tres artefactos que aporta el
-                # ``ResultadoPipeline`` (``unido``, ``silencios``, ``duracion_unido_s``)
-                # y NO se limpia el workdir (los intermedios se necesitan para
-                # aplicar los tramos y continuar al reanudar, Req 16.2, 16.3).
-                self.manager.marcar_esperando_edicion_silencios(
-                    job_id,
-                    str(resultado.unido) if resultado.unido is not None else "",
-                    resultado.silencios if resultado.silencios is not None else [],
-                    (
+            # ---------------------------------------------------------------
+            # Manejo de pausas con AUTO-AVANCE encadenado (bugfix
+            # ``cloud-edicion-final-cuelga-80``).
+            #
+            # El pipeline puede detenerse en una de las tres pausas manuales del
+            # editor (silencios → revisión → edición final/render). En modo
+            # cloud (o bajo los flags ``VSE_SILENCE_AUTO_APPLY`` /
+            # ``VSE_EDIT_AUTO_ADVANCE``) el flujo integrado de Cloud Run no
+            # surface ni reanuda esas pausas, por lo que el pipeline se colgaba
+            # al 25 % (silencios) o al 80 % (edición final). Para evitarlo, se
+            # persiste cada pausa como hasta ahora (contrato del JobManager) y,
+            # cuando corresponde auto-avanzar, se encadena la reanudación en un
+            # BUCLE controlado (con guarda anti-loop) hasta alcanzar un estado
+            # terminal (éxito, fallo, o una pausa que NO se auto-avanza).
+            #
+            # Orden real del flujo: silencios → (revisión opcional) → edición
+            # final → render → música → preservar → COMPLETADO.
+            #   * ``reanudar_silencios_job`` puede devolver ``pendiente_revision``
+            #     o ``pendiente_eleccion_render``.
+            #   * ``reanudar_job`` (revisión) devuelve ``pendiente_eleccion_render``.
+            #   * ``reanudar_render_job`` devuelve un resultado terminal.
+            # La guarda ``MAX_AUTO_AVANCE_ITERS`` acota el número de saltos por si
+            # el pipeline devolviera pausas de forma inesperadamente cíclica.
+            # ---------------------------------------------------------------
+            MAX_AUTO_AVANCE_ITERS = 6
+            iteraciones = 0
+            while True:
+                if resultado.pendiente_edicion_silencios:
+                    # Pausa por edición manual de silencios (spec
+                    # edicion-avanzada-shorts, Req 1.2, 1.3, 16.2): tras UNIR, el
+                    # pipeline detectó los tramos de silencio sobre el vídeo
+                    # **unido** (sin recortar) y se detuvo a la espera de que el
+                    # usuario los edite en el timeline y confirme con
+                    # ``POST /silencios/{id}``. Se persiste ESPERANDO_EDICION_SILENCIOS
+                    # con los tres artefactos del ``ResultadoPipeline`` y NO se
+                    # limpia el workdir (los intermedios se necesitan al reanudar).
+                    self.manager.marcar_esperando_edicion_silencios(
+                        job_id,
+                        str(resultado.unido) if resultado.unido is not None else "",
+                        resultado.silencios if resultado.silencios is not None else [],
+                        (
+                            float(resultado.duracion_unido_s)
+                            if resultado.duracion_unido_s is not None
+                            else 0.0
+                        ),
+                    )
+                    # Log correlacionado de la transición de pausa →
+                    # awaiting_silences (spec unir-step-hang, Tarea 3.5, Change 4
+                    # #6): marca que la pausa se ALCANZÓ y se persistió (subpaso
+                    # distinguible), con el conteo de tramos y la duración. Solo
+                    # ids/counts: nunca contenido de vídeo.
+                    logger.info(
+                        "runner subpaso evento_tipo=pausa_silencios estado=awaiting_silences "
+                        "tramos=%d duracion=%.3f correlacion=%s",
+                        len(resultado.silencios) if resultado.silencios is not None else 0,
                         float(resultado.duracion_unido_s)
                         if resultado.duracion_unido_s is not None
-                        else 0.0
-                    ),
-                )
-                # Log correlacionado de la transición de pausa → awaiting_silences
-                # (spec unir-step-hang, Tarea 3.5, Change 4 #6): marca que la
-                # pausa se ALCANZÓ y se persistió (subpaso distinguible), con el
-                # conteo de tramos y la duración. Solo ids/counts: nunca contenido
-                # de vídeo. Permite confirmar la categoría C (pausa alcanzada).
-                logger.info(
-                    "runner subpaso evento_tipo=pausa_silencios estado=awaiting_silences "
-                    "tramos=%d duracion=%.3f correlacion=%s",
-                    len(resultado.silencios) if resultado.silencios is not None else 0,
-                    float(resultado.duracion_unido_s)
-                    if resultado.duracion_unido_s is not None
-                    else 0.0,
-                    correlacion,
-                )
-                limpiar = False
-                # Bugfix (cloud-silencios-cuelga-25): en modo cloud (o bajo el
-                # flag ``VSE_SILENCE_AUTO_APPLY``) NO se pausa esperando la
-                # edición manual del timeline de silencios —que el flujo integrado
-                # de Cloud Run no surface ni reanuda, provocando la espera infinita
-                # al 25 %—. En su lugar se AUTO-APLICAN los tramos detectados y se
-                # continúa el pipeline de inmediato reanudando de forma
-                # **síncrona** (``reanudar_silencios_job`` es un método síncrono;
-                # ya corremos en un hilo del executor, así que no hace falta bucle
-                # de eventos ni ``lanzar_reanudacion_silencios``). En modo
-                # local/standalone (flag falsy) se conserva la pausa manual.
-                if config.silence_auto_apply():
+                        else 0.0,
+                        correlacion,
+                    )
+                    limpiar = False
+                    # Bugfix (cloud-silencios-cuelga-25): en modo cloud (o bajo el
+                    # flag ``VSE_SILENCE_AUTO_APPLY``) NO se pausa; se AUTO-APLICAN
+                    # los tramos detectados y se continúa reanudando de forma
+                    # **síncrona** (ya corremos en un hilo del executor). En modo
+                    # local/standalone (flag falsy) se conserva la pausa manual.
+                    if not config.silence_auto_apply():
+                        return resultado
+                    if iteraciones >= MAX_AUTO_AVANCE_ITERS:
+                        # Guarda anti-loop: se deja el Job en la pausa persistida.
+                        logger.warning(
+                            "runner auto-avance abortado por guarda (iteraciones=%d) "
+                            "estado=awaiting_silences correlacion=%s",
+                            iteraciones,
+                            correlacion,
+                        )
+                        return resultado
                     logger.info(
                         "runner subpaso evento_tipo=auto_aplicar_silencios "
                         "estado=en_ejecucion tramos=%d correlacion=%s",
@@ -276,39 +314,90 @@ class JobRunner:
                     )
                     # El workdir lo gestiona ``reanudar_silencios_job`` (conserva
                     # en pausa, limpia solo ante fallo); aquí no se limpia.
-                    return self.reanudar_silencios_job(
+                    iteraciones += 1
+                    auto_avanzado = True
+                    resultado = self.reanudar_silencios_job(
                         job_id, resultado.silencios or []
                     )
-                return resultado
-            if resultado.pendiente_revision:
-                # Pausa por revisión manual: guardar grupos + video cortado y
-                # dejar el Job a la espera SIN limpiar los temporales.
-                self.manager.marcar_esperando_revision(
-                    job_id,
-                    str(resultado.cortado) if resultado.cortado is not None else "",
-                    resultado.grupos,
-                )
-                limpiar = False
-                return resultado
-            if resultado.pendiente_eleccion_render:
-                # Pausa por edición final (spec edicion-avanzada-shorts, Req 8.1):
-                # el pipeline preparó los ``grupos_finales`` y se detuvo SIN
-                # renderizar, a la espera de la previsualización + textos extra. Se
-                # persiste el estado ESPERANDO_EDICION_FINAL (con el video
-                # ``cortado`` y los grupos finales) y NO se limpia el workdir (los
-                # intermedios se necesitan al reanudar el render final —SIEMPRE con
-                # Remotion— vía POST /render/{id}, Req 16.2, 16.3).
-                #
-                # NOTA (renombrado): el pipeline sigue señalando esta pausa con el
-                # flag ``pendiente_eleccion_render``; ese flag se mapea ahora al
-                # marcador ``marcar_esperando_edicion_final`` (antes
-                # ``marcar_esperando_eleccion_render``).
-                self.manager.marcar_esperando_edicion_final(
-                    job_id,
-                    str(resultado.cortado) if resultado.cortado is not None else "",
-                    resultado.grupos,
-                )
-                limpiar = False
+                    continue
+                if resultado.pendiente_revision:
+                    # Pausa por revisión manual de subtítulos: guardar grupos +
+                    # vídeo cortado y dejar el Job a la espera SIN limpiar.
+                    self.manager.marcar_esperando_revision(
+                        job_id,
+                        str(resultado.cortado) if resultado.cortado is not None else "",
+                        resultado.grupos,
+                    )
+                    limpiar = False
+                    # Auto-avance de la revisión (bugfix cloud-edicion-final-cuelga-80):
+                    # se aprueban los grupos tal cual y se reanuda hacia la edición
+                    # final. En local se conserva la pausa manual.
+                    if not config.auto_avanzar_edicion():
+                        return resultado
+                    if iteraciones >= MAX_AUTO_AVANCE_ITERS:
+                        logger.warning(
+                            "runner auto-avance abortado por guarda (iteraciones=%d) "
+                            "estado=awaiting_review correlacion=%s",
+                            iteraciones,
+                            correlacion,
+                        )
+                        return resultado
+                    logger.info(
+                        "runner subpaso evento_tipo=auto_aprobar_revision "
+                        "estado=en_ejecucion correlacion=%s",
+                        correlacion,
+                    )
+                    iteraciones += 1
+                    auto_avanzado = True
+                    resultado = self.reanudar_job(job_id, resultado.grupos or [])
+                    continue
+                if resultado.pendiente_eleccion_render:
+                    # Pausa por edición final (spec edicion-avanzada-shorts, Req
+                    # 8.1): el pipeline preparó los ``grupos_finales`` y se detuvo
+                    # SIN renderizar, a la espera de la previsualización + textos
+                    # extra. Se persiste ESPERANDO_EDICION_FINAL (con el vídeo
+                    # ``cortado`` y los grupos finales) y NO se limpia el workdir.
+                    #
+                    # NOTA (renombrado): el pipeline señala esta pausa con el flag
+                    # ``pendiente_eleccion_render``, mapeado al marcador
+                    # ``marcar_esperando_edicion_final``.
+                    self.manager.marcar_esperando_edicion_final(
+                        job_id,
+                        str(resultado.cortado) if resultado.cortado is not None else "",
+                        resultado.grupos,
+                    )
+                    limpiar = False
+                    # Auto-avance de la edición final (bugfix
+                    # cloud-edicion-final-cuelga-80): se auto-renderiza con el
+                    # motor por defecto (Remotion, ``MOTOR_RENDER_EDICION_FINAL``)
+                    # vía ``reanudar_render_job``, que gestiona su propio cleanup
+                    # al terminar. En local se conserva la pausa manual.
+                    if not config.auto_avanzar_edicion():
+                        return resultado
+                    if iteraciones >= MAX_AUTO_AVANCE_ITERS:
+                        logger.warning(
+                            "runner auto-avance abortado por guarda (iteraciones=%d) "
+                            "estado=awaiting_final_edit correlacion=%s",
+                            iteraciones,
+                            correlacion,
+                        )
+                        return resultado
+                    logger.info(
+                        "runner subpaso evento_tipo=auto_render_edicion_final "
+                        "estado=en_ejecucion correlacion=%s",
+                        correlacion,
+                    )
+                    iteraciones += 1
+                    auto_avanzado = True
+                    resultado = self.reanudar_render_job(job_id)
+                    continue
+                # Resultado terminal (éxito o fallo): salir del bucle.
+                break
+
+            if auto_avanzado:
+                # El último ``reanudar_*`` ya fijó el estado terminal
+                # (COMPLETADO/FALLIDO) y gestionó la limpieza del workdir; no se
+                # repite aquí para evitar doble persistencia/cleanup.
                 return resultado
             if resultado.exito:
                 self._complete_with_persisted_output(job_id, resultado)

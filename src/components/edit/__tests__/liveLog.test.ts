@@ -145,7 +145,7 @@ describe("live log — correlation identifiers appear when provided", () => {
     const view = parseProgressResponse({
       status: "running",
       editJobId: "edit-1",
-      version: "v0.9123 banana xD",
+      version: "v0.9124 mango xD",
       progress: {
         porcentaje: 25,
         pasoActual: "CORTAR_SILENCIOS",
@@ -158,7 +158,7 @@ describe("live log — correlation identifiers appear when provided", () => {
     });
 
     expect(view.correlation).toEqual({
-      version: "v0.9123 banana xD",
+      version: "v0.9124 mango xD",
       revision: "editor-abc123",
       editJobId: "edit-1",
       editorJobId: "job-9",

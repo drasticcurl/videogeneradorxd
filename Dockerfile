@@ -18,7 +18,7 @@ ENV NEXT_PUBLIC_APP_VERSION=$APP_VERSION
 # Manual deployment identifier baked once via env, space-separated from the
 # image tag by getAppVersion(). Shown beside the `AUGC Pipeline` title and echoed
 # by GET /api/version for the same build (spec `unir-step-hang`, Property 3).
-ARG APP_IDENTIFIER="v0.9123 banana xD"
+ARG APP_IDENTIFIER="v0.9124 mango xD"
 ENV NEXT_PUBLIC_APP_IDENTIFIER=$APP_IDENTIFIER
 COPY --from=node-deps /app/node_modules ./node_modules
 COPY . .

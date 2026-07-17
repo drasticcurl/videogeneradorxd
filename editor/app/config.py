@@ -407,3 +407,36 @@ def silence_auto_apply() -> bool:
     if raw is None or not raw.strip():
         return is_cloud_mode()
     return raw.strip().lower() in ("1", "true", "yes")
+
+
+def auto_avanzar_edicion() -> bool:
+    """Return True when the editor's manual pauses must be auto-advanced.
+
+    Controls whether the runner auto-resumes the *remaining* manual editor
+    pauses so the pipeline runs end-to-end up to COMPLETADO (bugfix
+    ``cloud-edicion-final-cuelga-80``). It complements :func:`silence_auto_apply`
+    (which only governs the silence-edition pause) by covering the subtitle
+    manual review (``ESPERANDO_REVISION``) and the final-edition / render-engine
+    choice (``ESPERANDO_EDICION_FINAL``):
+
+    - When True, the runner does NOT stay paused waiting for a manual
+      ``POST /subtitulos/{id}`` or ``POST /render/{id}`` —which the combined
+      Cloud Run flow never surfaces nor resumes, causing the indefinite hang at
+      80 %—. Instead it auto-approves the subtitle groups as-is and auto-renders
+      with the default engine (:data:`~app.engine.pipeline.MOTOR_RENDER_EDICION_FINAL`),
+      chaining the resumptions until the pipeline reaches a terminal state.
+    - When False, the historical behaviour is preserved: the pipeline pauses and
+      waits for the manual review/final-edition steps (local/standalone).
+
+    Resolution order:
+      1. ``VSE_EDIT_AUTO_ADVANCE`` env var, if set to a truthy value
+         (``"1"``/``"true"``/``"yes"``, case-insensitive) → True; any other
+         explicit value → False.
+      2. If the env var is absent (or blank), fall back to :func:`is_cloud_mode`
+         so Cloud Run auto-advances by default while local keeps the manual
+         pauses.
+    """
+    raw = os.environ.get("VSE_EDIT_AUTO_ADVANCE")
+    if raw is None or not raw.strip():
+        return is_cloud_mode()
+    return raw.strip().lower() in ("1", "true", "yes")

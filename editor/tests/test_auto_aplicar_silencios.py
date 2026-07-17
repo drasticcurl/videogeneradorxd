@@ -183,6 +183,13 @@ def test_auto_apply_por_cloud_mode_no_pausa(monkeypatch) -> None:
     """Sin el flag pero en modo cloud (``EDIT_MODE=cloud``), también auto-aplica
     (default cloud) y NO queda en ESPERANDO_EDICION_SILENCIOS."""
     monkeypatch.setenv("EDIT_MODE", "cloud")
+    # Este test aísla el auto-aplicado de SILENCIOS: se desactiva explícitamente
+    # el auto-avance de las pausas de edición (revisión/edición final), que en
+    # modo cloud está activo por defecto, para verificar que tras saltar la
+    # pausa de silencios el pipeline se detiene en la SIGUIENTE pausa
+    # (ESPERANDO_REVISION) tal como se espera aquí. El auto-avance de esas otras
+    # pausas se cubre en ``test_auto_avanzar_edicion.py``.
+    monkeypatch.setenv("VSE_EDIT_AUTO_ADVANCE", "0")
     manager = JobManager()
     dobles = _Dobles(silencios=[(2.0, 3.0)], duracion=8.0)
     runner = _runner(manager, dobles)

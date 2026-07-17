@@ -64,7 +64,7 @@ _TIPOS_SUBPASO = {
 }
 
 _CORRELACION_EJEMPLO = {
-    "version": "img-tag v0.9123 banana xD",
+    "version": "img-tag v0.9124 mango xD",
     "revision": "editor-00042-abc",
     "edit_job_id": "edit-job-77",
     "editor_job_id": "job_deadbeef",
@@ -314,7 +314,7 @@ def test_runner_loguea_pausa_awaiting_silences_correlacionada(
     when the pipeline reaches ``ESPERANDO_EDICION_SILENCIOS`` (category C)."""
     monkeypatch.setattr(config, "WORKDIR_ROOT", tmp_path / "wk")
     monkeypatch.setattr(config, "OUTPUT_ROOT", tmp_path / "out")
-    monkeypatch.setenv("APP_VERSION", "img-tag v0.9123 banana xD")
+    monkeypatch.setenv("APP_VERSION", "img-tag v0.9124 mango xD")
     monkeypatch.setenv("K_REVISION", "editor-00042-abc")
 
     manager = JobManager()
