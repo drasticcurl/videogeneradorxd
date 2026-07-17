@@ -13,7 +13,7 @@ substitutions:
   _TAG: latest
   # Manual deployment identifier baked into the client bundle beside the
   # `AUGC Pipeline` title and echoed by GET /api/version (spec `unir-step-hang`).
-  _APP_IDENTIFIER: "v0.9124 mango xD"
+  _APP_IDENTIFIER: "v0.9125 kiwi xD"
 
 steps:
   - name: gcr.io/cloud-builders/docker

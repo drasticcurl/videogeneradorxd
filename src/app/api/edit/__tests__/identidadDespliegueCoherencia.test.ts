@@ -5,13 +5,13 @@
  * Validates: Requirements 2.8, 2.9
  *
  * Closes the Category-D gap documented by Task 1.3: the exact manual identifier
- * `v0.9124 mango xD` is now baked once via env, rendered beside the
+ * `v0.9125 kiwi xD` is now baked once via env, rendered beside the
  * `AUGC Pipeline` title (see `src/app/layout.tsx`), and echoed by
  * GET /api/version through the shared `getAppVersion()` source — so the header
  * identifier and the API value agree and both correspond to the same build.
  *
  * The Docker image tag is space-separated from the manual identifier
- * ("<image-tag> v0.9124 mango xD"). The Cloud Run revision (K_REVISION) is a
+ * ("<image-tag> v0.9125 kiwi xD"). The Cloud Run revision (K_REVISION) is a
  * server-side-only diagnostic and MUST NOT appear in the client-facing
  * /api/version payload.
  */
@@ -25,7 +25,7 @@ import {
 import { GET as versionGET } from "@/app/api/version/route";
 
 describe("Task 3.1 — header identifier is coherent with /api/version", () => {
-  it("getAppVersion exposes the exact manual identifier `v0.9124 mango xD`", () => {
+  it("getAppVersion exposes the exact manual identifier `v0.9125 kiwi xD`", () => {
     const local = getAppVersion();
     expect(local.identifier).toBe(MANUAL_IDENTIFIER);
     expect(local.version).toContain(MANUAL_IDENTIFIER);

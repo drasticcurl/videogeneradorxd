@@ -48,7 +48,7 @@ _WALL_CLOCK_CAP_S: float = 5.0
 _CLAVES_CORRELACION = {"version", "revision", "edit_job_id", "editor_job_id"}
 
 _CORRELACION_EJEMPLO = {
-    "version": "img-tag v0.9124 mango xD",
+    "version": "img-tag v0.9125 kiwi xD",
     "revision": "editor-00042-abc",
     "edit_job_id": "edit-job-77",
     "editor_job_id": "job_deadbeef",

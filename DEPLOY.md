@@ -276,7 +276,7 @@ desde dentro del contenedor.
   ```
 
   Complementá con el chequeo de identidad del build (§6b): el header muestra
-  `v0.9124 mango xD` y `GET /api/version` devuelve el mismo identificador para
+  `v0.9125 kiwi xD` y `GET /api/version` devuelve el mismo identificador para
   esa misma revisión.
 
 ## 7. Notas / límites
