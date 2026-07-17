@@ -78,7 +78,7 @@ def _eventos_25(eventos: Sequence[EventoProgreso]) -> List[EventoProgreso]:
 
 
 _CORRELACION_EJEMPLO = {
-    "version": "img-tag v0.9123 banana xD",
+    "version": "img-tag v0.9124 mango xD",
     "revision": "editor-00042-abc",
     "edit_job_id": "edit-job-77",
     "editor_job_id": "job_deadbeef",
