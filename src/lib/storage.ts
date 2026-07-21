@@ -120,6 +120,20 @@ export async function removeRel(projectId: string, relPath: string): Promise<voi
   }
 }
 
+/**
+ * Borra por completo la carpeta output/<projectId>/ (imagenes, clips/videos,
+ * referencias, manifest, log, final.mp4). Se usa al eliminar un proyecto para no
+ * dejar archivos huerfanos en disco (o en el bucket montado por Cloud Storage FUSE).
+ * Es idempotente: si la carpeta no existe, no hace nada.
+ */
+export async function removeProjectDir(projectId: string): Promise<void> {
+  try {
+    await fsp.rm(projectDir(projectId), { recursive: true, force: true });
+  } catch (err) {
+    console.error(`[storage] No se pudo borrar la carpeta del proyecto ${projectId}:`, err);
+  }
+}
+
 export function absPathFor(projectId: string, relPath: string): string {
   return path.join(projectDir(projectId), relPath);
 }

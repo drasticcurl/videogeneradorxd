@@ -1,12 +1,12 @@
 /**
  * GET    /api/projects/:id   -> proyecto + jobs + manifest + estimacion
  * PUT    /api/projects/:id   -> actualiza plan / nombre / modelos / variantes
- * DELETE /api/projects/:id   -> elimina proyecto y sus jobs (no borra archivos en disco)
+ * DELETE /api/projects/:id   -> elimina proyecto, sus jobs y los archivos en disco
  */
 import { jobsDb, projectsDb } from "@/lib/db";
 import { validatePlan } from "@/lib/schema";
 import { resolveModel, resolveResolution } from "@/lib/config";
-import { buildManifest, writeManifest } from "@/lib/storage";
+import { buildManifest, removeProjectDir, writeManifest } from "@/lib/storage";
 import { buildJobs, estimateCost } from "@/lib/jobs/pipeline";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
 
@@ -92,8 +92,15 @@ export async function DELETE(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
-  const project = projectsDb.get(params.id);
-  if (!project) return notFound("Proyecto no encontrado");
-  projectsDb.remove(project.id);
-  return ok({ deleted: true });
+  try {
+    const project = projectsDb.get(params.id);
+    if (!project) return notFound("Proyecto no encontrado");
+    // Borramos los registros (proyecto, jobs, logs) y despues los archivos en disco
+    // (imagenes, clips/videos, referencias, manifest, final.mp4).
+    projectsDb.remove(project.id);
+    await removeProjectDir(project.id);
+    return ok({ deleted: true });
+  } catch (err) {
+    return serverError(err);
+  }
 }

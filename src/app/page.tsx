@@ -65,6 +65,7 @@ export default function HomePage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     reset();
@@ -85,6 +86,29 @@ export default function HomePage() {
 
   function applyPastedJson() {
     setPlanFromJson(jsonText);
+  }
+
+  async function handleDeleteProject(project: ProjectSummary) {
+    const confirmed = window.confirm(
+      `¿Eliminar el proyecto "${project.name}"? Se borraran sus imagenes, clips y videos del disco. Esta accion no se puede deshacer.`
+    );
+    if (!confirmed) return;
+    setDeletingId(project.id);
+    // Optimista: lo sacamos de la lista ya mismo para feedback inmediato.
+    setProjects((prev) => prev.filter((p) => p.id !== project.id));
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "No se pudo eliminar el proyecto");
+      }
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+      // Si falló, recargamos para restaurar el estado real.
+      await loadProjects();
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   async function handleGenerateAll() {
@@ -454,20 +478,34 @@ export default function HomePage() {
           <h2 className="text-xl font-semibold">Proyectos</h2>
           <div className="divide-y divide-slate-800 rounded-lg border border-slate-800">
             {projects.map((p) => (
-              <Link
+              <div
                 key={p.id}
-                href={`/project/${p.id}/pipeline`}
-                className="flex items-center justify-between px-4 py-3 hover:bg-slate-800/50"
+                className="flex items-center gap-3 px-4 py-3 hover:bg-slate-800/50"
               >
-                <div>
-                  <div className="font-medium">{p.name}</div>
-                  <div className="text-xs text-slate-500">
-                    {p.imageCount} imagenes · {p.clipCount} clips ·{" "}
-                    {new Date(p.createdAt).toLocaleString()}
+                <Link
+                  href={`/project/${p.id}/pipeline`}
+                  className="flex min-w-0 flex-1 items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{p.name}</div>
+                    <div className="text-xs text-slate-500">
+                      {p.imageCount} imagenes · {p.clipCount} clips ·{" "}
+                      {new Date(p.createdAt).toLocaleString()}
+                    </div>
                   </div>
-                </div>
-                <StatusBadge status={p.status} />
-              </Link>
+                  <StatusBadge status={p.status} />
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteProject(p)}
+                  disabled={deletingId === p.id}
+                  title="Eliminar proyecto"
+                  aria-label={`Eliminar proyecto ${p.name}`}
+                  className="shrink-0 rounded-md border border-slate-700 px-2.5 py-1.5 text-xs font-medium text-slate-400 hover:border-red-600/60 hover:bg-red-600/10 hover:text-red-300 disabled:opacity-50"
+                >
+                  {deletingId === p.id ? "Eliminando…" : "Eliminar"}
+                </button>
+              </div>
             ))}
           </div>
         </section>
