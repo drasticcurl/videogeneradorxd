@@ -1,20 +1,21 @@
 "use client";
 
 /**
- * Form de login. Manda usuario + password por POST a /api/login y, si entra,
- * navega a la home con `router.refresh()` para que el layout server-side vuelva a
- * leer la cookie y muestre el nombre del usuario.
+ * Form de login. Manda usuario + password por POST a /api/login y, si entra, hace
+ * una carga de pagina COMPLETA a `/`.
+ *
+ * El porque de la carga completa esta explicado en detalle en el handler de abajo:
+ * arregla un bug donde la password CORRECTA terminaba en un error del server y la
+ * incorrecta se comportaba bien. No lo cambies por `router.push` sin leer eso.
  *
  * Accesibilidad: cada input tiene su `<label>` asociado por `htmlFor`, el error
  * va en un `role="alert"` con `aria-live` para que un lector de pantalla lo
  * anuncie, y el boton informa el estado de carga en texto (no solo visual).
  */
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export default function LoginForm({ usuarios }: { usuarios: string[] }) {
-  const router = useRouter();
   const [usuario, setUsuario] = useState(usuarios[0] ?? "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -39,13 +40,36 @@ export default function LoginForm({ usuarios }: { usuarios: string[] }) {
         setPassword("");
         return;
       }
-      // `refresh()` antes de `push()` para que el layout del server vuelva a
-      // resolverse con la cookie nueva y aparezca el nombre en el header.
-      router.refresh();
-      router.push("/");
+
+      /**
+       * Carga de pagina COMPLETA, no `router.push()`. No es pereza: es el arreglo
+       * de un bug que se veia como "la clave correcta no entra".
+       *
+       * Lo que habia antes era `router.refresh()` y despues `router.push("/")`.
+       * `refresh()` vuelve a pedir el RSC de la ruta ACTUAL, que en ese momento
+       * todavia es `/login`. Con la cookie ya seteada, el server component de
+       * `/login` llama `redirect("/")`, y un `redirect()` durante un `refresh()`
+       * no es una navegacion: Next lo reporta como error de render de Server
+       * Components. Resultado: con la password MAL salia el error correcto, y con
+       * la password BIEN salia un error del server. Un F5 despues entraba, porque
+       * era un GET limpio.
+       *
+       * `router.push("/")` solo tampoco alcanza: el root layout lee la cookie en
+       * el server para mostrar el usuario, y al navegar entre dos rutas que
+       * comparten ese layout el App Router puede reusar el layout que ya tiene
+       * cacheado en el cliente. El header se quedaria sin el nombre hasta el
+       * proximo hard reload.
+       *
+       * Una carga completa no tiene ninguno de los dos problemas y cuesta un
+       * request de mas cada 72 h (el TTL de la sesion). No lo cambies por
+       * `router.push` sin releer esto.
+       */
+      window.location.assign("/");
+      // No se baja `cargando`: la navegacion ya esta en curso y volver a
+      // habilitar el boton solo invita a un segundo submit.
+      return;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error de red");
-    } finally {
       setCargando(false);
     }
   }

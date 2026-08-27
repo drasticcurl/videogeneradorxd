@@ -27,25 +27,31 @@ export interface ModelOption {
  * - Chat: Gemini para interpretar el brief.
  */
 export const MODEL_CATALOG: Record<ModelKind, ModelOption[]> = {
-  llm: [
-    { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
-    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite" },
-  ],
+  // Un solo modelo de chat a pedido del usuario: 2.5 Pro. Se sacaron 3.5 Flash,
+  // 2.5 Flash y 2.5 Flash Lite.
+  //
+  // OJO si algun dia se agrega otro: `resolveModel()` cae al default cuando el id
+  // pedido NO esta en esta lista, asi que sacar un modelo de aca sin cambiar el
+  // default de `models.llm` mas abajo deja la app usando un modelo que la UI no
+  // muestra. Por eso el default se movio a 2.5 Pro en el mismo cambio.
+  llm: [{ id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" }],
+  // Solo Nano Banana. Se sacaron las variantes 3.1 Flash Image y 3 Pro Image.
   image: [
-    { id: "gemini-2.5-flash-image", label: "Nano Banana (Gemini 2.5 Flash Image) · recomendado, +cuota" },
-    // Variantes mas nuevas (usan la MISMA API generateContent). Pueden requerir que tu
-    // proyecto las tenga habilitadas y suelen tener cuota mas baja / costo mayor.
-    { id: "gemini-3.1-flash-image-preview", label: "Nano Banana 2 (Gemini 3.1 Flash Image) · probar" },
-    { id: "gemini-3-pro-image-preview", label: "Nano Banana Pro (Gemini 3 Pro Image, 4K) · -cuota, +caro" },
+    { id: "gemini-2.5-flash-image", label: "Nano Banana (Gemini 2.5 Flash Image)" },
   ],
+  // Los cuatro de video se mantienen. El default es Lite (ver `models.video`).
   video: [
+    { id: "veo-3.1-lite-generate-001", label: "Veo 3.1 Lite · default, mas barato" },
     { id: "veo-3.1-generate-001", label: "Veo 3.1" },
     { id: "veo-3.1-fast-generate-001", label: "Veo 3.1 Fast" },
-    // Variantes "lite" para testear cual habilita tu proyecto (pueden no estar disponibles).
-    { id: "veo-3.1-lite-generate-001", label: "Veo 3.1 Lite (probar)" },
-    { id: "veo-3.1-lite-generate-001-preview", label: "Veo 3.1 Lite preview (probar)" },
+    // Verificado contra el proyecto el 2026-08-27: este devuelve 404 ("Publisher
+    // model not found"). Los otros tres responden OK. Se deja en la lista porque
+    // se pidio no sacar ninguno, pero la etiqueta lo dice para que nadie lo elija
+    // y se coma un fallo en cada job. Si Google lo habilita, se saca el aviso.
+    {
+      id: "veo-3.1-lite-generate-001-preview",
+      label: "Veo 3.1 Lite preview · NO disponible en este proyecto (404)",
+    },
   ],
 };
 
@@ -118,11 +124,15 @@ export const config = {
    */
   models: {
     // Gemini para interpretar el brief -> PlanJSON estructurado.
-    llm: env("LLM_MODEL", "gemini-2.5-flash"),
+    // 2.5 Pro y no 2.5 Flash: es el unico que quedo en MODEL_CATALOG.llm, y el
+    // default TIENE que estar en el catalogo (ver el comentario de MODEL_CATALOG).
+    llm: env("LLM_MODEL", "gemini-2.5-pro"),
     // Nano Banana (Gemini image) para text2image E image2image (consistencia de avatar).
     image: env("IMAGE_MODEL", "gemini-2.5-flash-image"),
     // Veo para imagen->video (operacion de larga duracion / LRO).
-    video: env("VIDEO_MODEL", "veo-3.1-generate-001"),
+    // Lite por default: es el mas barato de los tres que responden OK en este
+    // proyecto. Los otros dos siguen disponibles en el selector.
+    video: env("VIDEO_MODEL", "veo-3.1-lite-generate-001"),
   },
 
   /** Cantidad de variantes por imagen (1-4). Solo aplica a imagenes, no a videos. */

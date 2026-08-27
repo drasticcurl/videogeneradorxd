@@ -8,11 +8,9 @@
  * no puede leerla, y eso es lo que impide que un XSS se la lleve).
  */
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export default function SessionBar({ usuario }: { usuario: string }) {
-  const router = useRouter();
   const [saliendo, setSaliendo] = useState(false);
 
   async function salir() {
@@ -23,8 +21,15 @@ export default function SessionBar({ usuario }: { usuario: string }) {
       // Si el fetch falla igual mandamos al login: la cookie puede haber quedado,
       // pero el usuario ve una pantalla coherente y el proximo request la valida.
     }
-    router.refresh();
-    router.push("/login");
+    /**
+     * Carga completa, por el mismo motivo que el login (ver LoginForm.tsx).
+     * `router.refresh()` volveria a pedir el RSC de la ruta actual, que ya no
+     * tiene cookie: el redirect lo haria el middleware en medio de un refresh, que
+     * es el mismo caso fragil que rompia el login. Y una carga completa tiene un
+     * segundo beneficio al salir: tira el Router Cache del cliente, asi que no
+     * queda ninguna pantalla con datos de la sesion vieja en memoria del browser.
+     */
+    window.location.assign("/login");
   }
 
   return (

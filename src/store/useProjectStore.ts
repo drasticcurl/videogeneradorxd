@@ -178,10 +178,17 @@ function dataUrlToBlob(dataUrl: string): Blob {
   return new Blob([arr], { type: mime });
 }
 
+/**
+ * Preseleccion del cliente cuando todavia no llego /api/config.
+ *
+ * Tiene que coincidir con `config.models` de src/lib/config.ts. Si no coincide, el
+ * selector arranca con un modelo que no esta en el catalogo y el server igual usa
+ * el suyo: la UI muestra una cosa y se genera con otra.
+ */
 const FALLBACK_MODELS: ProjectModels = {
-  llm: "gemini-2.5-flash",
+  llm: "gemini-2.5-pro",
   image: "gemini-2.5-flash-image",
-  video: "veo-3.1-generate-001",
+  video: "veo-3.1-lite-generate-001",
 };
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
