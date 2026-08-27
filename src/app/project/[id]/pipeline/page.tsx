@@ -272,11 +272,21 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           >
             ⏹ Cancelar
           </button>
+          {/* Mismo endpoint (/generate) para los dos casos: si el proyecto todavia no
+              tiene jobs (recien importado en lote) arranca todo; si ya tiene, buildJobs
+              es idempotente y solo reencola lo que quedo pendiente. */}
           <button
             onClick={() => void handleGenerateAll()}
-            className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+            className={`rounded-lg px-3 py-2 text-sm font-medium text-white hover:opacity-90 ${
+              jobs.length === 0 ? "bg-emerald-600" : "bg-accent"
+            }`}
+            title={
+              jobs.length === 0
+                ? "Arma los jobs y arranca la generacion de este proyecto"
+                : "Reencola los jobs pendientes sin tocar lo ya aprobado"
+            }
           >
-            Reintentar pendientes
+            {jobs.length === 0 ? "▶ Generar todo" : "Reintentar pendientes"}
           </button>
         </div>
       </div>

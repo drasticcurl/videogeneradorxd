@@ -68,6 +68,17 @@ export interface ProjectModels {
   video: string;
 }
 
+/**
+ * FASE de produccion del proyecto. Sirve para separar el gasto/rate limit en dos
+ * tandas y poder revisar todo antes de tocar Veo:
+ *  - "images": la cola SOLO corre jobs de imagen. Los videos quedan pendientes aunque
+ *    su imagen ya este aprobada (si no, aprobar una imagen disparaba su video al toque).
+ *  - "videos": corre todo (imagenes que falten + videos).
+ * `undefined` = sin fase (comportamiento historico: corre todo). Los proyectos creados
+ * por importacion en lote arrancan en "images".
+ */
+export type ProjectStage = "images" | "videos";
+
 export interface ProjectRecord {
   id: string;
   name: string;
@@ -88,6 +99,11 @@ export interface ProjectRecord {
    * Tipico: VSL con muchos clips => true; videos normales => false.
    */
   autoApprove?: boolean;
+  /**
+   * Fase actual: "images" frena los jobs de video hasta que el usuario pase a "videos".
+   * undefined = sin fase (corre todo, como siempre).
+   */
+  stage?: ProjectStage;
   /** path absoluto a la carpeta de salida del proyecto */
   outputDir: string;
   createdAt: string;

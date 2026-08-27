@@ -42,7 +42,8 @@ export function videoJobId(projectId: string, clipId: string): string {
   return `${projectId}:vid:${clipId}`;
 }
 
-function findImage(plan: ProjectPlan, imageId: string) {
+/** Busca una imagen del plan por id y devuelve tambien su asset. */
+export function findImage(plan: ProjectPlan, imageId: string) {
   for (const asset of plan.assets) {
     const img = asset.images.find((i) => i.id === imageId);
     if (img) return { asset, img };
@@ -56,7 +57,7 @@ function clipAssetType(plan: ProjectPlan, assetId: string): "avatar" | "broll" {
 }
 
 /** Devuelve todos los ids de referencia de una imagen (ref_image_id + ref_image_ids), sin duplicados. */
-function imageRefIds(img: {
+export function imageRefIds(img: {
   ref_image_id?: string;
   ref_image_ids?: string[];
 }): string[] {

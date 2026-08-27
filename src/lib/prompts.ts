@@ -247,15 +247,18 @@ con este formato EXACTO, que despues voy a pegar en mi app "AUGC Pipeline":
   ],
   "clips": [
     {
-      "id": "slug",                       // ej "hook"
-      "orden": 1,                         // 1,2,3... orden en el anuncio
+      "id": "slug",                       // ej "hook" (unico)
+      "orden": 1,                         // 1,2,3... orden en el anuncio, SIN repetir
       "asset_id": "id_de_un_asset",
       "image_id": "id_de_una_imagen",     // frame inicial del video
       "video_prompt": "movimiento de camara/accion/expresion EN INGLES",
       "dialogo": "linea hablada en es-AR (vos); '' si es b-roll mudo",
       "duracion_seg": 8,                  // SOLO 4, 6 u 8
       "etiqueta": "IA" | "FILMAR_REAL",
-      "on_screen_text": "texto en pantalla sugerido (opcional)"
+      "on_screen_text": "texto en pantalla sugerido (opcional)",
+      "resolucion": "720p" | "1080p",     // OPCIONAL, si falta usa el default del proyecto
+      "final_prompt": ""                  // OPCIONAL: si lo llenás, se manda TAL CUAL a Veo
+                                          // (ignora el armado automatico UGC + lip-sync + acento)
     }
   ],
   "warnings": [ "supuestos o defaults que hayas tenido que asumir" ]
@@ -273,9 +276,14 @@ REGLAS QUE TENES QUE CUMPLIR SI O SI:
 - Para un VSL largo de talking-head: una linea del guion = un clip (6 u 8s), respetando el ORDEN exacto.
 - Prompts visuales EN INGLES; dialogos en es-AR (vos) sin traducir.
 - "image_id" y "asset_id" de cada clip tienen que existir en el JSON.
-- ids en minuscula, sin espacios (a-z, 0-9, guion bajo).
+- ids en minuscula, sin espacios (a-z, 0-9, guion bajo). NO repitas image.id, clip.id ni clip.orden.
+- La PRIMERA imagen de cada asset tiene que ser "text2image" O "image2image" apuntando SOLO a una
+  reference subida. Ninguna imagen puede referenciarse a si misma.
+- B-ROLL con voz en off: asset "broll" + "dialogo" con la linea. El sistema lo trata como voiceover
+  (sin lip-sync, sin persona hablando a camara). No hace falta que lo aclares en el video_prompt.
 - Si falta info, completa con defaults razonables y agregalo en "warnings". NUNCA dejes campos obligatorios vacios.
-- Devolve SOLO el JSON.
+- Devolve SOLO el JSON, sin markdown ni \`\`\`. Si es largo (VSL de 50-100 clips) igual devolvelo COMPLETO,
+  sin abreviar ni poner "..." ni comentarios dentro del JSON.
 
 ESTE ES EL BRIEF:
 <<< PEGA ACA TU BRIEF >>>`;

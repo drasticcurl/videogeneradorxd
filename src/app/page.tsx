@@ -8,10 +8,11 @@
  *  - PlanJSON editable + estimacion + "Generar todo".
  *  - Lista de proyectos existentes.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useProjectStore } from "@/store/useProjectStore";
+import { validatePlan, type ProjectPlan } from "@/lib/schema";
 import { JsonEditor } from "@/components/JsonEditor";
 import { CostEstimatePanel } from "@/components/CostEstimatePanel";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -29,6 +30,24 @@ interface ProjectSummary {
 }
 
 type Mode = "ia" | "json";
+
+/**
+ * Un PlanJSON leido de un archivo al importar una carpeta en lote.
+ * Se valida en el cliente (mismo Zod que el backend) ANTES de crear nada, asi
+ * ves de una que archivos estan sanos y cuales tienen errores.
+ */
+interface ImportedPlan {
+  fileName: string;
+  /** nombre que va a tener el proyecto (editable) */
+  name: string;
+  plan: ProjectPlan | null;
+  errors: string[];
+  clipCount: number;
+  imageCount: number;
+  status: "listo" | "invalido" | "creando" | "creado" | "error";
+  projectId?: string;
+  createError?: string;
+}
 
 export default function HomePage() {
   const router = useRouter();
@@ -63,6 +82,23 @@ export default function HomePage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Importacion en lote (carpeta con varios PlanJSON).
+  const [imported, setImported] = useState<ImportedPlan[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // `webkitdirectory` no existe en los tipos de React, asi que lo seteamos a mano
+  // sobre el input una vez montado (es lo que habilita el selector de CARPETA).
+  useEffect(() => {
+    const el = folderInputRef.current;
+    if (!el) return;
+    el.setAttribute("webkitdirectory", "");
+    el.setAttribute("directory", "");
+  }, [mode]);
 
   useEffect(() => {
     reset();
@@ -81,8 +117,178 @@ export default function HomePage() {
     }
   }
 
+  /**
+   * Borra un proyecto: registro en db.json + jobs + logs + la carpeta
+   * output/<id>/ ENTERA (imagenes, clips, referencias, final.mp4).
+   * Es irreversible, por eso pide confirmacion mostrando cuantos archivos se pierden.
+   */
+  async function handleDeleteProject(p: ProjectSummary) {
+    const confirmed = window.confirm(
+      `Borrar "${p.name}"?\n\n` +
+        `Se van a eliminar TAMBIEN los archivos generados: ${p.imageCount} imagenes y ` +
+        `${p.clipCount} clips (carpeta output/${p.id}/).\n\nEsto NO se puede deshacer.`
+    );
+    if (!confirmed) return;
+
+    setDeletingId(p.id);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/projects/${p.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "No se pudo borrar el proyecto");
+      if (data.filesError) {
+        setDeleteError(
+          `Proyecto borrado, pero no se pudieron eliminar los archivos: ${data.filesError}`
+        );
+      }
+      setProjects((prev) => prev.filter((x) => x.id !== p.id));
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   function applyPastedJson() {
     setPlanFromJson(jsonText);
+  }
+
+  /* ------------------ Importar carpeta con varios PlanJSON ------------------ */
+
+  /** Path relativo dentro de la carpeta elegida (o el nombre suelto del archivo). */
+  function relPathOf(f: File): string {
+    return f.webkitRelativePath || f.name;
+  }
+
+  function patchImported(fileName: string, patch: Partial<ImportedPlan>) {
+    setImported((prev) =>
+      prev.map((i) => (i.fileName === fileName ? { ...i, ...patch } : i))
+    );
+  }
+
+  /**
+   * Lee una carpeta (o varios archivos) y valida cada .json con el MISMO Zod que
+   * usa el backend. No crea nada todavia: primero te muestra que archivos estan
+   * sanos y que errores tiene cada uno.
+   */
+  async function handleImportFiles(fileList: FileList | null) {
+    setImportError(null);
+    const files = Array.from(fileList ?? []).filter((f) => /\.json$/i.test(f.name));
+    if (files.length === 0) {
+      setImported([]);
+      setImportError("No encontre ningun archivo .json en lo que elegiste.");
+      return;
+    }
+    files.sort((a, b) =>
+      relPathOf(a).localeCompare(relPathOf(b), "es", { numeric: true })
+    );
+
+    const out: ImportedPlan[] = [];
+    for (const f of files) {
+      const fileName = relPathOf(f);
+      const name = f.name.replace(/\.json$/i, "");
+      try {
+        const raw = JSON.parse(await f.text());
+        const validation = validatePlan(raw);
+        if (!validation.ok) {
+          out.push({
+            fileName,
+            name,
+            plan: null,
+            // Mostramos los primeros errores; con 6 ya se entiende que arreglar.
+            errors: validation.errors
+              .slice(0, 6)
+              .map((e) => `${e.path || "plan"}: ${e.message}`),
+            clipCount: 0,
+            imageCount: 0,
+            status: "invalido",
+          });
+          continue;
+        }
+        const plan = validation.plan;
+        out.push({
+          fileName,
+          name,
+          plan,
+          errors: [],
+          clipCount: plan.clips.length,
+          imageCount: plan.assets.reduce((acc, asset) => acc + asset.images.length, 0),
+          status: "listo",
+        });
+      } catch (err) {
+        out.push({
+          fileName,
+          name,
+          plan: null,
+          errors: [
+            `JSON invalido: ${err instanceof Error ? err.message : String(err)}`,
+          ],
+          clipCount: 0,
+          imageCount: 0,
+          status: "invalido",
+        });
+      }
+    }
+    setImported(out);
+  }
+
+  /**
+   * Crea UN proyecto por cada JSON valido, en estado draft y SIN arrancar el
+   * pipeline. Cuando termina, te manda al TABLERO del lote (/batch) donde
+   * arrancás la generacion de imagenes y las revisás de a una.
+   *
+   * La auto-aprobacion se fuerza en OFF: el sentido del lote es revisar cada
+   * imagen antes de que se gaste un video.
+   */
+  async function handleCreateImported() {
+    const pendientes = imported.filter(
+      (i) => i.plan && (i.status === "listo" || i.status === "error")
+    );
+    if (pendientes.length === 0) return;
+
+    setImporting(true);
+    setImportError(null);
+    const createdIds: string[] = imported
+      .filter((i) => i.status === "creado" && i.projectId)
+      .map((i) => i.projectId as string);
+
+    for (const item of pendientes) {
+      patchImported(item.fileName, { status: "creando", createError: undefined });
+      try {
+        const res = await fetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: item.name,
+            brief: "",
+            plan: item.plan,
+            models: selectedModels,
+            imageVariants,
+            defaultResolution,
+            // Revision de a una: nada se aprueba solo.
+            autoApprove: false,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "No se pudo crear el proyecto");
+        const projectId = data.project.id as string;
+        if (references.length > 0) await uploadReferences(projectId);
+        patchImported(item.fileName, { status: "creado", projectId });
+        createdIds.push(projectId);
+      } catch (err) {
+        patchImported(item.fileName, {
+          status: "error",
+          createError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    setImporting(false);
+    await loadProjects();
+
+    // Al tablero del lote con los ids recien creados.
+    if (createdIds.length > 0) {
+      router.push(`/batch?ids=${createdIds.join(",")}`);
+    }
   }
 
   async function handleGenerateAll() {
@@ -345,6 +551,165 @@ export default function HomePage() {
             >
               Cargar PlanJSON
             </button>
+
+            {/* ---------------- Importar carpeta (lote de PlanJSON) ----------------
+                Elegís una carpeta con N archivos .json (cada uno un PlanJSON completo)
+                y se crea UN proyecto por archivo. No arranca ninguna generacion: por
+                el rate limit los vas corriendo de a uno desde su pipeline. */}
+            <div className="space-y-3 rounded-lg border border-slate-800 bg-panel p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-100">
+                    📁 Importar carpeta{" "}
+                    <span className="text-slate-500">(varios proyectos de una)</span>
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Elegí una carpeta con varios <code>.json</code> (cada archivo = un
+                    PlanJSON completo, igual al que pegás arriba). Se crea{" "}
+                    <b>un proyecto por archivo</b>, en borrador y{" "}
+                    <b>sin arrancar nada</b>. Cuando termina te lleva al{" "}
+                    <b>tablero del lote</b>, donde arrancás la generación de imágenes y
+                    las revisás de a una. La auto-aprobación queda <b>apagada</b> para
+                    que ningún video se genere sin que vos apruebes la imagen.
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <label className="cursor-pointer rounded-lg border border-slate-600 px-3 py-2 text-sm hover:bg-slate-800">
+                    📁 Elegir carpeta
+                    <input
+                      ref={folderInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={async (e) => {
+                        await handleImportFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <label className="cursor-pointer rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800">
+                    📄 …o varios .json
+                    <input
+                      type="file"
+                      multiple
+                      accept=".json,application/json"
+                      className="hidden"
+                      onChange={async (e) => {
+                        await handleImportFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {importError && (
+                <p className="rounded bg-red-500/10 p-2 text-xs text-red-300">
+                  {importError}
+                </p>
+              )}
+
+              {imported.length > 0 && (
+                <>
+                  <div className="divide-y divide-slate-800 rounded-md border border-slate-700">
+                    {imported.map((item) => (
+                      <div
+                        key={item.fileName}
+                        className="flex flex-wrap items-start gap-2 px-3 py-2 text-xs"
+                      >
+                        <span className="w-5 shrink-0 text-center">
+                          {item.status === "creado"
+                            ? "✓"
+                            : item.status === "creando"
+                            ? "⏳"
+                            : item.status === "invalido" || item.status === "error"
+                            ? "✕"
+                            : "•"}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <code className="text-slate-400">{item.fileName}</code>
+                            {item.plan && (
+                              <span className="text-slate-500">
+                                {item.imageCount} imagenes · {item.clipCount} clips
+                              </span>
+                            )}
+                            {item.status === "creado" && item.projectId && (
+                              <Link
+                                href={`/project/${item.projectId}/pipeline`}
+                                className="text-accent hover:underline"
+                              >
+                                abrir →
+                              </Link>
+                            )}
+                          </div>
+                          {/* Nombre editable del proyecto (default: nombre del archivo). */}
+                          {item.plan && item.status !== "creado" && (
+                            <input
+                              value={item.name}
+                              onChange={(e) =>
+                                patchImported(item.fileName, { name: e.target.value })
+                              }
+                              placeholder="Nombre del proyecto"
+                              className="mt-1 w-full max-w-sm rounded border border-slate-700 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none"
+                            />
+                          )}
+                          {item.errors.length > 0 && (
+                            <ul className="mt-1 space-y-0.5 text-red-300">
+                              {item.errors.map((e, i) => (
+                                <li key={i}>· {e}</li>
+                              ))}
+                            </ul>
+                          )}
+                          {item.createError && (
+                            <p className="mt-1 text-red-300">· {item.createError}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => void handleCreateImported()}
+                      disabled={
+                        importing ||
+                        imported.filter(
+                          (i) => i.plan && (i.status === "listo" || i.status === "error")
+                        ).length === 0
+                      }
+                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+                    >
+                      {importing
+                        ? "Creando proyectos…"
+                        : `Crear ${
+                            imported.filter(
+                              (i) =>
+                                i.plan && (i.status === "listo" || i.status === "error")
+                            ).length
+                          } proyectos y abrir el tablero →`}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setImported([]);
+                        setImportError(null);
+                      }}
+                      disabled={importing}
+                      className="rounded-lg border border-slate-600 px-3 py-2 text-sm hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      Limpiar lista
+                    </button>
+                    <span className="text-xs text-slate-500">
+                      {imported.filter((i) => i.status === "creado").length} creados ·{" "}
+                      {imported.filter((i) => i.status === "invalido").length} invalidos
+                      {references.length > 0 && (
+                        <> · se suben {references.length} fotos de referencia a cada uno</>
+                      )}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
           </>
         )}
 
@@ -403,22 +768,34 @@ export default function HomePage() {
       {projects.length > 0 && (
         <section className="space-y-3">
           <h2 className="text-xl font-semibold">Proyectos</h2>
+          {deleteError && (
+            <p className="rounded bg-red-500/10 p-2 text-sm text-red-300">
+              {deleteError}
+            </p>
+          )}
           <div className="divide-y divide-slate-800 rounded-lg border border-slate-800">
             {projects.map((p) => (
-              <Link
+              <div
                 key={p.id}
-                href={`/project/${p.id}/pipeline`}
-                className="flex items-center justify-between px-4 py-3 hover:bg-slate-800/50"
+                className="flex items-center gap-2 px-4 py-3 hover:bg-slate-800/50"
               >
-                <div>
-                  <div className="font-medium">{p.name}</div>
+                <Link href={`/project/${p.id}/pipeline`} className="min-w-0 flex-1">
+                  <div className="truncate font-medium">{p.name}</div>
                   <div className="text-xs text-slate-500">
                     {p.imageCount} imagenes · {p.clipCount} clips ·{" "}
                     {new Date(p.createdAt).toLocaleString()}
                   </div>
-                </div>
+                </Link>
                 <StatusBadge status={p.status} />
-              </Link>
+                <button
+                  onClick={() => void handleDeleteProject(p)}
+                  disabled={deletingId === p.id}
+                  title="Borrar el proyecto y TODOS sus archivos (imagenes y videos)"
+                  className="shrink-0 rounded-md border border-red-900/60 px-2.5 py-1.5 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                >
+                  {deletingId === p.id ? "Borrando…" : "🗑 Borrar"}
+                </button>
+              </div>
             ))}
           </div>
         </section>

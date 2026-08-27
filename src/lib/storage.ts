@@ -124,6 +124,27 @@ export function absPathFor(projectId: string, relPath: string): string {
   return path.join(projectDir(projectId), relPath);
 }
 
+/**
+ * Borra ENTERA la carpeta del proyecto en disco: output/<project_id>/
+ * (imagenes, candidatos, clips, referencias, manifest.json, pipeline.log, final.mp4).
+ *
+ * Es destructivo e irreversible, asi que se valida que el path resultante quede
+ * DENTRO de config.storage.outputDir y que el id parezca un id de proyecto
+ * (nada de "", ".", "..", ni separadores) antes de tocar el filesystem.
+ */
+export async function removeProjectDir(projectId: string): Promise<boolean> {
+  if (!/^[A-Za-z0-9._-]+$/.test(projectId) || projectId === "." || projectId === "..") {
+    return false;
+  }
+  const base = path.resolve(config.storage.outputDir);
+  const target = path.resolve(projectDir(projectId));
+  // Nunca borrar la raiz de output ni nada afuera de ella.
+  if (target === base || !target.startsWith(base + path.sep)) return false;
+  if (!fs.existsSync(target)) return false;
+  await fsp.rm(target, { recursive: true, force: true });
+  return true;
+}
+
 export function existsRel(projectId: string, relPath: string): boolean {
   return fs.existsSync(absPathFor(projectId, relPath));
 }

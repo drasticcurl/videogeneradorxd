@@ -13,7 +13,7 @@
  */
 import { config } from "../config";
 import { jobsDb, projectsDb } from "../db";
-import type { JobRecord, ProjectStatus } from "../types";
+import type { JobRecord, JobType, ProjectStatus } from "../types";
 import { ProviderHttpError } from "../providers/types";
 import {
   approveJob,
@@ -28,6 +28,8 @@ interface QueueState {
   running: Set<string>;
   retryAt: Map<string, number>;
   pumping: boolean;
+  /** timestamps de los ultimos arranques de VIDEO (ventana deslizante de rate limit) */
+  videoStarts: number[];
 }
 
 const globalForQueue = globalThis as unknown as { __augcQueue?: QueueState };
@@ -39,7 +41,61 @@ const state: QueueState =
     running: new Set(),
     retryAt: new Map(),
     pumping: false,
+    videoStarts: [],
   });
+// Defensivo: si el estado venia de una version anterior (HMR) puede no tener el campo.
+if (!state.videoStarts) state.videoStarts = [];
+
+/**
+ * Rate limit de VIDEO: como maximo N arranques por ventana (default 4 por minuto).
+ * Devuelve 0 si se puede arrancar ya, o los ms que faltan para el proximo slot.
+ */
+function videoRateWaitMs(): number {
+  const { videoRateMax, videoRateWindowMs } = config.pipeline;
+  const now = Date.now();
+  // Descartamos los arranques que salieron de la ventana.
+  state.videoStarts = state.videoStarts.filter((t) => now - t < videoRateWindowMs);
+  if (state.videoStarts.length < videoRateMax) return 0;
+  const oldest = Math.min(...state.videoStarts);
+  return Math.max(250, videoRateWindowMs - (now - oldest));
+}
+
+/**
+ * Un job que se quedo sin reintentos. Los VIDEOS no se marcan failed de una: vuelven
+ * a la cola desde cero (presupuesto de intentos nuevo) hasta videoRequeueMax veces,
+ * porque casi siempre es cuota/red y con esperar un rato salen. Recien despues, failed.
+ */
+function requeueOrFail(job: JobRecord, message: string): void {
+  const current = jobsDb.get(job.id);
+  const meta = (current?.meta ?? {}) as Record<string, unknown>;
+  const requeues = ((meta.requeues as number) ?? 0) + 1;
+
+  if (job.type === "video" && requeues <= config.pipeline.videoRequeueMax) {
+    const delay = config.pipeline.videoRateWindowMs;
+    state.retryAt.set(job.id, Date.now() + delay);
+    jobsDb.update(job.id, {
+      status: "pending",
+      attempts: 0,
+      error: `${message} — vuelve a la cola (reintento ${requeues}/${config.pipeline.videoRequeueMax}).`,
+      meta: { ...meta, requeues, transientRetries: 0 },
+    });
+    logEvent(
+      job.projectId,
+      "warn",
+      `"${job.refId}" fallo y vuelve a la cola (${requeues}/${config.pipeline.videoRequeueMax}), en ${Math.round(
+        delay / 1000
+      )}s.`,
+      { jobId: job.id }
+    );
+    setTimeout(() => pump(), delay + 50);
+    return;
+  }
+
+  jobsDb.update(job.id, { status: "failed", error: message });
+  logEvent(job.projectId, "error", `"${job.refId}" fallo definitivamente: ${message}`, {
+    jobId: job.id,
+  });
+}
 
 function backoffDelay(attempt: number): number {
   const base = config.pipeline.backoffBaseMs;
@@ -73,10 +129,11 @@ export function enqueueProject(projectId: string): void {
 export function enqueueJob(jobId: string): void {
   const job = jobsDb.get(jobId);
   if (!job) return;
-  const { rateLimitRetries, transientRetries, ...restMeta } = (job.meta ??
+  const { rateLimitRetries, transientRetries, requeues, ...restMeta } = (job.meta ??
     {}) as Record<string, unknown>;
   void rateLimitRetries;
   void transientRetries;
+  void requeues; // reintento manual = presupuesto de reencolados nuevo
   // Si estaba (o quedo) marcado como corriendo, liberamos el slot para poder regenerar
   // aunque el job estuviera colgado en "generating".
   state.running.delete(jobId);
@@ -147,7 +204,72 @@ export function cancelProject(projectId: string): void {
   logEvent(projectId, "warn", "Pipeline cancelado (los jobs en curso terminan).");
 }
 
+/**
+ * Reintenta los jobs ROTOS de un proyecto y devuelve los ids reencolados:
+ *  - status "failed": se quedaron sin reintentos (rate limit persistente, error del
+ *    provider, etc). enqueueJob les da presupuesto nuevo (attempts vuelve a 0).
+ *  - status "generating" pero que NO estan corriendo de verdad: quedaron colgados
+ *    (tipico si reiniciaste el server o hubo HMR). En la UI se ven "generando" para
+ *    siempre. Solo se tocan si `includeStuck` (default true).
+ *
+ * `type` limita a imagenes o videos (asi "reintentar imagenes" no toca los clips).
+ */
+export function retryBrokenJobs(
+  projectId: string,
+  opts?: { type?: JobType; includeStuck?: boolean }
+): string[] {
+  const includeStuck = opts?.includeStuck !== false;
+  const requeued: string[] = [];
+  for (const job of jobsDb.byProject(projectId)) {
+    if (opts?.type && job.type !== opts.type) continue;
+    const broken =
+      job.status === "failed" ||
+      (includeStuck &&
+        job.status === "generating" &&
+        !state.running.has(job.id));
+    if (!broken) continue;
+    enqueueJob(job.id); // resetea attempts/retryAt, reactiva el proyecto y bombea
+    requeued.push(job.id);
+  }
+  if (requeued.length > 0) {
+    logEvent(
+      projectId,
+      "info",
+      `Reintento manual de ${requeued.length} job(s) con error o colgados.`
+    );
+  }
+  return requeued;
+}
+
+/**
+ * Saca al proyecto COMPLETO del estado en memoria de la cola (se usa al borrar el
+ * proyecto). No cancela requests ya en vuelo: los jobs que esten corriendo terminan,
+ * pero al escribir en la DB no van a encontrar el registro y no se reencola nada.
+ */
+export function purgeProject(projectId: string): void {
+  const jobIds = jobsDb.byProject(projectId).map((j) => j.id);
+  state.activeProjects.delete(projectId);
+  state.pausedProjects.delete(projectId);
+  for (const id of jobIds) {
+    state.running.delete(id);
+    state.retryAt.delete(id);
+  }
+}
+
+/**
+ * True si la FASE del proyecto bloquea este job. En fase "images" los jobs de video
+ * esperan aunque su imagen ya este aprobada: asi se puede revisar/aprobar todas las
+ * imagenes sin que arranque un solo video (ni el gasto ni el rate limit de Veo).
+ */
+function isStageBlocked(job: JobRecord): boolean {
+  if (job.type !== "video") return false;
+  return projectsDb.get(job.projectId)?.stage === "images";
+}
+
 function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
+  if (isStageBlocked(job)) return "wait";
+  // Rate limit de video: si la ventana esta llena, este job espera su turno.
+  if (job.type === "video" && videoRateWaitMs() > 0) return "wait";
   const base = depReason(job);
   if (base !== "run") return base;
   // Con auto-aprobacion no hay gate por lotes: la ventana de generacion la define
@@ -228,7 +350,11 @@ function pump(): void {
       if (!started) {
         if (!scheduledRetryTick) {
           scheduledRetryTick = true;
-          setTimeout(() => pump(), 500);
+          // Si lo unico que frena es la ventana de rate limit de video, esperamos
+          // exactamente lo que falta para el proximo slot en vez de sondear cada 500ms.
+          const wait = videoRateWaitMs();
+          const hasVideoPending = pending.some((j) => j.type === "video");
+          setTimeout(() => pump(), hasVideoPending && wait > 0 ? wait + 100 : 500);
         }
         break;
       }
@@ -241,6 +367,8 @@ function pump(): void {
 
 function startJob(job: JobRecord): void {
   state.running.add(job.id);
+  // Anotamos el arranque para la ventana de rate limit de video.
+  if (job.type === "video") state.videoStarts.push(Date.now());
   jobsDb.update(job.id, {
     status: "generating",
     attempts: job.attempts + 1,
@@ -315,19 +443,11 @@ function startJob(job: JobRecord): void {
           );
           setTimeout(() => pump(), delay + 50);
         } else {
-          jobsDb.update(job.id, {
-            status: "failed",
-            error: `${
+          requeueOrFail(
+            job,
+            `${
               isRateLimit ? "Rate limit (429)" : "Error de red"
-            } persistente tras ${maxT} reintentos: ${message}`,
-          });
-          logEvent(
-            job.projectId,
-            "error",
-            `"${job.refId}" fallo por ${
-              isRateLimit ? "rate limit (429)" : "error de red"
-            } persistente.`,
-            { jobId: job.id }
+            } persistente tras ${maxT} reintentos: ${message}`
           );
         }
         return; // el finally hace cleanup + pump
@@ -348,10 +468,7 @@ function startJob(job: JobRecord): void {
         });
         setTimeout(() => pump(), delay + 50);
       } else {
-        jobsDb.update(job.id, { status: "failed", error: message });
-        logEvent(job.projectId, "error", `"${job.refId}" fallo definitivamente: ${message}`, {
-          jobId: job.id,
-        });
+        requeueOrFail(job, message);
       }
     } finally {
       state.running.delete(job.id);
@@ -394,6 +511,21 @@ function finalizeProjects(): void {
         );
       }
       state.activeProjects.delete(projectId); // se re-activa al aprobar/regenerar
+      void refreshManifest(projectId);
+      continue;
+    }
+
+    // Quedan jobs PENDIENTES que no pueden correr ahora mismo. Dos casos:
+    //  - la fase "images" esta frenando los videos -> el proyecto no esta terminado,
+    //    queda esperando que el usuario pase a fase videos (lo sacamos de la cola).
+    //  - un reintento con backoff programado -> hay que seguir ACTIVO, si no el
+    //    setTimeout(pump) no lo encuentra y el job queda colgado en pending.
+    const pending = jobs.filter((j) => j.status === "pending");
+    if (pending.length > 0) {
+      projectsDb.update(projectId, { status: "review" });
+      if (pending.every((j) => isStageBlocked(j))) {
+        state.activeProjects.delete(projectId); // se reactiva al pasar de fase
+      }
       void refreshManifest(projectId);
       continue;
     }

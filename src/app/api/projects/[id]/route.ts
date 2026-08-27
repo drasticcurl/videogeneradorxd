@@ -1,12 +1,14 @@
 /**
  * GET    /api/projects/:id   -> proyecto + jobs + manifest + estimacion
  * PUT    /api/projects/:id   -> actualiza plan / nombre / modelos / variantes
- * DELETE /api/projects/:id   -> elimina proyecto y sus jobs (no borra archivos en disco)
+ * DELETE /api/projects/:id   -> elimina proyecto, sus jobs Y la carpeta output/<id>/
+ *                               (usar ?keepFiles=1 para conservar los archivos)
  */
 import { jobsDb, projectsDb } from "@/lib/db";
 import { validatePlan } from "@/lib/schema";
 import { resolveModel, resolveResolution } from "@/lib/config";
-import { buildManifest, writeManifest } from "@/lib/storage";
+import { buildManifest, removeProjectDir, writeManifest } from "@/lib/storage";
+import { purgeProject } from "@/lib/jobs/queue";
 import { buildJobs, estimateCost } from "@/lib/jobs/pipeline";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
 
@@ -88,12 +90,46 @@ export async function PUT(
   }
 }
 
+/**
+ * Borra el proyecto por completo:
+ *  - lo saca del estado en memoria de la cola (no se reencola nada),
+ *  - borra el registro + sus jobs + sus logs de data/db.json,
+ *  - borra la carpeta output/<id>/ ENTERA (imagenes, clips, referencias, final.mp4).
+ *
+ * Con ?keepFiles=1 se conserva la carpeta en disco (solo limpia la DB).
+ */
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } }
 ) {
-  const project = projectsDb.get(params.id);
-  if (!project) return notFound("Proyecto no encontrado");
-  projectsDb.remove(project.id);
-  return ok({ deleted: true });
+  try {
+    const project = projectsDb.get(params.id);
+    if (!project) return notFound("Proyecto no encontrado");
+
+    const keepFiles =
+      new URL(req.url).searchParams.get("keepFiles") === "1";
+
+    // 1) Cortamos la cola primero: si el pipeline estaba corriendo, dejamos de
+    //    tomar jobs nuevos de este proyecto antes de borrar los archivos.
+    purgeProject(project.id);
+
+    // 2) Archivos en disco (imagenes + videos). Si falla, avisamos pero igual
+    //    limpiamos la DB para que el proyecto no quede fantasma en la lista.
+    let filesDeleted = false;
+    let filesError: string | null = null;
+    if (!keepFiles) {
+      try {
+        filesDeleted = await removeProjectDir(project.id);
+      } catch (err) {
+        filesError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    // 3) DB: proyecto + jobs + logs.
+    projectsDb.remove(project.id);
+
+    return ok({ deleted: true, filesDeleted, filesError });
+  } catch (err) {
+    return serverError(err);
+  }
 }

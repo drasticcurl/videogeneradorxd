@@ -66,6 +66,11 @@ export default function ResultPage({ params }: { params: { id: string } }) {
     ? `${config?.outputDir ?? "./output"}/${project.id}`
     : "";
 
+  // Hay algo para descargar si al menos un clip tiene archivo (o esta el final.mp4).
+  const hasDownloadableVideos = Boolean(
+    manifest?.clips.some((c) => c.file) || manifest?.final_video
+  );
+
   // JSON con todos los videos (clips) del proyecto, listo para copiar.
   const videosJson = manifest
     ? JSON.stringify(
@@ -125,6 +130,29 @@ export default function ResultPage({ params }: { params: { id: string } }) {
           >
             {busy === "stitch" ? "Uniendo…" : "Unir en final.mp4 (ffmpeg)"}
           </button>
+          <a
+            href={
+              hasDownloadableVideos
+                ? `/api/projects/${projectId}/download`
+                : undefined
+            }
+            aria-disabled={!hasDownloadableVideos}
+            onClick={(e) => {
+              if (!hasDownloadableVideos) e.preventDefault();
+            }}
+            title={
+              hasDownloadableVideos
+                ? "Descarga un .zip con todos los clips generados"
+                : "Todavia no hay videos generados"
+            }
+            className={`rounded-lg border px-4 py-2 text-sm ${
+              hasDownloadableVideos
+                ? "border-emerald-600/60 text-emerald-200 hover:bg-emerald-500/10"
+                : "cursor-not-allowed border-slate-700 text-slate-500 opacity-40"
+            }`}
+          >
+            ⬇ Descargar todos los videos (.zip)
+          </a>
         </div>
       </div>
 
