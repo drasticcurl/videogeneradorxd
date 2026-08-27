@@ -170,6 +170,23 @@ export const config = {
     veoPollTimeoutMs: Number(env("VEO_POLL_TIMEOUT_MS", "600000")), // 10 min
     // Maximo de entradas de log que se guardan por proyecto.
     maxLogEntries: Number(env("PIPELINE_MAX_LOG", "500")),
+
+    /**
+     * RATE LIMIT de VIDEO (Veo). Ventana deslizante: como maximo `videoRateMax`
+     * arranques de video cada `videoRateWindowMs`. Default: 4 por minuto.
+     * Es aparte de la concurrencia: la concurrencia limita cuantos corren a la vez,
+     * esto limita cuantos se LARGAN por minuto (que es lo que cuenta la cuota).
+     */
+    videoRateMax: Math.max(1, Number(env("PIPELINE_VIDEO_RATE_MAX", "4"))),
+    videoRateWindowMs: Math.max(
+      1000,
+      Number(env("PIPELINE_VIDEO_RATE_WINDOW_MS", "60000"))
+    ),
+    /**
+     * Cuantas veces un video que fallo vuelve a la cola desde cero (con presupuesto
+     * de intentos nuevo) antes de darlo por perdido.
+     */
+    videoRequeueMax: Math.max(0, Number(env("PIPELINE_VIDEO_REQUEUE_MAX", "5"))),
   },
 
   /** Estimacion de costo aproximada (solo informativa para la UI antes de generar). */
@@ -180,29 +197,51 @@ export const config = {
   },
 
   /**
-   * Transcripcion LOCAL con Whisper (gratis, sin API). Corre el binario `whisper`
-   * (openai-whisper) como subproceso. Necesita Python con whisper instalado
-   * (`pip install -U openai-whisper`) y ffmpeg en el PATH.
-   * Por defecto transcribe SIEMPRE en español con el modelo `small`.
+   * Auth de la app. La app corre en un subdominio publico, asi que el acceso se
+   * cierra con un password-gate por usuario (ver src/lib/auth.ts).
+   *
+   * `users` se arma leyendo `PASSWORD_<NOMBRE>` del environment: cada var declara
+   * un usuario. Asi agregar o sacar gente es tocar el .env y reiniciar, sin
+   * recompilar ni editar codigo.
+   *
+   * Se resuelve en cada acceso (getter) y no una vez al importar el modulo:
+   * `config` es un objeto congelado que Next puede evaluar durante el build, y
+   * ahi las vars de runtime todavia no estan. Con el getter, el valor se lee
+   * cuando corre el request.
    */
-  whisper: {
-    // Comando/binario a ejecutar. Default "whisper" (el CLI de openai-whisper).
-    // Si usás otra implementacion (ej. whisper-ctranslate2) pisalo por env.
-    bin: env("WHISPER_BIN", "whisper"),
-    // Modelo: tiny | base | small | medium | large-v3. Default small.
-    model: env("WHISPER_MODEL", "small"),
-    // Idioma forzado. Default Spanish (el usuario siempre transcribe en español).
-    language: env("WHISPER_LANGUAGE", "Spanish"),
-    // transcribe (mismo idioma) | translate (traduce a ingles). Default transcribe.
-    task: env("WHISPER_TASK", "transcribe"),
-    // Args extra opcionales para el CLI (separados por espacios). Ej "--fp16 False".
-    extraArgs: env("WHISPER_EXTRA_ARGS", "")
-      .split(/\s+/)
-      .filter(Boolean),
-    // Carpeta donde quedan los .txt transcriptos (y, si falla, el media para debug).
-    outputDir: resolveFromCwd(env("TRANSCRIBE_DIR", "./output/_transcribe")),
+  auth: {
+    /** Secret con el que se firman las cookies de sesion. Sin esto no entra nadie. */
+    get secret(): string {
+      return env("AUTH_SECRET");
+    },
+    /** Horas de vida de la sesion antes de tener que volver a loguearse. */
+    get sessionHours(): number {
+      const n = Number(env("AUTH_SESSION_HOURS", "72"));
+      return Number.isFinite(n) && n > 0 ? n : 72;
+    },
   },
 } as const;
+
+/**
+ * Usuarios habilitados, leidos de `PASSWORD_<NOMBRE>` del environment.
+ *
+ * Ejemplo: `PASSWORD_IVAN=xxx` y `PASSWORD_LUCHO=yyy` habilitan a `ivan` y
+ * `lucho`. El nombre se normaliza a minusculas para que el login no dependa de
+ * como lo escriba el usuario en el form.
+ *
+ * NO se cachea en un modulo-level const: en el build de Next las vars de runtime
+ * no existen todavia, y un valor cacheado vacio dejaria la app sin usuarios.
+ */
+export function authUsers(): Map<string, string> {
+  const users = new Map<string, string>();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith("PASSWORD_")) continue;
+    if (!value) continue;
+    const name = key.slice("PASSWORD_".length).toLowerCase();
+    if (name) users.set(name, value);
+  }
+  return users;
+}
 
 /** Valida que un id de modelo pertenezca al catalogo del tipo dado. Si no, usa el default. */
 export function resolveModel(kind: ModelKind, requested?: string): string {

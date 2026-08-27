@@ -18,6 +18,17 @@
 .env
 .env.local
 .env*.local
+.env.production*
+
+# Credenciales. El repo es PUBLICO: nada de esto puede entrar a git nunca.
+CREDENCIALES-*.txt
+adc.json
+*-service-account.json
+application_default_credentials.json
+
+# SDK de gcloud descomprimido adentro del repo (367 MB). No es codigo del
+# proyecto y no tiene por que viajar ni a git ni a la VPS.
+/googlecloudxd/
 
 # misc
 .DS_Store
