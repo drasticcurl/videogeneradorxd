@@ -83,11 +83,34 @@ log "═══ deploy $STAMP ═══"
 # ─── 0. Traer el codigo ─────────────────────────────────────────────────────
 cd "$REPO"
 git fetch --quiet origin "$DEPLOY_BRANCH" || fail "git fetch falló"
+
+# Este script VIVE en el repo que esta por actualizar, asi que el `git reset` de
+# abajo puede reescribir el archivo que bash esta ejecutando. Bash lee el script
+# por offset de bytes, asi que si el archivo cambia de tamaño sigue leyendo desde
+# la posicion vieja del archivo nuevo: ejecuta lineas cortadas, o vuelve a
+# ejecutar un pedazo. Paso en el primer deploy: el fix de `npm ci --include=dev`
+# estaba en el disco y aun asi corrio la version anterior, y el log lo mostro
+# porque imprimio el mensaje viejo.
+#
+# La solucion es re-ejecutarse una sola vez con la version nueva. El guard
+# DEPLOY_REEXEC evita un loop infinito si algo sale raro con el hash.
+ANTES="$(sha256sum "$REPO/deploy/deploy.sh" | cut -d' ' -f1)"
+
 # `reset --hard` y no `pull`: el repo del server no tiene que tener cambios
 # locales nunca, y un merge a medio hacer bloquearia todos los deploys.
 git reset --quiet --hard "origin/$DEPLOY_BRANCH" || fail "git reset falló"
 COMMIT="$(git rev-parse --short HEAD)"
 log "codigo en $DEPLOY_BRANCH @ $COMMIT — $(git log -1 --pretty=%s)"
+
+DESPUES="$(sha256sum "$REPO/deploy/deploy.sh" | cut -d' ' -f1)"
+if [[ "$ANTES" != "$DESPUES" && -z "${DEPLOY_REEXEC:-}" ]]; then
+  log "deploy.sh cambio en este commit — re-ejecutando con la version nueva"
+  # El lock se libera al reemplazar el proceso (exec cierra el fd 9 al terminar
+  # este), y el proceso nuevo lo vuelve a tomar. No hay ventana util para otro
+  # deploy porque el exec es inmediato.
+  flock -u 9
+  exec env DEPLOY_REEXEC=1 bash "$REPO/deploy/deploy.sh" "$@"
+fi
 
 # ─── 1. repo → release ──────────────────────────────────────────────────────
 mkdir -p "$RELEASE"

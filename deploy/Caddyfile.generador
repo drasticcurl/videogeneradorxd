@@ -1,0 +1,73 @@
+# ─── Generador de videos (AUGC Pipeline) ─────────────────────────────────────
+#
+# Se inserta en /etc/caddy/Caddyfile ANTES del bloque `:443` que hace catch-all.
+#
+# NO usa el snippet (funnel) a proposito, por tres razones: ese snippet proxea a
+# DOS puertos (aca hay un solo proceso, ver deploy/ecosystem.config.js), sirve
+# /media/* desde disco (esta app sirve todo por /api/files/*, que pasa por el
+# login) y no pone noindex.
+#
+# ─── POR QUE ESTA EN LA ZONA hilvanapp.online ────────────────────────────────
+# Es la unica zona de Cloudflare que no tiene nada mas adentro. Las Cache Rules y
+# las reglas de WAF son POR ZONA y matchean por path: metiendo esta herramienta en
+# hilvanapp.com habria que revisar cada regla de los funnels para que no le pegue,
+# y al reves, una regla nueva de los funnels podria empezar a cachear /api/* del
+# generador. En una zona propia, ninguno de los dos lados puede romper al otro.
+#
+# ─── EL CERT ES UNA COPIA DEL WILDCARD DE OTRA ZONA ──────────────────────────
+# certs/generador.pem es una copia de *.hilvanapp.com, asi que el nombre NO
+# matchea generador.hilvanapp.online. Funciona porque la zona hilvanapp.online
+# esta en modo Full (NO strict) y Cloudflare no valida el nombre del cert del
+# origen. Es el mismo arreglo que ya usan ritual.hilvanapp.org y
+# reset.hilvanapp2.org.
+#   SI ALGUN DIA SE PASA hilvanapp.online A FULL STRICT, ESTE HOST DEJA DE
+#   RESPONDER. El arreglo es emitir un Origin CA propio para *.hilvanapp.online
+#   desde el dashboard de Cloudflare y apuntar estas dos lineas ahi.
+generador.hilvanapp.online {
+	tls /etc/caddy/certs/generador.pem /etc/caddy/certs/generador.key
+	encode zstd gzip
+
+	# El `defer` NO es opcional: sin el, Caddy setea el header sobre la respuesta
+	# vacia ANTES de correr el reverse_proxy, y despues el proxy le apendea el del
+	# upstream, con lo que la respuesta sale con DOS Cache-Control. Ya paso en el
+	# panel.
+	#
+	# Nada cacheable y nada indexable: es una herramienta interna, detras de login,
+	# y lo que sirve son videos e imagenes de campañas que no tienen que aparecer
+	# en Google.
+	header {
+		defer
+		Cache-Control "no-store, must-revalidate"
+		X-Robots-Tag "noindex, nofollow"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	reverse_proxy 127.0.0.1:3006 {
+		# Es la IP que usa el rate limit del login (src/lib/auth.ts). Sin este
+		# header todos los intentos parecen venir de Cloudflare y comparten el
+		# mismo balde: 5 intentos fallidos de cualquiera dejarian afuera a los dos
+		# usuarios por 15 minutos.
+		header_up X-Real-IP {client_ip}
+
+		# Generar un video es un LRO de Veo que puede tardar minutos. Los defaults
+		# de Caddy no cortan, pero se explicitan para que un cambio de default no
+		# rompa una generacion por la mitad.
+		# OJO: Cloudflare corta a los 100 s y devuelve 524, y eso NO se puede subir
+		# fuera de Enterprise. Por eso /api/projects/:id/generate encola y contesta
+		# al toque en vez de esperar. Las rutas que si pueden pasarse de 100 s
+		# (stitch, extend) no se usan.
+		transport http {
+			response_header_timeout 300s
+			read_timeout 300s
+		}
+	}
+
+	log {
+		output file /var/log/caddy/generador.log {
+			roll_size 20mb
+			roll_keep 7
+			roll_keep_for 168h
+		}
+	}
+}
