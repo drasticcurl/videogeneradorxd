@@ -153,8 +153,17 @@ fi
 
 # ─── 4. Build ───────────────────────────────────────────────────────────────
 cd "$RELEASE"
-npm ci --no-audit --no-fund >>"$LOGFILE" 2>&1 || fail "npm ci falló (ver $LOGFILE)"
-log "dependencias instaladas"
+# `--include=dev` es OBLIGATORIO y no redundante. El paso 3 hace `source` del
+# .env.production para los guards, y ese archivo setea NODE_ENV=production; con
+# NODE_ENV=production, `npm ci` SALTEA las devDependencies, que es donde viven
+# typescript, tailwind y postcss. Sin el flag, el typecheck muere con
+# "sh: 1: tsc: not found" y, si se saltara el typecheck, el build fallaria al no
+# encontrar tailwind. Paso en el primer deploy.
+npm ci --include=dev --no-audit --no-fund >>"$LOGFILE" 2>&1 || fail "npm ci falló (ver $LOGFILE)"
+# Guard explicito: si algun dia cambia el comportamiento de npm, el error tiene
+# que decir QUE falta, no "tsc: not found" tres lineas mas abajo.
+[[ -x "$RELEASE/node_modules/.bin/tsc" ]] || fail "no se instalaron las devDependencies (falta tsc) — ¿NODE_ENV=production sin --include=dev?"
+log "dependencias instaladas (con devDependencies)"
 
 npm run typecheck >>"$LOGFILE" 2>&1 || fail "typecheck falló (ver $LOGFILE)"
 log "typecheck ok"
