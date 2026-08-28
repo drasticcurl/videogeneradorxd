@@ -35,7 +35,10 @@ export default function NavLinks() {
             href={l.href}
             aria-current={activo ? "page" : undefined}
             className={cn(
-              "rounded-md px-2.5 py-1.5 text-body transition-colors",
+              // `whitespace-nowrap`: el header mide 56px de alto fijo y "Nuevo
+              // proyecto" partia en dos lineas en un telefono. Ahora no corta y lo
+              // que no entra scrollea, que es para lo que el <nav> es overflow-x-auto.
+              "shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-body transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
               activo
                 ? "bg-surface-hi font-medium text-fg"

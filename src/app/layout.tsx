@@ -46,7 +46,7 @@ export default function RootLayout({
         </a>
 
         <header className="border-b border-divider bg-bg">
-          <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-6 px-4">
+          <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-3 px-4 sm:gap-6">
             <Link
               href="/"
               className="flex shrink-0 items-center gap-2 rounded-md font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -60,12 +60,23 @@ export default function RootLayout({
             {/* Sin sesion el header queda solo con la marca: los links no llevan a
                 ningun lado porque el middleware los redirige al login. */}
             {usuario && (
-              <nav
-                aria-label="Principal"
-                className="flex min-w-0 flex-1 items-center gap-1"
-              >
-                <NavLinks />
-                <span className="ml-auto flex shrink-0 items-center gap-3">
+              <>
+                {/*
+                  Los controles de sesion quedan AFUERA del <nav>, y no adentro con
+                  `ml-auto` como estaban: cuando los tres links y el boton de Salir no
+                  entraban a lo ancho (pasaba a 390px, 427px de contenido) el header
+                  empujaba y la pagina ENTERA agarraba scroll horizontal. Con el nav
+                  como unico `flex-1 min-w-0 overflow-x-auto`, lo que sobra scrollea
+                  adentro del nav y el resto del layout no se mueve. De paso Salir no
+                  se puede ir de pantalla, que es lo que pasaba antes.
+                */}
+                <nav
+                  aria-label="Principal"
+                  className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+                >
+                  <NavLinks />
+                </nav>
+                <span className="flex shrink-0 items-center gap-3">
                   <a
                     href="https://cloud.google.com/vertex-ai/generative-ai/docs"
                     target="_blank"
@@ -76,7 +87,7 @@ export default function RootLayout({
                   </a>
                   <SessionBar usuario={usuario} />
                 </span>
-              </nav>
+              </>
             )}
           </div>
         </header>

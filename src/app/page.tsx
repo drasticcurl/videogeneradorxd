@@ -500,7 +500,53 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* ──────────────────── 1 y 2: modo + area de trabajo ─────────────── */}
+      {/* ─── 1: modelos, aprobacion y costo ───
+           Va primero a proposito: el modelo de chat es el que interpreta el brief,
+           asi que la decision (y su costo) tiene que estar tomada antes de apretar
+           Interpretar con IA. ─── */}
+      <section className="space-y-3">
+        <h2 className="text-title font-semibold text-fg">Modelos y aprobación</h2>
+        <ModelSelectorBar />
+
+        {/* Switch de auto-aprobacion del proyecto.
+            - OFF (videos normales): cada imagen/video queda esperando que vos la
+              apruebes antes de que arranque el paso siguiente.
+            - ON  (VSL / dejar correr): cada job se aprueba solo al terminar.
+            Default inteligente del store: se prende solo cuando subis avatares (VSL);
+            si tocás el toggle a mano, manda lo que elegiste y no se ajusta mas. */}
+        <Card flush>
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg p-4 focus-within:ring-2 focus-within:ring-accent">
+            <input
+              type="checkbox"
+              checked={autoApprove}
+              onChange={(e) => setAutoApprove(e.target.checked)}
+              className="mt-0.5 size-4 shrink-0 accent-accent"
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-body font-medium text-fg">
+                Auto-aprobar todo al terminar
+              </span>
+              <span className="mt-0.5 block max-w-prose text-label text-fg-dim">
+                {autoApprove ? (
+                  <>
+                    Modo <b className="font-medium text-fg">dejar correr</b>: cada imagen
+                    y cada video se aprueban solos y arranca el siguiente. Es lo
+                    recomendado para un VSL con muchos clips.
+                  </>
+                ) : (
+                  <>
+                    Modo <b className="font-medium text-fg">aprobación manual</b>: cada
+                    imagen y cada video te van a pedir aprobación antes de seguir. Ideal
+                    para videos normales con pocas tomas.
+                  </>
+                )}
+              </span>
+            </span>
+          </label>
+        </Card>
+      </section>
+
+      {/* ──────────────────── 2 y 3: modo + area de trabajo ─────────────── */}
       <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-divider">
           <TabsList className="border-b-0">
@@ -540,7 +586,7 @@ export default function HomePage() {
         <TabsContent value="ia" className="space-y-3">
           <Textarea
             label="Brief del anuncio"
-            hint={`Lo interpreta ${modeloDelBrief}. El modelo se elige más abajo, en Modelos y aprobación.`}
+            hint={`Lo interpreta ${modeloDelBrief}. Se cambia arriba, en Modelos y aprobación.`}
             placeholder="Pegá acá tu brief largo con avatares, b-roll y clips en orden…"
             value={brief}
             onChange={(e) => setBrief(e.target.value)}
@@ -743,7 +789,7 @@ export default function HomePage() {
         </TabsContent>
       </Tabs>
 
-      {/* ──────────────────── 3: avatares de referencia ──────────────────── */}
+      {/* ──────────────────── 4: avatares de referencia ──────────────────── */}
       {/*
         Visible en los DOS modos, como antes. Es lo mas delicado de la pantalla: el
         `id` de cada foto es lo que el plan referencia en `ref_image_ids`. Ver el
@@ -871,49 +917,6 @@ export default function HomePage() {
           </p>
         )}
       </Card>
-
-      {/* ─────────────── 4: modelos, aprobacion y costo ─────────────── */}
-      <section className="space-y-3">
-        <h2 className="text-title font-semibold text-fg">Modelos y aprobación</h2>
-        <ModelSelectorBar />
-
-        {/* Switch de auto-aprobacion del proyecto.
-            - OFF (videos normales): cada imagen/video queda esperando que vos la
-              apruebes antes de que arranque el paso siguiente.
-            - ON  (VSL / dejar correr): cada job se aprueba solo al terminar.
-            Default inteligente del store: se prende solo cuando subis avatares (VSL);
-            si tocás el toggle a mano, manda lo que elegiste y no se ajusta mas. */}
-        <Card flush>
-          <label className="flex cursor-pointer items-start gap-3 rounded-lg p-4 focus-within:ring-2 focus-within:ring-accent">
-            <input
-              type="checkbox"
-              checked={autoApprove}
-              onChange={(e) => setAutoApprove(e.target.checked)}
-              className="mt-0.5 size-4 shrink-0 accent-accent"
-            />
-            <span className="min-w-0 flex-1">
-              <span className="block text-body font-medium text-fg">
-                Auto-aprobar todo al terminar
-              </span>
-              <span className="mt-0.5 block max-w-prose text-label text-fg-dim">
-                {autoApprove ? (
-                  <>
-                    Modo <b className="font-medium text-fg">dejar correr</b>: cada imagen
-                    y cada video se aprueban solos y arranca el siguiente. Es lo
-                    recomendado para un VSL con muchos clips.
-                  </>
-                ) : (
-                  <>
-                    Modo <b className="font-medium text-fg">aprobación manual</b>: cada
-                    imagen y cada video te van a pedir aprobación antes de seguir. Ideal
-                    para videos normales con pocas tomas.
-                  </>
-                )}
-              </span>
-            </span>
-          </label>
-        </Card>
-      </section>
 
       {/* ─────────── el plan, la estimacion y el boton que gasta ─────────── */}
       {plan && (

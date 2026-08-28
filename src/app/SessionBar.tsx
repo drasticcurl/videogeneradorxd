@@ -39,7 +39,7 @@ export default function SessionBar({ usuario }: { usuario: string }) {
   }
 
   return (
-    <span className="flex items-center gap-2 border-l border-divider pl-4">
+    <span className="flex items-center gap-2 sm:border-l sm:border-divider sm:pl-4">
       {/*
         El nombre en mono: son usuarios de dos o tres letras en mayuscula y con la
         proporcional quedaban con el interletrado desparejo al lado del boton.
@@ -50,15 +50,22 @@ export default function SessionBar({ usuario }: { usuario: string }) {
         antes pasaba de "Salir" a "Saliendo…", cambiaba de ancho y corria el header
         entero justo cuando el usuario lo estaba mirando.
       */}
+      {/*
+        Abajo de 640px queda solo el icono y el texto se esconde: los tres links del
+        nav mas el nombre mas "Salir" no entraban a lo ancho en un telefono. El
+        `aria-label` es el que sostiene el nombre accesible cuando el texto no se ve,
+        asi que el boton sigue anunciandose "Salir" en el lector de pantalla.
+      */}
       <Button
         type="button"
         variant="ghost"
         size="sm"
         onClick={salir}
         loading={saliendo}
+        aria-label="Salir"
         icon={<SignOut aria-hidden className="size-3.5 shrink-0" />}
       >
-        Salir
+        <span className="hidden sm:inline">Salir</span>
       </Button>
     </span>
   );
