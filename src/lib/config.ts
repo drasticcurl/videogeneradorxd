@@ -215,6 +215,23 @@ export const config = {
     networkBackoffMs: Number(env("PIPELINE_NETWORK_BACKOFF_MS", "4000")),
     // Timeout por request de imagen (ms). Si la conexion se cuelga, aborta y reintenta.
     imageTimeoutMs: Number(env("PIPELINE_IMAGE_TIMEOUT_MS", "120000")),
+    /**
+     * Pausa ENTRE las variantes de una misma imagen (ms).
+     *
+     * No es cosmetica. Los modelos de imagen nuevos tienen la cuota muy apretada:
+     * verificado el 2026-08-28, gemini-3.1-flash-image contesta 429
+     * RESOURCE_EXHAUSTED a los ~200ms si se le manda la segunda variante pegada a
+     * la primera. Sin esta pausa, pedir 2 variantes devolvia 1 sola.
+     */
+    imageVariantGapMs: Number(env("PIPELINE_IMAGE_VARIANT_GAP_MS", "2500")),
+    /**
+     * Reintentos de UNA variante puntual cuando la cuota la rechaza, antes de
+     * seguir con la siguiente. Es aparte de los reintentos del job entero: una
+     * variante que no sale no tiene por que hacer perder las que ya salieron.
+     */
+    imageVariantRateLimitRetries: Number(
+      env("PIPELINE_IMAGE_VARIANT_RETRIES", "3")
+    ),
     // Reintentos extra dedicados a errores transitorios (429 + red); cuenta aparte
     // de los maxAttempts normales.
     rateLimitMaxAttempts: Number(env("PIPELINE_RATE_LIMIT_MAX_ATTEMPTS", "10")),

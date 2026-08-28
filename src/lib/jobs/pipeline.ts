@@ -32,8 +32,12 @@ import {
   writeManifest,
 } from "../storage";
 import { hasFfmpeg } from "../providers/placeholder";
+import { ProviderHttpError } from "../providers/types";
 import type { ProjectPlan } from "../schema";
 import type { Candidate, JobRecord, LogEntry, LogLevel, ProjectRecord } from "../types";
+
+/** Pausa. Se usa para espaciar las variantes de una imagen y para el backoff de 429. */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function imageJobId(projectId: string, imageId: string): string {
   return `${projectId}:img:${imageId}`;
@@ -296,44 +300,100 @@ async function runImageGeneration(
 
   // Generamos UNA variante por request (no las dos a la vez). Persistimos cada exito
   // al toque para no perderlo si la siguiente falla (429 / red).
+  //
+  // Entre variante y variante hay una PAUSA, y un 429 reintenta ESA variante en vez
+  // de abandonar el resto. Los dos detalles vienen de un bug real: los modelos de
+  // imagen nuevos tienen la cuota tan apretada que la segunda variante mandada
+  // pegada a la primera vuelve 429 RESOURCE_EXHAUSTED a los ~200ms. El codigo
+  // anterior hacia `break` ahi, asi que pedir 2 variantes devolvia 1 sola, el job
+  // pasaba a awaiting_approval sin error y la UI no mostraba que faltaba una.
   let lastErr: unknown;
+  let primeraRequest = true;
   for (const i of missing) {
-    try {
-      const result = await getImageProvider().generate({
-        prompt: img.prompt,
-        refImages: refImages.length > 0 ? refImages : undefined,
-        negativePrompt,
-        aspectRatio: ASPECT_RATIO,
-        model,
-      });
-      const ext = result.mimeType.includes("jpeg") ? "jpg" : "png";
-      const rel = candidateRelPath(img.id, i, ext);
-      await saveBytes(project.id, rel, result.bytes);
-      candidates.push({ file: rel, index: i });
-      candidates.sort((a, b) => a.index - b.index);
-      // Persistimos incrementalmente (cada request individual).
-      jobsDb.update(job.id, {
-        candidates: [...candidates],
-        selectedIndex: variants === 1 ? 1 : job.selectedIndex ?? null,
-        outputPath: null,
-        model,
-      });
-      logEvent(project.id, "info", `Variante v${i} de "${img.id}" lista.`, {
-        jobId: job.id,
-        model,
-      });
-    } catch (err) {
-      lastErr = err;
-      logEvent(
-        project.id,
-        "warn",
-        `Variante v${i} de "${img.id}" fallo: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-        { jobId: job.id, model }
-      );
-      // No seguimos pegando si una fallo (probable 429/red): devolvemos lo que haya.
-      break;
+    // La pausa va ANTES de cada request menos la primera: si la imagen tiene una
+    // sola variante, no agrega ninguna demora.
+    if (!primeraRequest && config.pipeline.imageVariantGapMs > 0) {
+      await sleep(config.pipeline.imageVariantGapMs);
+    }
+    primeraRequest = false;
+
+    const maxIntentos = Math.max(1, config.pipeline.imageVariantRateLimitRetries);
+    let salio = false;
+
+    for (let intento = 1; intento <= maxIntentos && !salio; intento++) {
+      try {
+        const result = await getImageProvider().generate({
+          prompt: img.prompt,
+          refImages: refImages.length > 0 ? refImages : undefined,
+          negativePrompt,
+          aspectRatio: ASPECT_RATIO,
+          model,
+        });
+        const ext = result.mimeType.includes("jpeg") ? "jpg" : "png";
+        const rel = candidateRelPath(img.id, i, ext);
+        await saveBytes(project.id, rel, result.bytes);
+        candidates.push({ file: rel, index: i });
+        candidates.sort((a, b) => a.index - b.index);
+        // Persistimos incrementalmente (cada request individual).
+        jobsDb.update(job.id, {
+          candidates: [...candidates],
+          selectedIndex: variants === 1 ? 1 : job.selectedIndex ?? null,
+          outputPath: null,
+          model,
+        });
+        logEvent(project.id, "info", `Variante v${i} de "${img.id}" lista.`, {
+          jobId: job.id,
+          model,
+        });
+        salio = true;
+      } catch (err) {
+        lastErr = err;
+        const esCuota =
+          err instanceof ProviderHttpError
+            ? err.isRateLimit
+            : /\(429\)|RESOURCE_EXHAUSTED|rate limit|quota/i.test(
+                err instanceof Error ? err.message : String(err)
+              );
+
+        // Un error que NO es de cuota (prompt bloqueado, modelo inexistente, red
+        // caida) no se arregla esperando: se corta y la cola decide.
+        if (!esCuota) {
+          logEvent(
+            project.id,
+            "warn",
+            `Variante v${i} de "${img.id}" fallo: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { jobId: job.id, model }
+          );
+          break;
+        }
+
+        if (intento >= maxIntentos) {
+          logEvent(
+            project.id,
+            "warn",
+            `Variante v${i} de "${img.id}": cuota agotada tras ${maxIntentos} intentos. Sigo con la que viene.`,
+            { jobId: job.id, model }
+          );
+          break;
+        }
+
+        // Backoff creciente sobre la pausa base, con jitter para no sincronizar
+        // varias imagenes que arrancaron juntas.
+        const espera =
+          config.pipeline.imageVariantGapMs * Math.pow(2, intento - 1) +
+          Math.random() * 1000;
+        logEvent(
+          project.id,
+          "warn",
+          `Variante v${i} de "${img.id}": 429 de cuota, espero ${Math.round(
+            espera / 1000
+          )}s y reintento (${intento}/${maxIntentos}).`,
+          { jobId: job.id, model }
+        );
+        await sleep(espera);
+      }
     }
   }
 
@@ -342,11 +402,20 @@ async function runImageGeneration(
     throw lastErr ?? new Error(`No se pudo generar ninguna variante de "${img.id}".`);
   }
 
+  // Si salieron menos de las pedidas, queda escrito en el job. Sin esto el job pasa
+  // a awaiting_approval como si todo hubiera ido bien y no hay forma de saber, desde
+  // la UI, que falta una variante. `error` no cambia el status: las dos UIs lo
+  // muestran como una nota (ver JobCard), asi que el job sigue siendo aprobable.
+  const faltan = variants - candidates.length;
   jobsDb.update(job.id, {
     candidates,
     selectedIndex: variants === 1 ? 1 : candidates.length === 1 ? candidates[0].index : job.selectedIndex ?? null,
     outputPath: null,
     model,
+    error:
+      faltan > 0
+        ? `Salieron ${candidates.length}/${variants} variantes: la cuota del modelo rechazó ${faltan}. Podés aprobar la que hay o darle a Variar para reintentar.`
+        : null,
   });
   if (candidates.length < variants) {
     logEvent(
