@@ -55,16 +55,11 @@ const config: Config = {
         danger: "#fb7185", // rose-400, fallo
         info: "#38bdf8", // sky-400, la maquina esta trabajando
 
-        // ─── ALIAS DE TRANSICION — LOS BORRA T12, NO VOS ────────────────────
-        // Unico lugar del modulo con dos dueños (T01 los crea, T12 los borra). Ver
-        // §8 del plan. Mientras las 8 pantallas se migran de a una, las que faltan
-        // siguen usando bg-panel / bg-ink / bg-accent: si desaparecen antes de que
-        // termine T11, la app ENTERA queda sin estilos, y se esta usando en
-        // produccion mientras esto se hace.
-        // `accent` ya apunta al ambar, asi que las pantallas sin migrar mejoran
-        // gratis y de paso se ve el acento nuevo en contexto real desde el dia 1.
-        ink: "#09090b", // era #0b1020 (navy)
-        panel: "#18181b", // era #11182b
+        // Acá vivieron `ink` y `panel`, los alias de transicion que T01 dejo para que
+        // las pantallas sin migrar no quedaran sin estilos mientras el rediseño
+        // avanzaba de a una. T12 los borro despues de probar que no quedaba ni una
+        // referencia en `src/`. `accent` NO era un alias: es un token de §4 y se
+        // queda.
       },
       fontFamily: {
         // Las define `layout.tsx` con next/font. El fallback importa: si la

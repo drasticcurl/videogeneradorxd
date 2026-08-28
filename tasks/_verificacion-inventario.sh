@@ -109,8 +109,14 @@ botones=$(grep -ro "<button" src/ | wc -l | tr -d ' ')
 bg_accent=$(grep -ro "bg-accent" src/ | wc -l | tr -d ' ')
 printf "  archivos .tsx:     %s   (pre-T01: 24)\n" "$tsx_total"
 printf "  lineas de tsx:     %s   (pre-T01: 6545)\n" "$lineas"
-printf "  <button a mano:    %s   (pre-T01: 91. T12 espera ~0 fuera de ui/)\n" "$botones"
-printf "  usos de bg-accent: %s   (pre-T01: 25. T12 espera 0: es un alias viejo)\n" "$bg_accent"
+printf "  <button a mano:    %s   (pre-T01: 91. Los que quedan son casos con imagen adentro)\n" "$botones"
+# La expectativa original decia "T12 espera 0, es un alias viejo". Estaba MAL y la
+# corrigio T12: el alias viejo era el `accent` indigo, pero §4 define `accent` como
+# token de primera clase (el ambar), asi que `bg-accent` es uso legitimo. Los alias que
+# T12 borro fueron `ink` y `panel`, y de esos no queda ninguno.
+printf "  usos de bg-accent: %s   (token de §4, uso legitimo)\n" "$bg_accent"
+printf "  usos de ink/panel: %s   (alias viejos: T12 espera 0)\n" \
+  "$(grep -rcE '\b(bg|text|border|ring)-(ink|panel)\b' src/ 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
 
 echo
 if [ "$fallos" -eq 0 ]; then
