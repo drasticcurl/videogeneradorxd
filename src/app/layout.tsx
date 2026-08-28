@@ -46,6 +46,9 @@ export default function RootLayout({
                 <Link href="/batch" className="hover:text-white">
                   Tablero
                 </Link>
+                <Link href="/imagenes" className="hover:text-white">
+                  Imágenes
+                </Link>
                 <a
                   href="https://cloud.google.com/vertex-ai/generative-ai/docs"
                   target="_blank"

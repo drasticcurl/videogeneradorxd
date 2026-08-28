@@ -50,31 +50,29 @@ export const MODEL_CATALOG: Record<ModelKind, ModelOption[]> = {
   //
   // 3.5 Flash, 3.1 Flash-Lite y 3.5 Flash-Lite tambien responden en global, por si
   // alguna vez se quieren agregar.
+  //
+  // Los emojis son la leyenda: ⚡ rapido, 🧠 mas capaz, 🪙 mas barato. Son emoji
+  // Unicode estandar (⚡ U+26A1, 🧠 U+1F9E0, 🪙 U+1FA99), no un pack propio ni un
+  // icon font: los renderiza la fuente del sistema, asi que no agregan ninguna
+  // dependencia ni request.
   llm: [
-    { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash · default, mas rapido y parejo" },
-    { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash · mas nuevo, mas lento" },
+    { id: "gemini-3.6-flash", label: "⚡ Gemini 3.6 Flash" },
+    { id: "gemini-3.7-flash", label: "🧠 Gemini 3.7 Flash" },
   ],
   // Las tres variantes de Nano Banana, de mayor a menor calidad.
   image: [
-    {
-      id: "gemini-3.1-flash-image",
-      label: "Nano Banana 2 (3.1 Flash Image) · default, equilibrado",
-    },
-    { id: "gemini-3-pro-image", label: "Nano Banana Pro (3 Pro Image) · mejor calidad" },
-    // Verificado: devuelve imagenes de ~56 KB contra ~1.1 MB de las otras dos.
-    // Esta pensado para alto volumen y baja latencia, no para calidad. Para un
-    // creativo publicitario probablemente no alcance: probarlo antes de usarlo.
-    {
-      id: "gemini-3.1-flash-lite-image",
-      label: "Nano Banana 2 Lite (3.1 Flash-Lite Image) · rapido, calidad baja (~56 KB)",
-    },
+    { id: "gemini-3.1-flash-image", label: "⚡ Nano Banana 2" },
+    { id: "gemini-3-pro-image", label: "🧠 Nano Banana Pro" },
+    // 🪙 = barato. Devuelve imagenes de ~56 KB contra ~1.1 MB de las otras dos:
+    // esta pensado para volumen y latencia, no para calidad.
+    { id: "gemini-3.1-flash-lite-image", label: "🪙 Nano Banana 2 Lite" },
   ],
   // Veo 3.1 es la linea mas nueva que existe: veo-3.2 y veo-4.0 dan 404. Estas
   // tres son sus variantes, de menor a mayor costo.
   video: [
-    { id: "veo-3.1-lite-generate-001", label: "Veo 3.1 Lite · default, mas barato" },
-    { id: "veo-3.1-fast-generate-001", label: "Veo 3.1 Fast · rapido" },
-    { id: "veo-3.1-generate-001", label: "Veo 3.1 · mejor calidad" },
+    { id: "veo-3.1-lite-generate-001", label: "🪙 Veo 3.1 Lite" },
+    { id: "veo-3.1-fast-generate-001", label: "⚡ Veo 3.1 Fast" },
+    { id: "veo-3.1-generate-001", label: "🧠 Veo 3.1" },
   ],
 };
 
