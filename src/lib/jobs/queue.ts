@@ -275,9 +275,11 @@ function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   // Con auto-aprobacion no hay gate por lotes: la ventana de generacion la define
   // la concurrencia (p.ej. 3 a la vez, rolling). El gate solo aplica en modo manual.
   if (isProjectAutoApprove(job.projectId)) return "run";
-  // Gate por LOTES (modo manual): no arrancamos mas de approvalBatchSize jobs del MISMO
-  // tipo que esten "sin aprobar" (generando + esperando aprobacion).
-  const limit = config.pipeline.approvalBatchSize;
+  // Gate por LOTES (modo manual): no arrancamos mas de N jobs del MISMO tipo que
+  // esten "sin aprobar" (generando + esperando aprobacion). El limite es por TIPO:
+  // las imagenes van sin limite (se genera la tanda entera y se revisa en bloque) y
+  // los videos de a 5, porque cada clip de Veo son varios USD. Ver config.pipeline.
+  const limit = approvalBatchFor(job.type);
   if (limit > 0 && inFlightUnapproved(job.projectId, job.type) >= limit) {
     return "wait";
   }
@@ -295,6 +297,13 @@ function depReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   if (dep.status === "done") return "run"; // dependencia APROBADA
   if (dep.status === "failed") return "dep-failed";
   return "wait"; // dep pending/generating/awaiting_approval
+}
+
+/** Tamaño del lote de aprobacion para un tipo de job (0 = sin limite). */
+function approvalBatchFor(type: JobRecord["type"]): number {
+  return type === "video"
+    ? config.pipeline.approvalBatchVideos
+    : config.pipeline.approvalBatchImages;
 }
 
 /** Jobs del mismo tipo que estan generandose o esperando aprobacion (sin aprobar aun). */
@@ -517,17 +526,36 @@ function finalizeProjects(): void {
     const awaiting = jobs.some((j) => j.status === "awaiting_approval");
     if (awaiting) {
       projectsDb.update(projectId, { status: "review" });
-      // Si quedan jobs pendientes, es que el GATE por lotes freno la generacion:
-      // avisamos para que el usuario apruebe el lote y siga el resto.
-      const morePending = jobs.some((j) => j.status === "pending");
-      const awaitingCount = jobs.filter(
-        (j) => j.status === "awaiting_approval"
-      ).length;
-      if (morePending && config.pipeline.approvalBatchSize > 0 && !conReintentoProgramado) {
+      /**
+       * Aviso de "aproba el lote para que siga".
+       *
+       * Se busca un pendiente que este frenado EXACTAMENTE por el gate de lotes de su
+       * tipo, en vez de mirar si hay algun pendiente y listo. Un pendiente puede estar
+       * esperando por otras cuatro razones (dependencia sin aprobar, la fase "images"
+       * frenando los videos, backoff de un 429, rate limit de Veo) y en esos casos el
+       * aviso mandaba a aprobar algo que no iba a desbloquear nada.
+       *
+       * Ademas el limite ahora es por tipo, asi que el numero del mensaje sale del
+       * tipo realmente frenado y no de una constante global.
+       */
+      const frenadoPorLote = jobs.find(
+        (j) =>
+          j.status === "pending" &&
+          approvalBatchFor(j.type) > 0 &&
+          !isStageBlocked(j) &&
+          depReason(j) === "run" &&
+          inFlightUnapproved(projectId, j.type) >= approvalBatchFor(j.type)
+      );
+      if (frenadoPorLote && !conReintentoProgramado) {
+        const limite = approvalBatchFor(frenadoPorLote.type);
+        const tipo = frenadoPorLote.type === "video" ? "clips" : "imágenes";
+        const enEspera = jobs.filter(
+          (j) => j.type === frenadoPorLote.type && j.status === "awaiting_approval"
+        ).length;
         logEvent(
           projectId,
           "info",
-          `Lote de ${awaitingCount} listo. Aprobalos para seguir generando el resto (de a ${config.pipeline.approvalBatchSize}).`
+          `Lote de ${enEspera} ${tipo} listo. Aprobalos para seguir generando el resto (de a ${limite}).`
         );
       }
       // Solo se desactiva si NO hay un reintento esperando. Si hay, el proyecto

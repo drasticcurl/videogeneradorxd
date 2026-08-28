@@ -8,7 +8,7 @@
  * Todo se calcula desde la DB + el plan (fuente de verdad). No toca proveedores.
  */
 import { jobsDb, projectsDb } from "./db";
-import { config, VIDEO_RESOLUTIONS } from "./config";
+import { config, MODEL_CATALOG, VIDEO_RESOLUTIONS } from "./config";
 import { findImage, imageRefIds, videoJobId } from "./jobs/pipeline";
 import { queueSnapshot } from "./jobs/queue";
 import type {
@@ -110,7 +110,13 @@ export interface BatchReviewItem {
   attempts: number;
   error: string | null;
   updatedAt: string;
+  /** modelo con el que se genero lo que estas viendo (null si es un job viejo) */
   model: string | null;
+  /**
+   * Modelo de imagen del proyecto. Es el que se va a usar si el job no tiene
+   * override, asi que el selector del editor cae aca cuando `model` viene null.
+   */
+  modelDefault: string;
   /** variantes generadas para elegir (1 o mas) */
   variants: { index: number; url: string }[];
   /** imagenes de referencia (solo image2image) */
@@ -130,6 +136,8 @@ export interface BatchSnapshot {
   videoRate: { max: number; windowMs: number };
   /** resoluciones de video validas (para el selector del editor de clip) */
   resolutions: string[];
+  /** catalogo de modelos de imagen (para el selector del editor de revision) */
+  imageModels: { id: string; label: string }[];
   totals: {
     images: BatchCounts;
     videos: BatchCounts;
@@ -300,6 +308,7 @@ export function buildBatchSnapshot(ids: string[]): BatchSnapshot {
         error: job.error,
         updatedAt: job.updatedAt,
         model: job.model,
+        modelDefault: project.models.image,
         variants: variantsOf(job),
         refs,
         clips,
@@ -374,6 +383,9 @@ export function buildBatchSnapshot(ids: string[]): BatchSnapshot {
       windowMs: config.pipeline.videoRateWindowMs,
     },
     resolutions: [...VIDEO_RESOLUTIONS],
+    // Va en el snapshot y no en un fetch aparte a /api/config, igual que
+    // `resolutions`: la pantalla de revision ya poll-ea esto cada pocos segundos.
+    imageModels: MODEL_CATALOG.image.map((m) => ({ id: m.id, label: m.label })),
     totals,
   };
 }

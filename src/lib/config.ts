@@ -200,9 +200,38 @@ export const config = {
     // noche sin aprobar nada. Poné PIPELINE_AUTO_APPROVE=false para volver al modo manual.
     autoApprove:
       env("PIPELINE_AUTO_APPROVE", "true").toLowerCase() !== "false",
-    // Generacion por LOTES (solo aplica en modo manual, autoApprove=false): maximo de
-    // jobs del mismo tipo "sin aprobar" a la vez. Con autoApprove se ignora.
-    approvalBatchSize: Math.max(0, Number(env("PIPELINE_APPROVAL_BATCH", "5"))),
+    /**
+     * Generacion por LOTES (solo en modo manual, autoApprove=false): maximo de jobs
+     * del MISMO tipo "sin aprobar" (generando + esperando aprobacion) a la vez.
+     * 0 = sin limite, arranca todo lo que se pueda hasta la concurrencia.
+     *
+     * Es un numero POR TIPO y no uno solo, porque las dos etapas no cuestan igual:
+     *
+     *  - IMAGENES (0, sin limite). El flujo del tablero es generar la tanda entera,
+     *    revisarla en bloque y aprobarla. Con un limite de 5, importar 4 planes
+     *    generaba 20 de 32 imagenes y se frenaba: habia que aprobar de a 5 para que
+     *    siguiera, apretando el boton una y otra vez. Medido. Las imagenes son
+     *    baratas, asi que el freno costaba trabajo manual sin ahorrar nada.
+     *
+     *  - VIDEOS (5). Aca el freno es a proposito y se queda: cada clip de Veo son
+     *    varios USD y hay rate limit por minuto. Un tablero con 95 clips no puede
+     *    comprometer todo el gasto de una; se revisan de a 5.
+     *
+     * PIPELINE_APPROVAL_BATCH (el nombre viejo, uno solo para los dos tipos) sigue
+     * andando como fallback para no romper un .env que ya lo tenga seteado.
+     */
+    approvalBatchImages: Math.max(
+      0,
+      Number(
+        env("PIPELINE_APPROVAL_BATCH_IMAGES", env("PIPELINE_APPROVAL_BATCH", "0"))
+      )
+    ),
+    approvalBatchVideos: Math.max(
+      0,
+      Number(
+        env("PIPELINE_APPROVAL_BATCH_VIDEOS", env("PIPELINE_APPROVAL_BATCH", "5"))
+      )
+    ),
     // Reintentos por job antes de marcar failed.
     maxAttempts: Number(env("PIPELINE_MAX_ATTEMPTS", "3")),
     // Backoff base (ms). El delay real es base * 2^(intento-1) con jitter.

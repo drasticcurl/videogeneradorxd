@@ -80,6 +80,7 @@ import {
   Badge,
   Button,
   EmptyState,
+  Select,
   Tabs,
   TabsContent,
   TabsList,
@@ -550,6 +551,7 @@ export function ReviewDeck() {
       ) : (
         <ReviewCard
           item={current}
+          modelos={snap?.imageModels ?? []}
           pedidas={pedidasPorProyecto.get(current.projectId) ?? current.variants.length}
           selectedIndex={selectedIndex}
           onSelectIndex={setSelectedIndex}
@@ -706,6 +708,7 @@ function ColaVacia({
 
 function ReviewCard({
   item,
+  modelos,
   pedidas,
   selectedIndex,
   onSelectIndex,
@@ -719,6 +722,8 @@ function ReviewCard({
   onRegenerated,
 }: {
   item: BatchReviewItem;
+  /** Catalogo de modelos de imagen, para el selector del editor. */
+  modelos: { id: string; label: string }[];
   /** Variantes que PIDIO el proyecto, para poder decir "1 de 2". */
   pedidas: number;
   selectedIndex: number | null;
@@ -1004,6 +1009,7 @@ function ReviewCard({
       {/* ----------------------------- guion ----------------------------- */}
       <ScriptPanel
         item={item}
+        modelos={modelos}
         tab={tab}
         onTab={onTab}
         busy={busy}
@@ -1027,6 +1033,7 @@ function Tecla({ children }: { children: React.ReactNode }) {
 
 function ScriptPanel({
   item,
+  modelos,
   tab,
   onTab,
   busy,
@@ -1034,6 +1041,7 @@ function ScriptPanel({
   onRegenerated,
 }: {
   item: BatchReviewItem;
+  modelos: { id: string; label: string }[];
   tab: "guion" | "editar";
   onTab: (t: "guion" | "editar") => void;
   busy: boolean;
@@ -1046,6 +1054,12 @@ function ScriptPanel({
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const jobIdRef = useRef(item.jobId);
+  /**
+   * Modelo con el que se va a regenerar. Arranca en el que genero lo que estas
+   * viendo; si el job es viejo y no lo tiene guardado, cae al del proyecto.
+   */
+  const modeloActual = item.model ?? item.modelDefault;
+  const [model, setModel] = useState(modeloActual);
 
   // Al cambiar de imagen, recargamos los campos editables (sin pisar lo que escribís
   // mientras estás en la misma card: el poll no toca este estado).
@@ -1053,20 +1067,22 @@ function ScriptPanel({
     if (jobIdRef.current !== item.jobId) {
       jobIdRef.current = item.jobId;
       setPrompt(item.prompt);
+      setModel(item.model ?? item.modelDefault);
       setDialogues({});
       setSaved(false);
       setSaveError(null);
     }
-  }, [item.jobId, item.prompt]);
+  }, [item.jobId, item.prompt, item.model, item.modelDefault]);
 
   const dialogueOf = (clipId: string, original: string) =>
     dialogues[clipId] !== undefined ? dialogues[clipId] : original;
 
   const promptDirty = prompt.trim() !== item.prompt.trim();
+  const modelDirty = model !== modeloActual;
   const dialoguesDirty = item.clips.some(
     (c) => dialogueOf(c.clipId, c.dialogo) !== c.dialogo
   );
-  const dirty = promptDirty || dialoguesDirty;
+  const dirty = promptDirty || modelDirty || dialoguesDirty;
 
   /** Guarda diálogos (en el job de video de cada clip) y el prompt de la imagen. */
   async function save(regenerate: boolean) {
@@ -1090,11 +1106,20 @@ function ScriptPanel({
         }
       }
 
-      if (promptDirty || regenerate) {
+      if (promptDirty || modelDirty || regenerate) {
         const res = await fetch(`/api/jobs/${item.jobId}/prompt`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: prompt.trim(), regenerate }),
+          body: JSON.stringify({
+            prompt: prompt.trim(),
+            /*
+              El modelo va SOLO si lo cambiaste. Mandarlo siempre le fijaria un
+              override a este job con el modelo del proyecto, y despues cambiar el
+              modelo del proyecto no lo alcanzaria mas.
+            */
+            ...(modelDirty ? { model } : {}),
+            regenerate,
+          }),
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
@@ -1272,6 +1297,35 @@ function ScriptPanel({
               Guardar y regenerar
             </Button>
           </div>
+
+          {/*
+            El modelo va ABAJO de los botones a pedido: no es lo que tocás siempre,
+            pero cuando una imagen sale mal el prompt no es la unica variable. Cambiarlo
+            solo escribe el override en ESTE job (el resto del proyecto sigue con el
+            suyo), asi que se puede pasar una imagen problematica a Nano Banana Pro sin
+            encarecer las otras 39.
+          */}
+          {modelos.length > 0 && (
+            <div className="border-t border-divider pt-3">
+              <Select
+                label="Modelo para regenerar"
+                value={model}
+                onValueChange={setModel}
+                options={modelos.map((m) => ({ value: m.id, label: m.label }))}
+              />
+              <p className="mt-1 text-label text-fg-dim">
+                {modelDirty ? (
+                  <>
+                    Cambiado. Apretá{" "}
+                    <b className="font-medium text-fg">Guardar y regenerar</b> para
+                    generarla de nuevo con este modelo.
+                  </>
+                ) : (
+                  <>Solo afecta a esta imagen, no al resto del proyecto.</>
+                )}
+              </p>
+            </div>
+          )}
           {/*
             El "✓ Guardado" va AFUERA del boton: el texto de un boton no cambia
             (§5.1), porque cambiarlo le mueve el ancho y salta la fila.
