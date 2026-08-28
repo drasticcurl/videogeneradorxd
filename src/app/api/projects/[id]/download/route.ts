@@ -10,6 +10,10 @@
  * src/lib/ffmpeg.ts): sin dependencias npm nuevas. Streamea el zip directo a la
  * response (stdout -> Response), asi no carga todo el archivo en RAM: importante
  * para VSLs largos con muchos clips pesados (ej. 95 clips).
+ *
+ * OJO con el binario: `zip` NO viene en una imagen minima de servidor. Ubuntu 24.04
+ * Server no lo trae (si trae tar y gzip), asi que hay que instalarlo aparte:
+ * `sudo apt-get install -y zip`. El deploy lo verifica y avisa (ver deploy.sh).
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -21,12 +25,21 @@ import { badRequest, notFound, serverError } from "@/lib/http";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-let zipChecked = false;
+/**
+ * Se cachea SOLO el resultado positivo.
+ *
+ * Antes se cacheaba tambien el negativo, y eso genero este problema real: la VPS no
+ * tenia `zip`, se instalo, y la descarga siguio fallando igual porque el proceso ya
+ * habia guardado "no esta" para toda su vida. Habia que reiniciar PM2 para algo que
+ * ya estaba resuelto.
+ *
+ * Cachear solo el si no cuesta nada: el chequeo es un spawnSync de milisegundos y
+ * corre unicamente cuando alguien aprieta Descargar, que no es un camino caliente.
+ */
 let zipAvailable = false;
 
 function hasZip(): boolean {
-  if (zipChecked) return zipAvailable;
-  zipChecked = true;
+  if (zipAvailable) return true;
   try {
     zipAvailable = spawnSync("zip", ["-v"], { stdio: "ignore" }).status === 0;
   } catch {
@@ -44,8 +57,14 @@ export async function GET(
     if (!project) return notFound("Proyecto no encontrado");
 
     if (!hasZip()) {
+      /*
+        El mensaje anterior decia que zip "viene instalado por defecto en
+        macOS/Linux". En macOS si; en una imagen minima de servidor NO: Ubuntu 24.04
+        Server no lo trae, y por eso esta descarga fallaba en la VPS. Ahora el error
+        dice que hacer en vez de afirmar algo falso.
+      */
       return badRequest(
-        "El comando 'zip' no esta disponible en este sistema. En macOS/Linux viene instalado por defecto."
+        "Falta el comando 'zip' en el servidor. Instalalo con: sudo apt-get install -y zip"
       );
     }
 

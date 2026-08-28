@@ -174,6 +174,24 @@ if [[ "${PROVIDER_MODE:-mock}" == "vertex" ]]; then
   log "vertex: proyecto $GOOGLE_CLOUD_PROJECT, credenciales en $cred"
 fi
 
+# 3e. Binarios del sistema que la app usa por spawn.
+#
+# No son dependencias de npm, asi que nada las instala solo y su ausencia no se nota
+# hasta que alguien aprieta el boton que las usa. Paso de verdad: `zip` no viene en
+# Ubuntu Server (si vienen tar y gzip) y la descarga de videos fallaba en runtime con
+# "El comando 'zip' no esta disponible", ya con los clips generados y pagados.
+#
+# ffmpeg/ffprobe son fail porque sin ellos no hay export; zip es warning porque solo
+# rompe la descarga en .zip y el resto de la app anda igual.
+for bin in ffmpeg ffprobe; do
+  command -v "$bin" >/dev/null 2>&1 || fail "falta el binario '$bin' (apt-get install -y ffmpeg)"
+done
+if command -v zip >/dev/null 2>&1; then
+  log "binarios ok: ffmpeg, ffprobe, zip"
+else
+  log "AVISO: falta 'zip' — la descarga de videos va a fallar. Instalalo: apt-get install -y zip"
+fi
+
 # ─── 4. Build ───────────────────────────────────────────────────────────────
 cd "$RELEASE"
 # `--include=dev` es OBLIGATORIO y no redundante. El paso 3 hace `source` del
