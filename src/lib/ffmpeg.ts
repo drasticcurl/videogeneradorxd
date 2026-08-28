@@ -20,8 +20,13 @@
  * congelada, y el request se va a comer el timeout del proxy. Para esos casos hay que
  * pasarlo a async con estado en la DB, como los jobs de la cola.
  */
-import { spawnSync } from "node:child_process";
+import {
+  spawnSync,
+  type SpawnSyncOptionsWithBufferEncoding,
+  type SpawnSyncReturns,
+} from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import { projectsDb, jobsDb } from "./db";
 import {
   buildManifest,
@@ -51,6 +56,94 @@ function canvasForResolution(resolution?: string): { w: number; h: number } {
     default:
       return { w: 720, h: 1280 };
   }
+}
+
+/* ─────────────────── limite de cores para ffmpeg ─────────────────── */
+
+/**
+ * Cuantos cores puede usar ffmpeg. Default: TODOS MENOS UNO.
+ *
+ * En la VPS son 4, asi que quedan 3 para encodear y 1 libre. Se puede fijar a mano con
+ * FFMPEG_CORES. El default es relativo y no un 3 escrito, para que en una maquina de 8
+ * cores use 7 en vez de seguir clavado en 3.
+ */
+function coresParaFfmpeg(): number {
+  const total = os.cpus().length || 1;
+  const pedido = Number(process.env.FFMPEG_CORES);
+  if (Number.isFinite(pedido) && pedido >= 1) {
+    return Math.min(Math.floor(pedido), total);
+  }
+  return Math.max(1, total - 1);
+}
+
+let tasksetChecked = false;
+let tasksetOk = false;
+
+/** taskset existe en Linux (util-linux). En macOS NO hay equivalente. */
+function hasTaskset(): boolean {
+  if (tasksetChecked) return tasksetOk;
+  tasksetChecked = true;
+  try {
+    tasksetOk = spawnSync("taskset", ["--version"], { stdio: "ignore" }).status === 0;
+  } catch {
+    tasksetOk = false;
+  }
+  return tasksetOk;
+}
+
+/**
+ * Corre ffmpeg limitado a N cores, dejando el resto libre para los otros procesos de
+ * la maquina (en esta VPS, los funnels que sirven trafico real).
+ *
+ * Se usa `taskset` (afinidad de CPU) y no `-threads`. Medido en la VPS con un stitch de
+ * 8 clips de 8s, mirando el uso de cada core:
+ *
+ *   sin limite                              4 cores al 89%    50s
+ *   -threads 3 -filter_complex_threads 3    4 cores al ~63%   67s
+ *   taskset -c 0-2                          3 al ~92%, uno al 8%   60s
+ *
+ * O sea que `-threads` baja el consumo total pero REPARTE el trabajo en los 4 cores
+ * igual: no libera ninguno, que era el objetivo. taskset lo confina de verdad (load
+ * exactamente 3.00) y encima termina antes que limitando hilos, porque ffmpeg conserva
+ * su paralelismo interno y solo se le acota donde puede correr.
+ *
+ * En macOS no hay taskset, asi que ahi cae a `-threads` como aproximacion. No es
+ * grave: la maquina de desarrollo no comparte con nada que importe.
+ */
+export function runFfmpeg(
+  args: string[],
+  opts?: { cwd?: string }
+): SpawnSyncReturns<Buffer> {
+  const n = coresParaFfmpeg();
+  const total = os.cpus().length || 1;
+  /*
+    `encoding: "buffer"` fija el overload de spawnSync que devuelve Buffer. Sin eso el
+    tipo sale `string | Buffer` y los callers, que hacen res.stderr.toString(), quedan
+    con una union innecesaria. Y sin `as const` en el stdio, porque spawnSync lo pide
+    mutable.
+  */
+  const comun: SpawnSyncOptionsWithBufferEncoding = {
+    stdio: ["ignore", "ignore", "pipe"],
+    cwd: opts?.cwd,
+    encoding: "buffer",
+  };
+
+  if (n >= total) {
+    return spawnSync("ffmpeg", args, comun);
+  }
+  if (hasTaskset()) {
+    return spawnSync("taskset", ["-c", `0-${n - 1}`, "ffmpeg", ...args], comun);
+  }
+  /*
+    Fallback sin taskset. `-threads` y `-filter_complex_threads` tienen que ir ANTES
+    del primer -i para alcanzar a los decoders y al grafo de filtros; el encoder toma
+    el `-threads` que ya va junto a libx264 mas abajo.
+  */
+  return spawnSync(
+    "ffmpeg",
+    ["-threads", String(n), "-filter_complex_threads", String(n), ...args],
+    comun
+  );
 }
 
 /** ¿hay ffprobe disponible? (viene con ffmpeg normalmente). */
@@ -220,10 +313,7 @@ export function stitchProject(projectId: string): StitchResult {
     finalAbs,
   ];
 
-  const res = spawnSync("ffmpeg", args, {
-    stdio: ["ignore", "ignore", "pipe"],
-    cwd: projectDir(projectId),
-  });
+  const res = runFfmpeg(args, { cwd: projectDir(projectId) });
 
   if (res.status !== 0) {
     const stderr = res.stderr ? res.stderr.toString().slice(-600) : "";

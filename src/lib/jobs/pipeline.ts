@@ -32,6 +32,7 @@ import {
   writeManifest,
 } from "../storage";
 import { hasFfmpeg } from "../providers/placeholder";
+import { runFfmpeg } from "../ffmpeg";
 import { ProviderHttpError } from "../providers/types";
 import type { ProjectPlan } from "../schema";
 import type { Candidate, JobRecord, LogEntry, LogLevel, ProjectRecord } from "../types";
@@ -698,38 +699,36 @@ async function concatVideos(
     fs.writeFileSync(baseFile, baseBytes);
     fs.writeFileSync(extFile, extBytes);
     // Re-encode + concat por filtro (robusto ante distintos timestamps/SAR).
-    const res = spawnSync(
-      "ffmpeg",
-      [
-        "-y",
-        "-i",
-        baseFile,
-        "-i",
-        extFile,
-        "-filter_complex",
-        "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]",
-        "-map",
-        "[outv]",
-        "-map",
-        "[outa]",
-        "-c:v",
-        "libx264",
-        "-crf",
-        "18",
-        "-preset",
-        "medium",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-movflags",
-        "+faststart",
-        outFile,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] }
-    );
+    // Via runFfmpeg y no spawnSync directo: asi este ffmpeg tambien respeta el limite
+    // de cores y deja uno libre para el resto de la maquina (ver lib/ffmpeg.ts).
+    const res = runFfmpeg([
+      "-y",
+      "-i",
+      baseFile,
+      "-i",
+      extFile,
+      "-filter_complex",
+      "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]",
+      "-map",
+      "[outv]",
+      "-map",
+      "[outa]",
+      "-c:v",
+      "libx264",
+      "-crf",
+      "18",
+      "-preset",
+      "medium",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "192k",
+      "-movflags",
+      "+faststart",
+      outFile,
+    ]);
     if (res.status !== 0 || !fs.existsSync(outFile)) {
       logEvent(
         projectId,
