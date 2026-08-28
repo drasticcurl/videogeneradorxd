@@ -40,10 +40,20 @@ export interface ModelOption {
  * en `models` deja la app generando con un modelo que la UI no muestra.
  */
 export const MODEL_CATALOG: Record<ModelKind, ModelOption[]> = {
-  // Solo 3.6 Flash, a pedido. 3.5 Flash, 3.1 Flash-Lite y 3.5 Flash-Lite tambien
-  // responden en global por si alguna vez se quieren agregar. 3.7 Flash existe
-  // pero contesto 429 (sin capacidad), no 404.
-  llm: [{ id: "gemini-3.6-flash", label: "Gemini 3.6 Flash" }],
+  // 3.6 queda de default y 3.7 como opcion.
+  //
+  // Sobre 3.7: la primera vez que se probo contesto 429 (capacidad agotada, NO
+  // 404), asi que se volvio a medir: 5/5 exitosos. El 429 era momentaneo. Pero es
+  // mas lento y mas irregular que 3.6 (1.6-5.2s contra 1.4-1.7s parejo en el mismo
+  // prompt trivial), y al parsear un brief largo eso se acumula. Por eso 3.6 sigue
+  // siendo el default.
+  //
+  // 3.5 Flash, 3.1 Flash-Lite y 3.5 Flash-Lite tambien responden en global, por si
+  // alguna vez se quieren agregar.
+  llm: [
+    { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash · default, mas rapido y parejo" },
+    { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash · mas nuevo, mas lento" },
+  ],
   // Las tres variantes de Nano Banana, de mayor a menor calidad.
   image: [
     {
