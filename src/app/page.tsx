@@ -1,24 +1,87 @@
 "use client";
 /**
- * Pantalla "Nuevo proyecto":
- *  - Selectores de modelo (Chat/Imagen/Video) + variantes.
- *  - Dos formas de armar el plan:
- *      a) "Interpretar con IA": pegás el brief y la IA arma el PlanJSON.
- *      b) "Pegar PlanJSON": pegás el JSON ya armado (lo generaste con el prompt copiable).
- *  - PlanJSON editable + estimacion + "Generar todo".
- *  - Lista de proyectos existentes.
+ * Home — el punto de entrada: de un brief (o de un PlanJSON ya armado) a un proyecto
+ * con su pipeline corriendo.
+ *
+ * Estructura (§3 de T05):
+ *   1. el modo, en pestañas: interpretar un brief con la IA, o pegar el PlanJSON
+ *   2. el area de trabajo del modo elegido
+ *   3. avatares de referencia (VSL), visibles en los dos modos
+ *   4. modelos, aprobacion y costo estimado, pegados al boton de generar
+ *   5. proyectos recientes en grilla, con vacio y carga de verdad
+ *
+ * ─── LO QUE NO CAMBIO ────────────────────────────────────────────────────────
+ *
+ * El rediseño es VISUAL. Los handlers son los mismos, con los mismos fetch, los
+ * mismos payloads y el mismo orden: crear el proyecto, subir las referencias, y
+ * recien ahi arrancar el pipeline. `useProjectStore` es intocable: desde aca se lee
+ * y se llaman sus acciones, nada mas.
+ *
+ * ─── LO DELICADO: EL id DE CADA AVATAR ───────────────────────────────────────
+ *
+ * El `id` de una foto de referencia es la clave con la que el plan dice, en
+ * `ref_image_ids`, "este plano es la cara de esta persona". Si el mapeo se rompe, el
+ * VSL genera la cara equivocada y no se nota hasta ver el video.
+ *
+ * Las tres cosas que lo sostienen, y que no hay que tocar:
+ *
+ *   - la key de cada tarjeta es `r.uid`, NO `r.id`. El uid es estable; el id lo edita
+ *     el usuario. Con `key={r.id}` React remonta el input en cada tecla, se pierde el
+ *     foco y con el la mitad de lo que estabas escribiendo.
+ *   - el onChange manda `updateReference(r.uid, { id: e.target.value })` crudo. El
+ *     store slugifica y el input muestra el resultado, asi que escribir "Natalia F"
+ *     queda "natalia_f" mientras tipeas. Es a proposito: es el mismo slug con el que
+ *     el backend nombra el archivo.
+ *   - el indicador compara `d.id === r.id` EXACTO contra los ids que el plan espera.
+ *     Sin volver a normalizar y sin trim: si no matchea exacto, no matchea.
  */
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import {
+  ArrowRight,
+  Check,
+  ClipboardText,
+  Code,
+  FileArrowUp,
+  FilmSlate,
+  FolderOpen,
+  Play,
+  Plus,
+  Sparkle,
+  Trash,
+  UsersThree,
+  Warning,
+  X,
+} from "@phosphor-icons/react";
 import Link from "next/link";
-import { useProjectStore } from "@/store/useProjectStore";
-import { validatePlan, type ProjectPlan } from "@/lib/schema";
-import { JsonEditor } from "@/components/JsonEditor";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+
 import { CostEstimatePanel } from "@/components/CostEstimatePanel";
-import { StatusBadge } from "@/components/StatusBadge";
+import { JsonEditor } from "@/components/JsonEditor";
 import { ModelSelectorBar } from "@/components/ModelSelectorBar";
-import { SAMPLE_BRIEF } from "@/lib/sampleBrief";
+import { StatusBadge } from "@/components/StatusBadge";
+import {
+  Badge,
+  Button,
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Confirmar,
+  EmptyState,
+  Input,
+  Skeleton,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Textarea,
+} from "@/components/ui";
+import { cn } from "@/lib/cn";
 import { STORYBOARD_PROMPT_TEMPLATE } from "@/lib/prompts";
+import { SAMPLE_BRIEF } from "@/lib/sampleBrief";
+import { validatePlan, type ProjectPlan } from "@/lib/schema";
+import type { Tone } from "@/lib/ui-tokens";
+import { useProjectStore } from "@/store/useProjectStore";
 
 interface ProjectSummary {
   id: string;
@@ -49,9 +112,32 @@ interface ImportedPlan {
   createError?: string;
 }
 
+/**
+ * Como se ve cada archivo de la importacion en lote.
+ *
+ * Son estados de un ARCHIVO en esta pantalla, no estados de job ni de proyecto: no
+ * existen en `ui-tokens` y no salen de ningun endpoint. Van con `Tone`, asi que acá
+ * no hay ni un color: la traduccion de tono a clases sigue siendo de `Badge` y de
+ * nadie mas, que es lo que §6 del plan quiere garantizar.
+ */
+const IMPORT_VISUAL: Record<
+  ImportedPlan["status"],
+  { tone: Tone; label: string; animado?: boolean }
+> = {
+  listo: { tone: "neutral", label: "Listo para crear" },
+  invalido: { tone: "danger", label: "Inválido" },
+  creando: { tone: "info", label: "Creando", animado: true },
+  creado: { tone: "ok", label: "Creado" },
+  error: { tone: "danger", label: "Error al crear" },
+};
+
+/** Estado de la lista de proyectos. Sin esto, "cargando" y "no hay" se ven igual. */
+type CargaLista = "cargando" | "listo" | "error";
+
 export default function HomePage() {
   const router = useRouter();
   const {
+    config,
     brief,
     plan,
     estimate,
@@ -79,11 +165,14 @@ export default function HomePage() {
   const [mode, setMode] = useState<Mode>("ia");
   const [jsonText, setJsonText] = useState("");
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [cargaLista, setCargaLista] = useState<CargaLista>("cargando");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  /** El proyecto que el usuario pidio borrar, esperando confirmacion. */
+  const [aBorrar, setABorrar] = useState<ProjectSummary | null>(null);
 
   // Importacion en lote (carpeta con varios PlanJSON).
   const [imported, setImported] = useState<ImportedPlan[]>([]);
@@ -108,28 +197,27 @@ export default function HomePage() {
   }, []);
 
   async function loadProjects() {
+    setCargaLista("cargando");
     try {
       const res = await fetch("/api/projects");
       const data = await res.json();
       setProjects(data.projects ?? []);
+      setCargaLista("listo");
     } catch {
-      /* ignore */
+      // Antes esto se tragaba en silencio y la lista quedaba vacia, que era
+      // indistinguible de "todavia no hay proyectos". Con el vacio explicito de abajo
+      // eso pasaria a ser una mentira, asi que el fallo se muestra.
+      setCargaLista("error");
     }
   }
 
   /**
    * Borra un proyecto: registro en db.json + jobs + logs + la carpeta
    * output/<id>/ ENTERA (imagenes, clips, referencias, final.mp4).
-   * Es irreversible, por eso pide confirmacion mostrando cuantos archivos se pierden.
+   * Es irreversible, y por eso pasa por el dialogo de confirmacion, que muestra
+   * cuantos archivos se pierden.
    */
   async function handleDeleteProject(p: ProjectSummary) {
-    const confirmed = window.confirm(
-      `Borrar "${p.name}"?\n\n` +
-        `Se van a eliminar TAMBIEN los archivos generados: ${p.imageCount} imagenes y ` +
-        `${p.clipCount} clips (carpeta output/${p.id}/).\n\nEsto NO se puede deshacer.`
-    );
-    if (!confirmed) return;
-
     setDeletingId(p.id);
     setDeleteError(null);
     try {
@@ -338,393 +426,507 @@ export default function HomePage() {
     setTimeout(() => setCopied(false), 1800);
   }
 
+  /* ------------------------------ derivados ------------------------------ */
+
+  /**
+   * Validacion en vivo de lo que hay pegado en el textarea del modo JSON, con el
+   * MISMO validador que corre el backend. No decide nada: el boton sigue haciendo
+   * exactamente lo que hacia (cargar el texto tal cual, aunque no cumpla el
+   * esquema, para poder arreglarlo en el editor de abajo). Es solo para que el
+   * error se vea ANTES de apretar, en lugar de despues.
+   */
+  const revisionJson = useMemo(() => {
+    const texto = jsonText.trim();
+    if (!texto) return null;
+    let crudo: unknown;
+    try {
+      crudo = JSON.parse(texto);
+    } catch (e) {
+      return {
+        ok: false as const,
+        resumen: `No es JSON válido: ${e instanceof Error ? e.message : String(e)}`,
+        detalles: [] as string[],
+      };
+    }
+    const v = validatePlan(crudo);
+    if (v.ok) {
+      const imagenes = v.plan.assets.reduce((acc, a) => acc + a.images.length, 0);
+      return {
+        ok: true as const,
+        resumen: `${imagenes} imágenes · ${v.plan.clips.length} clips · ${
+          v.plan.references?.length ?? 0
+        } avatares`,
+        detalles: [] as string[],
+      };
+    }
+    return {
+      ok: false as const,
+      resumen: `${v.errors.length} ${
+        v.errors.length === 1 ? "campo no cumple" : "campos no cumplen"
+      } el esquema del plan`,
+      detalles: v.errors.slice(0, 8).map((e) => `${e.path || "plan"}: ${e.message}`),
+    };
+  }, [jsonText]);
+
+  /** Los ids de referencia que el plan cargado espera. Vacio si no hay plan. */
+  const idsQueEsperaElPlan = plan?.references ?? [];
+  /** Etiqueta comercial del modelo que va a interpretar el brief. */
+  const modeloDelBrief =
+    config?.catalog.llm.find((o) => o.id === selectedModels.llm)?.label ??
+    selectedModels.llm;
+  const pendientesDeImportar = imported.filter(
+    (i) => i.plan && (i.status === "listo" || i.status === "error")
+  ).length;
+
   return (
-    <div className="space-y-6">
-      <ModelSelectorBar />
-
-      <section className="space-y-4">
-        <h1 className="text-2xl font-bold">Nuevo proyecto</h1>
-
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Nombre del proyecto (opcional)"
-          className="w-full rounded-lg border border-slate-700 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
-        />
-
-        {/* Switch de auto-aprobacion del proyecto.
-            - OFF (videos normales): cada imagen/video queda en "esperando aprobacion"
-              y vos clickeas Aprobar antes de que arranque el siguiente paso.
-            - ON  (VSL / dejar correr): cada job se aprueba solo al terminar.
-            Default inteligente: se prende solo cuando subis avatares (VSL); si tocas
-            el toggle a mano, mandamos lo que vos elegiste y no se ajusta mas. */}
-        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-800 bg-panel p-3 text-sm">
-          <input
-            type="checkbox"
-            checked={autoApprove}
-            onChange={(e) => setAutoApprove(e.target.checked)}
-            className="mt-0.5 h-4 w-4 accent-accent"
+    <div className="space-y-8">
+      {/* ─────────────────────────── encabezado ─────────────────────────── */}
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-display font-semibold text-fg">Nuevo proyecto</h1>
+          <p className="mt-1 max-w-prose text-body text-fg-dim">
+            Armá el plan desde un brief o pegá uno ya hecho. Nada se genera —y nada se
+            cobra— hasta que apretes <b className="font-medium text-fg">Generar todo</b>.
+          </p>
+        </div>
+        <div className="w-full sm:w-72">
+          <Input
+            label="Nombre del proyecto"
+            hint="Opcional. Vacío queda como “Proyecto” más la fecha."
+            placeholder="ej. VSL Natalia"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
           />
-          <span className="flex-1">
-            <span className="font-medium text-slate-100">
-              Auto-aprobar todo al terminar
-            </span>
-            <span className="block text-xs text-slate-400">
-              {autoApprove ? (
-                <>
-                  Modo <b>dejar correr</b>: cada imagen y video se aprueba sola y
-                  arranca el siguiente. Recomendado para VSL con muchos clips.
-                </>
-              ) : (
-                <>
-                  Modo <b>aprobacion manual</b>: cada imagen y cada video te van a
-                  pedir aprobacion antes de seguir. Ideal para videos normales con
-                  pocas tomas.
-                </>
-              )}
-            </span>
-          </span>
-        </label>
+        </div>
+      </header>
 
-        {/* Toggle de modo */}
-        <div className="flex gap-1 rounded-lg border border-slate-800 bg-panel p-1 text-sm">
-          <button
-            onClick={() => setMode("ia")}
-            className={`rounded-md px-4 py-1.5 ${
-              mode === "ia" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
-            }`}
-          >
-            Interpretar brief con IA
-          </button>
-          <button
-            onClick={() => setMode("json")}
-            className={`rounded-md px-4 py-1.5 ${
-              mode === "json" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
-            }`}
-          >
-            Pegar PlanJSON
-          </button>
-          <button
+      {/* ──────────────────── 1 y 2: modo + area de trabajo ─────────────── */}
+      <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)}>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-divider">
+          <TabsList className="border-b-0">
+            {/* inline-flex: el <button> de Radix no lo es, y sin esto el icono y el
+                texto se alinean por la linea de base y el icono queda hundido. */}
+            <TabsTrigger value="ia" className="inline-flex items-center gap-1.5">
+              <Sparkle className="size-4" aria-hidden />
+              Interpretar brief
+            </TabsTrigger>
+            <TabsTrigger value="json" className="inline-flex items-center gap-1.5">
+              <Code className="size-4" aria-hidden />
+              Pegar PlanJSON
+            </TabsTrigger>
+          </TabsList>
+          {/*
+            Fuera del TabsList a proposito: adentro, un boton comun queda dentro de un
+            role="tablist" y el lector de pantalla lo cuenta como una pestaña mas.
+          */}
+          <Button
+            size="sm"
+            variant="ghost"
             onClick={copyPromptTemplate}
-            className="ml-auto rounded-md px-3 py-1.5 text-slate-300 hover:bg-slate-800"
-            title="Copiá este prompt, pegalo en ChatGPT/Gemini con tu brief, y te devuelve el JSON exacto"
+            icon={
+              copied ? (
+                <Check className="size-3.5" aria-hidden />
+              ) : (
+                <ClipboardText className="size-3.5" aria-hidden />
+              )
+            }
+            title="Copiá este prompt, pegalo en ChatGPT o Gemini con tu brief, y te devuelve el JSON exacto"
           >
-            {copied ? "✓ prompt copiado" : "📋 Copiar prompt para tu IA"}
-          </button>
+            {copied ? "Prompt copiado" : "Copiar prompt para tu IA"}
+          </Button>
         </div>
 
-        {/* Avatares de referencia (VSL) — disponible en AMBOS modos (IA y Pegar PlanJSON).
-            Subís las fotos de las personas y se usan como identidad: cada plano se
-            genera manteniendo la misma cara (image2image). */}
-        <div className="space-y-3 rounded-lg border border-slate-800 bg-panel p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-100">
-                Avatares de referencia <span className="text-slate-500">(VSL · opcional)</span>
-              </h3>
-              <p className="text-xs text-slate-500">
-                Subí las fotos de las personas (ej. 2). Se usan como fuente de identidad:
-                todos los planos se generan manteniendo <b>la misma cara</b> (image2image).
-                El <code>id</code> de cada foto tiene que coincidir con el de{" "}
-                <code>references[]</code> en el plan (ej. <code>natalia</code>, <code>romina</code>).
-              </p>
-            </div>
-            <label className="cursor-pointer rounded-lg border border-slate-600 px-3 py-2 text-sm hover:bg-slate-800">
-              + Agregar foto
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                multiple
-                className="hidden"
-                onChange={async (e) => {
-                  const files = Array.from(e.target.files ?? []);
-                  for (const f of files) await addReferenceFile(f);
-                  e.target.value = "";
-                }}
-              />
-            </label>
+        {/* ── modo A: la IA interpreta el brief ── */}
+        <TabsContent value="ia" className="space-y-3">
+          <Textarea
+            label="Brief del anuncio"
+            hint={`Lo interpreta ${modeloDelBrief}. El modelo se elige más abajo, en Modelos y aprobación.`}
+            placeholder="Pegá acá tu brief largo con avatares, b-roll y clips en orden…"
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+            className="h-56 leading-relaxed"
+            error={mode === "ia" ? error ?? undefined : undefined}
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            {/*
+              `loading` deshabilita solo y no cambia el texto (§5 regla 1). Los dos
+              juntos dan el mismo disabled que antes: parsing || brief vacio.
+              Importa mas que en otros botones: la interpretacion tarda entre 15 y 20
+              segundos, y sin feedback el usuario aprieta de nuevo y paga dos veces.
+            */}
+            <Button
+              variant="primary"
+              icon={<Sparkle className="size-4" aria-hidden />}
+              loading={parsing}
+              disabled={!brief.trim()}
+              onClick={() => void parseBrief()}
+            >
+              Interpretar con IA
+            </Button>
+            <Button onClick={() => setBrief(SAMPLE_BRIEF)}>Cargar ejemplo</Button>
+            <p aria-live="polite" className="text-label text-fg-dim">
+              {parsing
+                ? "Interpretando. Tarda entre 15 y 20 segundos: no lo apretes de nuevo."
+                : !brief.trim()
+                  ? "Pegá el brief para poder interpretarlo."
+                  : "Devuelve el PlanJSON y la estimación de costo, sin generar nada."}
+            </p>
+          </div>
+        </TabsContent>
+
+        {/* ── modo B: el PlanJSON ya viene hecho ── */}
+        <TabsContent value="json" className="space-y-4">
+          <div className="space-y-2">
+            <Textarea
+              label="PlanJSON"
+              mono
+              spellCheck={false}
+              placeholder="Pegá acá el PlanJSON (el que te devolvió tu IA usando el prompt copiable)…"
+              value={jsonText}
+              onChange={(e) => setJsonText(e.target.value)}
+              className="code h-56 leading-relaxed"
+              error={mode === "json" ? error ?? undefined : undefined}
+            />
+            {/*
+              El detalle del validador, ABAJO del campo (§4 de T05). Se muestra
+              mientras escribis y NO bloquea el boton: cargar un plan incompleto y
+              arreglarlo en el editor de abajo es un camino valido y era el de antes.
+            */}
+            {revisionJson && (
+              <div
+                className={cn(
+                  "rounded-sm p-2",
+                  revisionJson.ok ? "bg-ok/10" : "bg-danger/10"
+                )}
+              >
+                <p className="flex flex-wrap items-center gap-2">
+                  <Badge tone={revisionJson.ok ? "ok" : "danger"} punto>
+                    {revisionJson.ok ? "Válido" : "Revisar"}
+                  </Badge>
+                  <span
+                    className={cn(
+                      "text-label",
+                      revisionJson.ok ? "text-fg-dim" : "text-danger"
+                    )}
+                  >
+                    {revisionJson.resumen}
+                  </span>
+                </p>
+                {revisionJson.detalles.length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5 text-label text-danger">
+                    {revisionJson.detalles.map((d, i) => (
+                      <li key={i} className="code">
+                        {d}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Si el plan ya esta cargado, mostramos que ids de referencia espera. */}
-          {plan?.references && plan.references.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-700 bg-ink/60 p-2 text-[11px] text-slate-400">
-              <span>El plan espera estos ids:</span>
-              {plan.references.map((r) => {
+          <Button
+            variant="primary"
+            onClick={applyPastedJson}
+            disabled={!jsonText.trim()}
+          >
+            Cargar PlanJSON
+          </Button>
+
+          {/* ---------------- Importar carpeta (lote de PlanJSON) ----------------
+              Elegís una carpeta con N archivos .json (cada uno un PlanJSON completo)
+              y se crea UN proyecto por archivo. No arranca ninguna generacion: por
+              el rate limit los vas corriendo de a uno desde su pipeline. */}
+          <Card className="space-y-3">
+            <CardHeader>
+              <div className="min-w-0">
+                <CardTitle className="flex items-center gap-2">
+                  <FolderOpen className="size-4 shrink-0 text-fg-dim" aria-hidden />
+                  Importar carpeta
+                </CardTitle>
+                <CardDescription className="mt-1 max-w-prose text-label">
+                  Elegí una carpeta con varios <code className="code text-fg">.json</code>{" "}
+                  (cada archivo un PlanJSON completo, igual al que pegás arriba). Se crea{" "}
+                  <b className="font-medium text-fg">un proyecto por archivo</b>, en
+                  borrador y <b className="font-medium text-fg">sin arrancar nada</b>.
+                  Cuando termina te lleva al tablero del lote, donde arrancás la
+                  generación de imágenes y las revisás de a una. La auto-aprobación
+                  queda <b className="font-medium text-fg">apagada</b>, así ningún video
+                  se genera sin que vos apruebes la imagen.
+                </CardDescription>
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <BotonDeArchivo
+                  refDelInput={folderInputRef}
+                  multiple
+                  onChange={async (e) => {
+                    await handleImportFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                >
+                  <FolderOpen className="size-4" aria-hidden />
+                  Elegir carpeta
+                </BotonDeArchivo>
+                <BotonDeArchivo
+                  multiple
+                  accept=".json,application/json"
+                  onChange={async (e) => {
+                    await handleImportFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                >
+                  <FileArrowUp className="size-4" aria-hidden />
+                  …o varios .json
+                </BotonDeArchivo>
+              </div>
+            </CardHeader>
+
+            {importError && (
+              <p role="alert" className="rounded-sm bg-danger/10 p-2 text-label text-danger">
+                {importError}
+              </p>
+            )}
+
+            {imported.length > 0 && (
+              <>
+                <ul className="divide-y divide-divider overflow-hidden rounded-lg bg-bg">
+                  {imported.map((item) => (
+                    <FilaImportada
+                      key={item.fileName}
+                      item={item}
+                      onRenombrar={(v) => patchImported(item.fileName, { name: v })}
+                    />
+                  ))}
+                </ul>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    variant="primary"
+                    icon={<ArrowRight className="size-4" aria-hidden />}
+                    loading={importing}
+                    disabled={pendientesDeImportar === 0}
+                    onClick={() => void handleCreateImported()}
+                  >
+                    Crear {pendientesDeImportar} proyectos y abrir el tablero
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    disabled={importing}
+                    onClick={() => {
+                      setImported([]);
+                      setImportError(null);
+                    }}
+                  >
+                    Limpiar lista
+                  </Button>
+                  <p className="text-label text-fg-dim">
+                    <span className="code tnum text-fg">
+                      {imported.filter((i) => i.status === "creado").length}
+                    </span>{" "}
+                    creados ·{" "}
+                    <span className="code tnum text-fg">
+                      {imported.filter((i) => i.status === "invalido").length}
+                    </span>{" "}
+                    inválidos
+                    {references.length > 0 && (
+                      <>
+                        {" · se suben "}
+                        <span className="code tnum text-fg">{references.length}</span>
+                        {" fotos de referencia a cada uno"}
+                      </>
+                    )}
+                  </p>
+                </div>
+              </>
+            )}
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* ──────────────────── 3: avatares de referencia ──────────────────── */}
+      {/*
+        Visible en los DOS modos, como antes. Es lo mas delicado de la pantalla: el
+        `id` de cada foto es lo que el plan referencia en `ref_image_ids`. Ver el
+        comentario de arriba del archivo antes de tocar algo de este bloque.
+      */}
+      <Card className="space-y-4">
+        <CardHeader>
+          <div className="min-w-0">
+            <CardTitle className="flex items-center gap-2">
+              <UsersThree className="size-4 shrink-0 text-fg-dim" aria-hidden />
+              Avatares de referencia
+              <span className="text-label font-normal text-fg-dim">VSL · opcional</span>
+            </CardTitle>
+            <CardDescription className="mt-1 max-w-prose text-label">
+              Subí las fotos de las personas. Se usan como fuente de identidad: todos
+              los planos se generan manteniendo{" "}
+              <b className="font-medium text-fg">la misma cara</b> (image2image). El{" "}
+              <code className="code text-fg">id</code> de cada foto tiene que coincidir
+              con el de <code className="code text-fg">references[]</code> en el plan
+              (ej. <code className="code text-fg">natalia</code>,{" "}
+              <code className="code text-fg">romina</code>).
+            </CardDescription>
+          </div>
+          <BotonDeArchivo
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            onChange={async (e) => {
+              const files = Array.from(e.target.files ?? []);
+              for (const f of files) await addReferenceFile(f);
+              e.target.value = "";
+            }}
+          >
+            <Plus className="size-4" aria-hidden />
+            Agregar foto
+          </BotonDeArchivo>
+        </CardHeader>
+
+        {/* Si el plan ya esta cargado, mostramos que ids de referencia espera. */}
+        {idsQueEsperaElPlan.length > 0 && (
+          <div className="space-y-1.5 rounded-sm bg-surface-hi p-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-label text-fg-dim">El plan espera estos ids:</span>
+              {idsQueEsperaElPlan.map((r) => {
+                // La comparacion del mapeo. EXACTA, sin normalizar de nuevo: es la
+                // misma que decide si el pipeline encuentra la foto de esa cara.
                 const ok = references.some((d) => d.id === r.id);
                 return (
-                  <code
-                    key={r.id}
-                    className={`rounded px-1.5 py-0.5 ${
-                      ok
-                        ? "bg-emerald-500/15 text-emerald-300"
-                        : "bg-amber-500/15 text-amber-300"
-                    }`}
-                    title={ok ? "Foto subida ✓" : "Falta subir esta foto"}
-                  >
-                    {ok ? "✓ " : "• "}
-                    {r.id}
-                    {r.label ? ` (${r.label})` : ""}
-                  </code>
+                  <Badge key={r.id} tone={ok ? "ok" : "attention"} punto={!ok}>
+                    {ok && <Check className="size-3.5 shrink-0" aria-hidden />}
+                    <span className="code">{r.id}</span>
+                    {r.label ? <span className="font-normal">({r.label})</span> : null}
+                  </Badge>
                 );
               })}
             </div>
-          )}
+            {/* Leyenda escrita, no un tooltip: el title no existe para el teclado. */}
+            <p className="text-label text-fg-dim">
+              El tilde es una foto ya subida con ese id. El punto es una que falta:
+              esos planos se van a generar sin la cara de referencia.
+            </p>
+          </div>
+        )}
 
-          {references.length > 0 && (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {references.map((r) => (
-                <div
-                  key={r.uid}
-                  className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-ink p-2"
-                >
+        {references.length > 0 ? (
+          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {references.map((r) => {
+              // Al reves que arriba: esta foto, ¿la usa el plan? Solo tiene sentido
+              // preguntarlo cuando hay un plan cargado con referencias.
+              const usadaPorElPlan = idsQueEsperaElPlan.some((p) => p.id === r.id);
+              return (
+                // key={r.uid} y NO r.id: el id lo esta editando el usuario y con el
+                // como key React remonta el input en cada tecla.
+                <li key={r.uid} className="space-y-2 rounded-lg bg-surface-hi p-2">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={r.dataUrl}
                     alt={r.label || r.id}
-                    className="aspect-[3/4] w-full rounded object-cover"
+                    className="aspect-[3/4] w-full rounded-sm object-cover"
                   />
-                  <label className="text-[10px] text-slate-500">
-                    id (debe matchear el plan)
-                    <input
-                      value={r.id}
-                      onChange={(e) => updateReference(r.uid, { id: e.target.value })}
-                      placeholder="ej. natalia"
-                      className="code mt-0.5 w-full rounded border border-slate-700 bg-panel px-2 py-1 text-xs text-slate-200 focus:border-accent focus:outline-none"
-                    />
-                  </label>
-                  <input
+                  <Input
+                    label="id (tiene que matchear el plan)"
+                    placeholder="ej. natalia"
+                    value={r.id}
+                    onChange={(e) => updateReference(r.uid, { id: e.target.value })}
+                    className="code"
+                  />
+                  <Input
+                    label="Nombre"
+                    placeholder="ej. Natalia"
                     value={r.label}
                     onChange={(e) => updateReference(r.uid, { label: e.target.value })}
-                    placeholder="Nombre (ej. Natalia)"
-                    className="rounded border border-slate-700 bg-panel px-2 py-1 text-xs focus:border-accent focus:outline-none"
                   />
-                  <button
-                    onClick={() => removeReference(r.uid)}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-red-300 hover:bg-red-500/10"
-                    title="Quitar"
-                  >
-                    ✕ Quitar
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {mode === "ia" ? (
-          <>
-            <textarea
-              value={brief}
-              onChange={(e) => setBrief(e.target.value)}
-              placeholder="Pegá acá tu brief largo con avatares, b-roll y clips en orden…"
-              className="h-56 w-full resize-y rounded-lg border border-slate-700 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
-            />
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={() => setBrief(SAMPLE_BRIEF)}
-                className="rounded-lg border border-slate-600 px-4 py-2 text-sm hover:bg-slate-800"
-              >
-                Cargar ejemplo
-              </button>
-              <button
-                onClick={() => void parseBrief()}
-                disabled={parsing || !brief.trim()}
-                className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-              >
-                {parsing ? "Interpretando…" : "Interpretar con IA"}
-              </button>
-            </div>
-          </>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    {idsQueEsperaElPlan.length > 0 ? (
+                      usadaPorElPlan ? (
+                        <Badge tone="ok">
+                          <Check className="size-3.5 shrink-0" aria-hidden />
+                          en el plan
+                        </Badge>
+                      ) : (
+                        <Badge tone="attention" punto>
+                          sin usar
+                        </Badge>
+                      )
+                    ) : (
+                      <span />
+                    )}
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      icon={<X className="size-3.5" aria-hidden />}
+                      onClick={() => removeReference(r.uid)}
+                    >
+                      Quitar
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         ) : (
-          <>
-            <textarea
-              value={jsonText}
-              onChange={(e) => setJsonText(e.target.value)}
-              placeholder='Pegá acá el PlanJSON (el que te devolvió tu IA usando el prompt copiable)…'
-              spellCheck={false}
-              className="code h-56 w-full resize-y rounded-lg border border-slate-700 bg-ink p-3 text-xs leading-relaxed focus:border-accent focus:outline-none"
+          <p className="text-label text-fg-dim">
+            Todavía no subiste ninguna. Si el anuncio no tiene una persona fija, dejalo
+            vacío: cada imagen se genera desde su prompt.
+          </p>
+        )}
+      </Card>
+
+      {/* ─────────────── 4: modelos, aprobacion y costo ─────────────── */}
+      <section className="space-y-3">
+        <h2 className="text-title font-semibold text-fg">Modelos y aprobación</h2>
+        <ModelSelectorBar />
+
+        {/* Switch de auto-aprobacion del proyecto.
+            - OFF (videos normales): cada imagen/video queda esperando que vos la
+              apruebes antes de que arranque el paso siguiente.
+            - ON  (VSL / dejar correr): cada job se aprueba solo al terminar.
+            Default inteligente del store: se prende solo cuando subis avatares (VSL);
+            si tocás el toggle a mano, manda lo que elegiste y no se ajusta mas. */}
+        <Card flush>
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg p-4 focus-within:ring-2 focus-within:ring-accent">
+            <input
+              type="checkbox"
+              checked={autoApprove}
+              onChange={(e) => setAutoApprove(e.target.checked)}
+              className="mt-0.5 size-4 shrink-0 accent-accent"
             />
-            <button
-              onClick={applyPastedJson}
-              disabled={!jsonText.trim()}
-              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              Cargar PlanJSON
-            </button>
-
-            {/* ---------------- Importar carpeta (lote de PlanJSON) ----------------
-                Elegís una carpeta con N archivos .json (cada uno un PlanJSON completo)
-                y se crea UN proyecto por archivo. No arranca ninguna generacion: por
-                el rate limit los vas corriendo de a uno desde su pipeline. */}
-            <div className="space-y-3 rounded-lg border border-slate-800 bg-panel p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    📁 Importar carpeta{" "}
-                    <span className="text-slate-500">(varios proyectos de una)</span>
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Elegí una carpeta con varios <code>.json</code> (cada archivo = un
-                    PlanJSON completo, igual al que pegás arriba). Se crea{" "}
-                    <b>un proyecto por archivo</b>, en borrador y{" "}
-                    <b>sin arrancar nada</b>. Cuando termina te lleva al{" "}
-                    <b>tablero del lote</b>, donde arrancás la generación de imágenes y
-                    las revisás de a una. La auto-aprobación queda <b>apagada</b> para
-                    que ningún video se genere sin que vos apruebes la imagen.
-                  </p>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <label className="cursor-pointer rounded-lg border border-slate-600 px-3 py-2 text-sm hover:bg-slate-800">
-                    📁 Elegir carpeta
-                    <input
-                      ref={folderInputRef}
-                      type="file"
-                      multiple
-                      className="hidden"
-                      onChange={async (e) => {
-                        await handleImportFiles(e.target.files);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                  <label className="cursor-pointer rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800">
-                    📄 …o varios .json
-                    <input
-                      type="file"
-                      multiple
-                      accept=".json,application/json"
-                      className="hidden"
-                      onChange={async (e) => {
-                        await handleImportFiles(e.target.files);
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {importError && (
-                <p className="rounded bg-red-500/10 p-2 text-xs text-red-300">
-                  {importError}
-                </p>
-              )}
-
-              {imported.length > 0 && (
-                <>
-                  <div className="divide-y divide-slate-800 rounded-md border border-slate-700">
-                    {imported.map((item) => (
-                      <div
-                        key={item.fileName}
-                        className="flex flex-wrap items-start gap-2 px-3 py-2 text-xs"
-                      >
-                        <span className="w-5 shrink-0 text-center">
-                          {item.status === "creado"
-                            ? "✓"
-                            : item.status === "creando"
-                            ? "⏳"
-                            : item.status === "invalido" || item.status === "error"
-                            ? "✕"
-                            : "•"}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <code className="text-slate-400">{item.fileName}</code>
-                            {item.plan && (
-                              <span className="text-slate-500">
-                                {item.imageCount} imagenes · {item.clipCount} clips
-                              </span>
-                            )}
-                            {item.status === "creado" && item.projectId && (
-                              <Link
-                                href={`/project/${item.projectId}/pipeline`}
-                                className="text-accent hover:underline"
-                              >
-                                abrir →
-                              </Link>
-                            )}
-                          </div>
-                          {/* Nombre editable del proyecto (default: nombre del archivo). */}
-                          {item.plan && item.status !== "creado" && (
-                            <input
-                              value={item.name}
-                              onChange={(e) =>
-                                patchImported(item.fileName, { name: e.target.value })
-                              }
-                              placeholder="Nombre del proyecto"
-                              className="mt-1 w-full max-w-sm rounded border border-slate-700 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none"
-                            />
-                          )}
-                          {item.errors.length > 0 && (
-                            <ul className="mt-1 space-y-0.5 text-red-300">
-                              {item.errors.map((e, i) => (
-                                <li key={i}>· {e}</li>
-                              ))}
-                            </ul>
-                          )}
-                          {item.createError && (
-                            <p className="mt-1 text-red-300">· {item.createError}</p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
-                      onClick={() => void handleCreateImported()}
-                      disabled={
-                        importing ||
-                        imported.filter(
-                          (i) => i.plan && (i.status === "listo" || i.status === "error")
-                        ).length === 0
-                      }
-                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-                    >
-                      {importing
-                        ? "Creando proyectos…"
-                        : `Crear ${
-                            imported.filter(
-                              (i) =>
-                                i.plan && (i.status === "listo" || i.status === "error")
-                            ).length
-                          } proyectos y abrir el tablero →`}
-                    </button>
-                    <button
-                      onClick={() => {
-                        setImported([]);
-                        setImportError(null);
-                      }}
-                      disabled={importing}
-                      className="rounded-lg border border-slate-600 px-3 py-2 text-sm hover:bg-slate-800 disabled:opacity-50"
-                    >
-                      Limpiar lista
-                    </button>
-                    <span className="text-xs text-slate-500">
-                      {imported.filter((i) => i.status === "creado").length} creados ·{" "}
-                      {imported.filter((i) => i.status === "invalido").length} invalidos
-                      {references.length > 0 && (
-                        <> · se suben {references.length} fotos de referencia a cada uno</>
-                      )}
-                    </span>
-                  </div>
-                </>
-              )}
-            </div>
-          </>
-        )}
-
-        {error && (
-          <p className="rounded bg-red-500/10 p-2 text-sm text-red-300">{error}</p>
-        )}
+            <span className="min-w-0 flex-1">
+              <span className="block text-body font-medium text-fg">
+                Auto-aprobar todo al terminar
+              </span>
+              <span className="mt-0.5 block max-w-prose text-label text-fg-dim">
+                {autoApprove ? (
+                  <>
+                    Modo <b className="font-medium text-fg">dejar correr</b>: cada imagen
+                    y cada video se aprueban solos y arranca el siguiente. Es lo
+                    recomendado para un VSL con muchos clips.
+                  </>
+                ) : (
+                  <>
+                    Modo <b className="font-medium text-fg">aprobación manual</b>: cada
+                    imagen y cada video te van a pedir aprobación antes de seguir. Ideal
+                    para videos normales con pocas tomas.
+                  </>
+                )}
+              </span>
+            </span>
+          </label>
+        </Card>
       </section>
 
+      {/* ─────────── el plan, la estimacion y el boton que gasta ─────────── */}
       {plan && (
-        <section className="space-y-4">
-          <h2 className="text-xl font-semibold">Revisá y editá el plan</h2>
-          {plan.warnings?.length > 0 && (
-            <ul className="space-y-1 rounded-lg border border-amber-700/50 bg-amber-500/10 p-3 text-xs text-amber-200">
+        <section className="space-y-3">
+          <h2 className="text-title font-semibold text-fg">Revisá el plan y generá</h2>
+
+          {(plan.warnings?.length ?? 0) > 0 && (
+            <ul className="space-y-1 rounded-lg bg-accent/10 p-3 text-label text-accent">
               {plan.warnings.map((w, i) => (
-                <li key={i}>⚠ {w}</li>
+                <li key={i} className="flex gap-2">
+                  <Warning className="mt-0.5 size-4 shrink-0" aria-hidden />
+                  <span>{w}</span>
+                </li>
               ))}
             </ul>
           )}
@@ -732,74 +934,287 @@ export default function HomePage() {
           <div className="grid gap-4 lg:grid-cols-2">
             <JsonEditor value={plan} onValidChange={setPlan} />
             <div className="space-y-4">
-              {estimate && <CostEstimatePanel estimate={estimate} />}
-              <button
-                onClick={() => void handleGenerateAll()}
-                disabled={creating}
-                className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-base font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-              >
-                {creating ? "Creando proyecto…" : "Generar todo ▶"}
-              </button>
-              {createError && (
-                <p className="rounded bg-red-500/10 p-2 text-sm text-red-300">
-                  {createError}
-                </p>
+              {estimate ? (
+                <CostEstimatePanel estimate={estimate} />
+              ) : (
+                <Card>
+                  <CardTitle>Sin estimación previa</CardTitle>
+                  <CardDescription className="mt-1 text-label">
+                    La estimación la calcula el interpretador del brief. Este plan se
+                    cargó a mano, así que el costo aparece recién en el pipeline, con el
+                    proyecto ya creado.
+                  </CardDescription>
+                </Card>
               )}
-              <p className="text-xs text-slate-500">
-                {autoApprove ? (
-                  <>
-                    Auto-aprobacion <b>activa</b>: las imagenes y videos se
-                    aprueban solos al terminar.
-                  </>
-                ) : (
-                  <>
-                    Cada imagen y cada video van a pedirte <b>aprobacion</b>{" "}
-                    antes de seguir.
-                  </>
-                )}{" "}
-                Todo se guarda en{" "}
-                <code className="text-slate-300">output/&lt;project_id&gt;/</code>.
-              </p>
+
+              <Card className="space-y-3">
+                <Button
+                  variant="primary"
+                  className="w-full"
+                  icon={<Play className="size-4" aria-hidden />}
+                  loading={creating}
+                  onClick={() => void handleGenerateAll()}
+                >
+                  Generar todo
+                </Button>
+                {createError && (
+                  <p
+                    role="alert"
+                    className="rounded-sm bg-danger/10 p-2 text-label text-danger"
+                  >
+                    {createError}
+                  </p>
+                )}
+                <p className="text-label text-fg-dim">
+                  {autoApprove ? (
+                    <>
+                      Auto-aprobación <b className="font-medium text-fg">activa</b>: las
+                      imágenes y los videos se aprueban solos al terminar.
+                    </>
+                  ) : (
+                    <>
+                      Cada imagen y cada video te van a pedir{" "}
+                      <b className="font-medium text-fg">aprobación</b> antes de seguir.
+                    </>
+                  )}{" "}
+                  Todo se guarda en{" "}
+                  <code className="code text-fg">output/&lt;project_id&gt;/</code>.
+                </p>
+              </Card>
             </div>
           </div>
         </section>
       )}
 
-      {projects.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-xl font-semibold">Proyectos</h2>
-          {deleteError && (
-            <p className="rounded bg-red-500/10 p-2 text-sm text-red-300">
-              {deleteError}
+      {/* ──────────────────── 5: proyectos recientes ──────────────────── */}
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-title font-semibold text-fg">Proyectos recientes</h2>
+          {cargaLista === "listo" && projects.length > 0 && (
+            <p className="text-label text-fg-dim">
+              <span className="code tnum text-fg">{projects.length}</span> en total
             </p>
           )}
-          <div className="divide-y divide-slate-800 rounded-lg border border-slate-800">
-            {projects.map((p) => (
-              <div
-                key={p.id}
-                className="flex items-center gap-2 px-4 py-3 hover:bg-slate-800/50"
-              >
-                <Link href={`/project/${p.id}/pipeline`} className="min-w-0 flex-1">
-                  <div className="truncate font-medium">{p.name}</div>
-                  <div className="text-xs text-slate-500">
-                    {p.imageCount} imagenes · {p.clipCount} clips ·{" "}
-                    {new Date(p.createdAt).toLocaleString()}
-                  </div>
-                </Link>
-                <StatusBadge status={p.status} />
-                <button
-                  onClick={() => void handleDeleteProject(p)}
-                  disabled={deletingId === p.id}
-                  title="Borrar el proyecto y TODOS sus archivos (imagenes y videos)"
-                  className="shrink-0 rounded-md border border-red-900/60 px-2.5 py-1.5 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
-                >
-                  {deletingId === p.id ? "Borrando…" : "🗑 Borrar"}
-                </button>
-              </div>
+        </div>
+
+        {deleteError && (
+          <p role="alert" className="rounded-sm bg-danger/10 p-2 text-body text-danger">
+            {deleteError}
+          </p>
+        )}
+
+        {cargaLista === "cargando" ? (
+          // Esqueleto con la forma de la grilla, no un spinner: cuando llega la lista
+          // real no se mueve nada de lugar.
+          <ul
+            aria-busy
+            aria-label="Cargando proyectos"
+            className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+          >
+            {Array.from({ length: 6 }, (_, i) => (
+              <li key={i} className="space-y-2 rounded-lg bg-surface p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <Skeleton className="h-4 w-1/2" />
+                  <Skeleton className="h-4 w-16" />
+                </div>
+                <Skeleton className="h-3 w-2/3" />
+                <Skeleton className="h-3 w-1/3" />
+              </li>
             ))}
+          </ul>
+        ) : cargaLista === "error" ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg bg-danger/10 p-3">
+            <p role="alert" className="text-body text-danger">
+              No se pudo leer la lista de proyectos. Los que ya existen siguen ahí.
+            </p>
+            <Button size="sm" onClick={() => void loadProjects()}>
+              Reintentar
+            </Button>
           </div>
-        </section>
+        ) : projects.length === 0 ? (
+          <EmptyState
+            icon={<FilmSlate className="size-6" aria-hidden />}
+            title="Todavía no hay ningún proyecto"
+            body="Pegá un brief arriba y dale a Interpretar con IA, o pegá un PlanJSON si ya lo tenés armado. El proyecto se crea recién cuando apretás Generar todo."
+            action={{
+              label: "Cargar un brief de ejemplo",
+              onClick: () => {
+                setMode("ia");
+                setBrief(SAMPLE_BRIEF);
+              },
+            }}
+          />
+        ) : (
+          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {projects.map((p) => (
+              <li key={p.id}>
+                <Card className="flex h-full flex-col gap-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <Link
+                      href={`/project/${p.id}/pipeline`}
+                      className="min-w-0 rounded-sm text-body font-medium text-fg transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      <span className="block truncate">{p.name || p.id}</span>
+                    </Link>
+                    <span className="shrink-0">
+                      <StatusBadge status={p.status} />
+                    </span>
+                  </div>
+
+                  <dl className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-label text-fg-dim">
+                    <div className="flex items-baseline gap-1">
+                      <dt className="sr-only">Imágenes</dt>
+                      <dd>
+                        <span className="code tnum text-fg">{p.imageCount}</span>{" "}
+                        imágenes
+                      </dd>
+                    </div>
+                    <div className="flex items-baseline gap-1">
+                      <dt className="sr-only">Clips</dt>
+                      <dd>
+                        <span className="code tnum text-fg">{p.clipCount}</span> clips
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <div className="mt-auto flex items-center justify-between gap-2 border-t border-divider pt-3">
+                    <p className="code tnum min-w-0 truncate text-label text-fg-dim">
+                      {new Date(p.createdAt).toLocaleString()}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      icon={<Trash className="size-3.5" aria-hidden />}
+                      loading={deletingId === p.id}
+                      onClick={() => setABorrar(p)}
+                      title="Borrar el proyecto y TODOS sus archivos (imágenes y videos)"
+                    >
+                      Borrar
+                    </Button>
+                  </div>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/*
+        Confirmacion de borrado. Reemplaza al window.confirm, que en una app oscura
+        aparece como un cuadro del sistema operativo y se acepta por reflejo. El
+        detalle es el mismo que decia antes: cuantos archivos se pierden y que no
+        se puede deshacer.
+      */}
+      {aBorrar && (
+        <Confirmar
+          abierto
+          onCambio={(v) => {
+            if (!v) setABorrar(null);
+          }}
+          title={`¿Borrar "${aBorrar.name || aBorrar.id}"?`}
+          detalle={
+            `Se eliminan también los archivos generados: ${aBorrar.imageCount} imágenes y ` +
+            `${aBorrar.clipCount} clips (la carpeta output/${aBorrar.id}/ entera). ` +
+            `Esto no se puede deshacer.`
+          }
+          labelConfirmar="Borrar todo"
+          peligroso
+          onConfirmar={() => void handleDeleteProject(aBorrar)}
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * Un `<input type="file">` con forma de boton.
+ *
+ * El input va `sr-only` y NO `hidden`: oculto con `hidden` no se puede enfocar, y el
+ * boton de subir archivo quedaba inalcanzable con teclado (era asi en las tres
+ * apariciones de esta pantalla). Con `sr-only` el input sigue en el orden de
+ * tabulacion, el label le presta la pinta, y `focus-within` dibuja el anillo.
+ *
+ * Los estilos salen del `Button` de T01 via `asChild`, para no volver a escribir a
+ * mano la cadena de clases que el modulo entero quiere dejar de repetir.
+ */
+function BotonDeArchivo({
+  children,
+  refDelInput,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, "type" | "className"> & {
+  children: React.ReactNode;
+  refDelInput?: React.Ref<HTMLInputElement>;
+}) {
+  return (
+    <Button asChild>
+      <label className="cursor-pointer focus-within:ring-2 focus-within:ring-accent focus-within:ring-offset-2 focus-within:ring-offset-bg">
+        {children}
+        <input ref={refDelInput} type="file" className="sr-only" {...props} />
+      </label>
+    </Button>
+  );
+}
+
+/** Una fila de la importacion en lote: el archivo, su estado y su nombre editable. */
+function FilaImportada({
+  item,
+  onRenombrar,
+}: {
+  item: ImportedPlan;
+  onRenombrar: (v: string) => void;
+}) {
+  const visual = IMPORT_VISUAL[item.status];
+  return (
+    <li className="space-y-2 px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone={visual.tone} punto animado={visual.animado}>
+          {visual.label}
+        </Badge>
+        <code className="code min-w-0 flex-1 truncate text-label text-fg">
+          {item.fileName}
+        </code>
+        {item.plan && (
+          <span className="shrink-0 text-label text-fg-dim">
+            <span className="code tnum text-fg">{item.imageCount}</span> imágenes ·{" "}
+            <span className="code tnum text-fg">{item.clipCount}</span> clips
+          </span>
+        )}
+        {item.status === "creado" && item.projectId && (
+          <Link
+            href={`/project/${item.projectId}/pipeline`}
+            className="inline-flex shrink-0 items-center gap-1 rounded-sm text-label font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            abrir
+            <ArrowRight className="size-3.5" aria-hidden />
+          </Link>
+        )}
+      </div>
+
+      {/* Nombre editable del proyecto (default: nombre del archivo). */}
+      {item.plan && item.status !== "creado" && (
+        <div className="max-w-sm">
+          <Input
+            label="Nombre del proyecto"
+            labelOculto
+            placeholder="Nombre del proyecto"
+            value={item.name}
+            onChange={(e) => onRenombrar(e.target.value)}
+          />
+        </div>
+      )}
+
+      {item.errors.length > 0 && (
+        <ul className="space-y-0.5 text-label text-danger">
+          {item.errors.map((e, i) => (
+            <li key={i} className="code">
+              {e}
+            </li>
+          ))}
+        </ul>
+      )}
+      {item.createError && (
+        <p className="text-label text-danger">{item.createError}</p>
+      )}
+    </li>
   );
 }

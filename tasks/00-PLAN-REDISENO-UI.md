@@ -737,3 +737,182 @@ código**. Si bloquea, la task se detiene y no sigue con suposiciones.
   `node -e` con el `cn()` real sobre `cn("bg-fg text-bg", "text-body")` tiene que devolver un string
   que contenga `text-bg` **y** `text-body`. Hoy devuelve solo `text-body`.
 - **Resolución:** _pendiente_
+
+---
+
+> **Nota de numeración.** P-10 a P-16 las agregó **T04**, que fue la primera pantalla que puso las
+> primitivas en un formulario real. T05 y T06 corrían en paralelo en la misma ola, así que si aparece
+> otra `P-10` es una colisión de numeración y no un duplicado de contenido: cada título lleva la task
+> que lo escribió para poder renumerar sin perder de qué hablaba.
+
+### P-10 (T04) — El `Select` de T01 no sirve para un campo de formulario real: no expone `name` ni `autoComplete`
+- **Task:** T04 la encontró; la resuelve T01 o T12. **La va a pisar cualquier task con un formulario.**
+- **Sección del plan:** §5 (firma congelada de `SelectProps`), §2 de `T04-login.md`
+- **Archivos:** `src/components/ui/Select.tsx` (de T01), `src/app/login/LoginForm.tsx`
+- **Qué falta:** `SelectProps<T>` tiene exactamente `label`, `value`, `onValueChange`, `options`,
+  `labelOculto`, `disabled` y `className`. **No hay `name`, no hay `autoComplete`, no hay `required`
+  y no hay `id` desde afuera.** Con eso el control no puede participar de un `<form>` como un campo:
+  no se serializa, no lo llena un gestor de contraseñas y no lo puede referenciar un `aria-*` externo.
+- **Por qué es un problema y no un detalle:** el campo "Usuario" del login es la mitad de un par
+  usuario/password. Los gestores (1Password, el de Chrome, el llavero de macOS) emparejan ese par por
+  `autoComplete="username"` + `autoComplete="current-password"` y guardan la credencial contra el
+  `name` del campo. `T04-login.md` §2 los marca como intocables por eso mismo. Y aparte, el `Select`
+  de Radix **no renderiza un `<select>`**: renderiza `<button role="combobox">`. Aunque la firma
+  expusiera `autoComplete`, Radix lo llevaría a su `<select>` burbuja, que es `aria-hidden` y
+  `tabIndex={-1}`: un gestor de contraseñas no lo ofrece.
+- **Bloquea:** por §5 de `T04-login.md` esto es de la clase "pará y avisá" ("una primitiva no te deja
+  reproducir el formulario sin cambiar su firma"). **No detuvo la task** porque hay una salida que no
+  toca la primitiva ni rompe el autofill, pero queda anotado como decisión tomada, no como detalle.
+- **Mientras tanto:** el campo "Usuario" del login quedó como `<select>` **nativo**, con
+  `appearance-none` y las clases de token, más un `CaretDown` de Phosphor posicionado encima para que
+  se vea igual que el trigger de Radix. Se eligió romper la regla "usá la primitiva" antes que romper
+  el autofill de los dos usuarios, porque lo primero es cosmético y lo segundo lo sufren todos los
+  días. La rama sin usuarios en el env (`usuarios.length === 0`) sí usa `Input`, que acepta `name` y
+  `autoComplete` como cualquier input.
+- **Lo que hay que hacer:** agregarle a `SelectProps` los tres atributos de formulario
+  (`name?`, `autoComplete?`, `required?`) y pasárselos a `RadixSelect.Root`, que ya los soporta.
+  **Eso arregla la serialización pero NO el autofill**, porque el problema del `<select>` burbuja
+  escondido es de Radix y no de la firma. Así que la decisión de fondo es la que hay que tomar:
+  o `ui/Select.tsx` gana una variante nativa para los casos donde el navegador tiene que reconocer el
+  campo, o se acepta que el login es la excepción documentada y el resto de la app usa Radix. La
+  recomendación de T04 es lo segundo: es **un** campo en toda la app, y una primitiva con dos motores
+  adentro es más superficie de la que ahorra.
+- **Resolución:** _pendiente_
+
+### P-11 (T04) — `Field` no exporta sus clases de caja, así que el control que no puede usar la primitiva las vuelve a copiar
+- **Task:** T04 la encontró; la resuelve T01 o T12
+- **Sección del plan:** §4 regla 1, §5. Es el problema original del módulo volviendo por la ventana.
+- **Archivos:** `src/components/ui/Field.tsx` (de T01), `src/app/login/LoginForm.tsx`
+- **Qué falta:** `Field.tsx` tiene la cadena de la caja del input en una const local `CAJA`, y el label
+  en un string suelto dentro de `Envoltorio`. Ninguna de las dos se exporta. Cuando un control **no
+  puede** usar la primitiva (P-10), la única forma de que se vea igual es copiar las dos cadenas a
+  mano. Eso es literalmente lo que el módulo vino a matar: "la misma cadena de clases de borde copiada
+  15 veces".
+- **Bloquea:** no
+- **Mientras tanto:** `LoginForm.tsx` tiene un `CAJA_SELECT` y un `LABEL` propios, con el comentario
+  que apunta acá. Son copias del original con dos diferencias deliberadas: `h-9` (para empatar con la
+  altura del botón y con el trigger de Radix, que `Field` no fija porque su input crece con el
+  `py-2`) y `pr-8` para dejarle lugar al caret. **El riesgo real es la divergencia futura:** si T12
+  cambia el radio o el borde de los inputs en `Field.tsx`, el select del login se queda atrás y nadie
+  se va a enterar.
+- **Lo que hay que hacer:** exportar las dos cadenas desde `ui/Field.tsx` (`export const CLASES_CAJA`
+  y `CLASES_LABEL`) y que `LoginForm` y `Select` las importen en vez de repetirlas. Es una línea de
+  `export` y tres de import; no cambia ninguna firma de componente, así que no toca el contrato
+  congelado de §5.
+- **Resolución:** _pendiente_
+
+### P-12 (T04) — Los iconos de Phosphor no se pueden importar desde un Server Component. Verificado, no inferido
+- **Task:** T04 la encontró. **Afecta a T06, T08 y T11, que tienen `page.tsx` de server.**
+- **Sección del plan:** §0 punto 5, D5
+- **Archivo:** `node_modules/@phosphor-icons/react` 2.1.10 (dependencia, no es de nadie)
+- **Qué pasa:** el paquete **no trae la directiva `"use client"` en ningún archivo de su `dist`**
+  (`grep -rl "use client" node_modules/@phosphor-icons/react/dist/` no devuelve nada), y su
+  `dist/lib/context.es.js` llama `createContext` a nivel de módulo, que `IconBase` después consume con
+  `useContext`. En el runtime de React Server Components `createContext` no existe, así que importar
+  **un solo icono** desde un Server Component rompe la página entera.
+- **Cómo se verificó:** agregándole `import { ShieldWarning } from "@phosphor-icons/react"` a
+  `src/app/login/page.tsx` (que es server) y corriendo `npm run build`. Salida:
+
+  ```
+   ✓ Compiled successfully
+  TypeError: (0 , a.createContext) is not a function
+      at 6782 (.next/server/app/login/page.js:1:10393)
+  Error: Failed to collect page data for /login
+  ```
+
+  Se revirtió: `src/app/login/page.tsx` no importa Phosphor, y el `SignIn` y el `CaretDown` del login
+  viven en `LoginForm.tsx`, que sí es `"use client"`.
+- **El detalle que lo hace peligroso:** **el build imprime `✓ Compiled successfully` de todas formas.**
+  La falla ocurre después, en "Collecting page data". Una task que verifique con
+  `npm run build 2>&1 | grep -E "Compiled|Failed"` ve el tilde verde y cree que pasó. El único chequeo
+  que lo caza es mirar el **exit code** del build o que la ruta aparezca en la tabla de rutas, que es
+  justo lo que pide §9 punto 2 y por eso ese punto no es decorativo.
+- **Bloquea:** no, mientras el icono viva en un componente cliente.
+- **Mientras tanto:** regla práctica para las 7 tasks que faltan: **los iconos van en el componente
+  cliente, nunca en el `page.tsx` de server.** En la práctica alcanza, porque los `page.tsx` de esta
+  app son cascarones que leen la cookie o el config y delegan el JSX a un `*Board`/`*Deck` cliente.
+- **Lo que hay que hacer, si alguna vez hace falta un icono en server:** importarlo del subpath SSR
+  (`@phosphor-icons/react/dist/ssr`), que usa `SSRBase` y no toca `createContext`. **No probado en este
+  módulo**, así que si una task lo necesita, que lo verifique con un build antes de darlo por bueno.
+- **Resolución:** _pendiente_
+
+### P-13 (T04) — `CardTitle` renderiza un `<h2>` fijo: la pantalla cuya tarjeta ES la página queda sin `<h1>`
+- **Task:** T04 la encontró; la resuelve T01 o T12
+- **Sección del plan:** §5, §9 punto 9 (accesibilidad)
+- **Archivos:** `src/components/ui/Card.tsx` (de T01), `src/app/login/page.tsx`
+- **Qué falta:** `CardTitle` tiene el tag `<h2>` hardcodeado y no acepta `as` ni `asChild`. En una
+  grilla de tarjetas eso está bien. En el login, donde la tarjeta es toda la página, usarlo dejaría el
+  documento **sin ningún `<h1>`**: el `layout.tsx` tampoco pone uno (la marca "AUGC" es un `<Link>`),
+  así que el primer encabezado del documento sería un `h2` y el nivel 1 quedaría vacío. Un lector de
+  pantalla que lista encabezados para orientarse arranca en un nivel que no existe.
+- **Bloquea:** no
+- **Mientras tanto:** `login/page.tsx` escribe el título como `<h1 className="text-display
+  font-semibold text-fg">`. No es duplicar `CardTitle`: el tamaño **también** es distinto a propósito
+  (`text-display` 24px contra `text-title` 16px), porque el título de la única pantalla monopropósito
+  de la app no pesa lo mismo que el de una tarjeta de una grilla de 95. `CardDescription` sí se usa
+  tal cual.
+- **Lo que hay que hacer:** darle a `CardTitle` un `as?: "h1" | "h2" | "h3"` con default `"h2"`.
+  Amplía la firma congelada de §5 pero no rompe ningún consumidor. T08 y T11 lo van a querer también:
+  las dos tienen una tarjeta que encabeza la pantalla.
+- **Resolución:** _pendiente_
+
+### P-14 (T04) — No hay primitiva para avisos de bloque, y hay al menos tres pantallas que los necesitan
+- **Task:** T04 la encontró; la resuelve T01 o T12
+- **Sección del plan:** §0 punto 7 ("estados de error en cada pantalla"), §5 (las 10 primitivas)
+- **Archivos:** `src/app/login/page.tsx`, `src/app/login/LoginForm.tsx`
+- **Qué falta:** las 10 primitivas cubren el error **de un campo** (`Field` con `error`) y el estado
+  **de una cosa** (`Badge` con `tone`), pero no el aviso de un párrafo con `role="alert"`, que es lo
+  que hace falta para "el server no tiene AUTH_SECRET", "demasiados intentos, esperá 47s" y el aviso
+  del gate de aprobación de P-01. Hoy cada pantalla lo escribe a mano con
+  `rounded border border-<tono>/40 bg-<tono>/10 px-2.5 py-2 text-body text-<tono>`, que son cuatro
+  decisiones que van a divergir entre pantallas exactamente como divergieron los grises.
+- **Bloquea:** no
+- **Mientras tanto:** el login tiene dos avisos escritos a mano, los dos con tokens y sin un solo color
+  literal: el del formulario (rate limit, server sin configurar, red caída) en `danger`, y el de
+  AUTH_SECRET en `accent`, que en este sistema significa "esto espera algo de vos" (D6) y acá el que
+  tiene que hacer algo es quien administra el server, no el usuario.
+- **Lo que hay que hacer:** una primitiva `Aviso` (o `Alert`) de `{ tone: Tone; children }` que reuse
+  el mismo mapa de tonos que `Badge`, para que el aviso y el badge del mismo estado no puedan salir de
+  distinto color. Es la primitiva número 11 y es chica. Si se agrega, T04, T06 y T08 se simplifican.
+- **Resolución:** _pendiente_
+
+### P-15 (T04) — El chequeo 5 de `T04-login.md` espera 2 y la línea base real es 3
+- **Task:** T04 la encontró; la resuelve T12
+- **Sección del plan:** §9, y §4 chequeo 5 de `T04-login.md`
+- **Archivo:** `tasks/T04-login.md`
+- **Qué falta:** el chequeo dice
+  `grep -cE 'autoComplete="(username|current-password)"' src/app/login/LoginForm.tsx` → "esperado
+  exactamente: 2". **Da 3, y daba 3 antes del rediseño también**, verificado contra
+  `git show HEAD:src/app/login/LoginForm.tsx`: el archivo tiene `autoComplete="username"` **dos**
+  veces, una en la rama del `<select>` y otra en la rama del `<input>` libre de cuando no hay usuarios
+  en el env, más `current-password` una vez. El "2" del documento se escribió contando un solo campo
+  de usuario.
+- **Bloquea:** no. Lo que el chequeo quiere probar —que los dos `autoComplete` siguen ahí— **pasa**: el
+  conteo es idéntico al de HEAD y las dos ramas conservan el atributo.
+- **Mientras tanto:** queda en 3. **No se tocó el chequeo**: `tasks/` es de T12 salvo esta sección.
+- **Lo que hay que hacer:** cambiar el esperado a 3, o mejor, cambiarlo por dos greps separados
+  (`grep -c 'autoComplete="username"'` → 2 y `grep -c 'autoComplete="current-password"'` → 1), que es
+  más específico y no se rompe si alguien reordena el archivo.
+- **Resolución:** _pendiente_
+
+### P-16 (T04) — Se arregló un bug de estado del login que dejaba el botón trabado. Es un cambio de comportamiento y va anotado
+- **Task:** T04 lo arregló. Queda acá porque §0 dice "ningún cambio funcional".
+- **Sección del plan:** §0 ("no se construye: cambios funcionales"), §3 de `T04-login.md`
+- **Archivo:** `src/app/login/LoginForm.tsx`
+- **Qué pasaba:** la rama de error del handler (`if (!res.ok || !data.ok)`) hacía `setError`,
+  `setPassword("")` y `return` **sin bajar `cargando`**. Solo el `catch` lo bajaba. Así que después de
+  **un** intento fallido el botón quedaba deshabilitado con el spinner puesto y el texto "Entrando…"
+  para siempre: no se podía reintentar sin recargar la página. Se veía como "el login se colgó".
+- **Por qué se arregló en vez de anotarse y seguir:** el caso 3 de la verificación a mano de
+  `T04-login.md` (6 intentos fallidos seguidos para ver el mensaje de 429) es **imposible de ejecutar**
+  con ese bug: exigiría 6 recargas de página. Y el caso 1 pide que "el foco quede usable" después del
+  error, que con el botón deshabilitado y el foco caído al `<body>` tampoco se cumplía.
+- **Qué se cambió, exactamente:** se agregó `setCargando(false)` en esa rama, y un `ref` en el campo de
+  password con un `.focus()` para que el foco vuelva al campo en vez de caerse al `body` cuando el
+  botón se deshabilita. **No se tocó** el POST, ni el body, ni la lectura de la respuesta, ni el
+  `window.location.assign("/")`, ni el rate limit del server. Es estado de UI.
+- **El otro cambio de comportamiento visible, este sí pedido por el plan:** el botón ya no dice
+  "Entrando…" mientras carga. Dice "Entrar" siempre, con un spinner al lado, porque §5 regla 1 lo
+  exige (el texto que cambia mueve el ancho del botón).
+- **Bloquea:** no
+- **Resolución:** _pendiente_
