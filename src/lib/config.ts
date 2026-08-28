@@ -225,12 +225,14 @@ export const config = {
      */
     imageVariantGapMs: Number(env("PIPELINE_IMAGE_VARIANT_GAP_MS", "2500")),
     /**
-     * Reintentos de UNA variante puntual cuando la cuota la rechaza, antes de
-     * seguir con la siguiente. Es aparte de los reintentos del job entero: una
-     * variante que no sale no tiene por que hacer perder las que ya salieron.
+     * Reintentos RAPIDOS de una variante ante un 429, para absorber un rechazo
+     * puntual. Son pocos y a proposito: la cuota de estos modelos es por MINUTO, y
+     * esperar segundos no la resuelve (verificado). Cuando se agotan, el job se
+     * devuelve a la cola, que espera `rateLimitBackoffMs` (45s) y al reintentar
+     * genera SOLO las variantes que falten.
      */
     imageVariantRateLimitRetries: Number(
-      env("PIPELINE_IMAGE_VARIANT_RETRIES", "3")
+      env("PIPELINE_IMAGE_VARIANT_RETRIES", "2")
     ),
     // Reintentos extra dedicados a errores transitorios (429 + red); cuenta aparte
     // de los maxAttempts normales.

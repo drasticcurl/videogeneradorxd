@@ -373,10 +373,23 @@ async function runImageGeneration(
           logEvent(
             project.id,
             "warn",
-            `Variante v${i} de "${img.id}": cuota agotada tras ${maxIntentos} intentos. Sigo con la que viene.`,
+            `Variante v${i} de "${img.id}": sigue en 429 tras ${maxIntentos} intentos. Devuelvo el job a la cola para que espere la ventana de cuota.`,
             { jobId: job.id, model }
           );
-          break;
+          // Se RELANZA en vez de seguir con la variante siguiente.
+          //
+          // La cuota de estos modelos es POR MINUTO, asi que los reintentos cortos
+          // de este loop (segundos) no la resuelven: verificado, con 3s y 5s el 429
+          // seguia. La cola ya tiene el mecanismo correcto y tuneado para esto
+          // (`rateLimitBackoffMs`, 45s, hasta `rateLimitMaxAttempts` veces, sin
+          // consumir los intentos normales del job), y el bloque de arriba de esta
+          // funcion ya sabe RETOMAR: filtra las variantes que siguen en disco y
+          // pide solo las que faltan. Asi que relanzar no regenera ni cobra dos
+          // veces lo que ya salio.
+          //
+          // Seguir con la variante siguiente, en cambio, era garantia de otro 429:
+          // la ventana estaba igual de agotada.
+          throw err;
         }
 
         // Backoff creciente sobre la pausa base, con jitter para no sincronizar
@@ -406,7 +419,13 @@ async function runImageGeneration(
   // a awaiting_approval como si todo hubiera ido bien y no hay forma de saber, desde
   // la UI, que falta una variante. `error` no cambia el status: las dos UIs lo
   // muestran como una nota (ver JobCard), asi que el job sigue siendo aprobable.
+  //
+  // Llegar aca con variantes faltantes ya NO puede ser por cuota: ese caso relanza
+  // mas arriba para que la cola espere la ventana. Si falta alguna es por un error
+  // que no se arregla esperando (prompt bloqueado por los filtros de seguridad,
+  // respuesta sin imagen, red). Por eso el mensaje no habla de cuota.
   const faltan = variants - candidates.length;
+  const motivo = lastErr instanceof Error ? lastErr.message : String(lastErr ?? "");
   jobsDb.update(job.id, {
     candidates,
     selectedIndex: variants === 1 ? 1 : candidates.length === 1 ? candidates[0].index : job.selectedIndex ?? null,
@@ -414,7 +433,7 @@ async function runImageGeneration(
     model,
     error:
       faltan > 0
-        ? `Salieron ${candidates.length}/${variants} variantes: la cuota del modelo rechazó ${faltan}. Podés aprobar la que hay o darle a Variar para reintentar.`
+        ? `Salieron ${candidates.length}/${variants} variantes. La/s otra/s fallaron: ${motivo.slice(0, 200)}`
         : null,
   });
   if (candidates.length < variants) {
