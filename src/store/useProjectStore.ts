@@ -186,8 +186,8 @@ function dataUrlToBlob(dataUrl: string): Blob {
  * el suyo: la UI muestra una cosa y se genera con otra.
  */
 const FALLBACK_MODELS: ProjectModels = {
-  llm: "gemini-2.5-pro",
-  image: "gemini-2.5-flash-image",
+  llm: "gemini-3.6-flash",
+  image: "gemini-3.1-flash-image",
   video: "veo-3.1-lite-generate-001",
 };
 

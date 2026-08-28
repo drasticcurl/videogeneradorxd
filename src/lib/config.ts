@@ -26,32 +26,45 @@ export interface ModelOption {
  * - Video: familia Veo 3.1.
  * - Chat: Gemini para interpretar el brief.
  */
+/**
+ * Catalogo de modelos para los selectores de la UI.
+ *
+ * TODOS estos IDs estan verificados con una request real contra el proyecto en el
+ * endpoint `global` (2026-08-27). Los modelos 3.x NO existen en los endpoints
+ * regionales: en us-central1 dan 404. Por eso `google.location` es `global`; si
+ * alguien la vuelve a poner en una region, la mitad de este catalogo deja de
+ * responder. Ver el comentario de `location` mas abajo.
+ *
+ * OJO al editar: `resolveModel()` cae al default cuando el id pedido NO esta en
+ * esta lista, asi que sacar un modelo de aca sin mover el default correspondiente
+ * en `models` deja la app generando con un modelo que la UI no muestra.
+ */
 export const MODEL_CATALOG: Record<ModelKind, ModelOption[]> = {
-  // Un solo modelo de chat a pedido del usuario: 2.5 Pro. Se sacaron 3.5 Flash,
-  // 2.5 Flash y 2.5 Flash Lite.
-  //
-  // OJO si algun dia se agrega otro: `resolveModel()` cae al default cuando el id
-  // pedido NO esta en esta lista, asi que sacar un modelo de aca sin cambiar el
-  // default de `models.llm` mas abajo deja la app usando un modelo que la UI no
-  // muestra. Por eso el default se movio a 2.5 Pro en el mismo cambio.
-  llm: [{ id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" }],
-  // Solo Nano Banana. Se sacaron las variantes 3.1 Flash Image y 3 Pro Image.
+  // Solo 3.6 Flash, a pedido. 3.5 Flash, 3.1 Flash-Lite y 3.5 Flash-Lite tambien
+  // responden en global por si alguna vez se quieren agregar. 3.7 Flash existe
+  // pero contesto 429 (sin capacidad), no 404.
+  llm: [{ id: "gemini-3.6-flash", label: "Gemini 3.6 Flash" }],
+  // Las tres variantes de Nano Banana, de mayor a menor calidad.
   image: [
-    { id: "gemini-2.5-flash-image", label: "Nano Banana (Gemini 2.5 Flash Image)" },
+    {
+      id: "gemini-3.1-flash-image",
+      label: "Nano Banana 2 (3.1 Flash Image) · default, equilibrado",
+    },
+    { id: "gemini-3-pro-image", label: "Nano Banana Pro (3 Pro Image) · mejor calidad" },
+    // Verificado: devuelve imagenes de ~56 KB contra ~1.1 MB de las otras dos.
+    // Esta pensado para alto volumen y baja latencia, no para calidad. Para un
+    // creativo publicitario probablemente no alcance: probarlo antes de usarlo.
+    {
+      id: "gemini-3.1-flash-lite-image",
+      label: "Nano Banana 2 Lite (3.1 Flash-Lite Image) · rapido, calidad baja (~56 KB)",
+    },
   ],
-  // Los cuatro de video se mantienen. El default es Lite (ver `models.video`).
+  // Veo 3.1 es la linea mas nueva que existe: veo-3.2 y veo-4.0 dan 404. Estas
+  // tres son sus variantes, de menor a mayor costo.
   video: [
     { id: "veo-3.1-lite-generate-001", label: "Veo 3.1 Lite · default, mas barato" },
-    { id: "veo-3.1-generate-001", label: "Veo 3.1" },
-    { id: "veo-3.1-fast-generate-001", label: "Veo 3.1 Fast" },
-    // Verificado contra el proyecto el 2026-08-27: este devuelve 404 ("Publisher
-    // model not found"). Los otros tres responden OK. Se deja en la lista porque
-    // se pidio no sacar ninguno, pero la etiqueta lo dice para que nadie lo elija
-    // y se coma un fallo en cada job. Si Google lo habilita, se saca el aviso.
-    {
-      id: "veo-3.1-lite-generate-001-preview",
-      label: "Veo 3.1 Lite preview · NO disponible en este proyecto (404)",
-    },
+    { id: "veo-3.1-fast-generate-001", label: "Veo 3.1 Fast · rapido" },
+    { id: "veo-3.1-generate-001", label: "Veo 3.1 · mejor calidad" },
   ],
 };
 
@@ -115,7 +128,28 @@ export const config = {
 
   google: {
     project: env("GOOGLE_CLOUD_PROJECT"),
-    location: env("GOOGLE_CLOUD_LOCATION", "us-central1"),
+    /**
+     * `global` y NO una region. No es un detalle de performance: es lo que hace
+     * que exista la mitad de MODEL_CATALOG.
+     *
+     * Verificado con requests reales el 2026-08-27. Toda la familia Gemini 3.x
+     * (3.6 Flash de chat, 3 Pro Image, 3.1 Flash Image, 3.1 Flash-Lite Image)
+     * devuelve 404 en us-central1, us-east5 y europe-west4, y responde OK en
+     * `global`. Solo los modelos 2.5 andaban en las regiones.
+     *
+     * Veo tambien funciona en `global`, ciclo completo verificado (start del LRO,
+     * polling con fetchPredictOperation y bytes de vuelta). En us-east5 y
+     * europe-west4 da 404.
+     *
+     * Ademas Google recomienda `global` justamente para reducir los 429: adentro
+     * rutea a la region con mas capacidad disponible, que es un pool multi-region
+     * mas grande que cualquier region sola.
+     *
+     * SI ALGUIEN LO VUELVE A PONER EN UNA REGION, los modelos 3.x empiezan a
+     * fallar con 404 en cada job. `vertexBaseUrl()` ya resuelve el host distinto
+     * que necesita `global` (aiplatform.googleapis.com, sin prefijo).
+     */
+    location: env("GOOGLE_CLOUD_LOCATION", "global"),
   },
 
   /**
@@ -123,15 +157,16 @@ export const config = {
    * Verifica los IDs vigentes en la doc oficial de Vertex AI.
    */
   models: {
+    // Los tres defaults TIENEN que estar en MODEL_CATALOG (ver su comentario).
     // Gemini para interpretar el brief -> PlanJSON estructurado.
-    // 2.5 Pro y no 2.5 Flash: es el unico que quedo en MODEL_CATALOG.llm, y el
-    // default TIENE que estar en el catalogo (ver el comentario de MODEL_CATALOG).
-    llm: env("LLM_MODEL", "gemini-2.5-pro"),
+    llm: env("LLM_MODEL", "gemini-3.6-flash"),
     // Nano Banana (Gemini image) para text2image E image2image (consistencia de avatar).
-    image: env("IMAGE_MODEL", "gemini-2.5-flash-image"),
+    // La variante Flash y no Pro: es el equilibrio entre calidad y costo. Ni la Lite,
+    // que devuelve imagenes de ~56 KB.
+    image: env("IMAGE_MODEL", "gemini-3.1-flash-image"),
     // Veo para imagen->video (operacion de larga duracion / LRO).
-    // Lite por default: es el mas barato de los tres que responden OK en este
-    // proyecto. Los otros dos siguen disponibles en el selector.
+    // Lite por default: es el mas barato de los tres. Los otros dos estan en el
+    // selector.
     video: env("VIDEO_MODEL", "veo-3.1-lite-generate-001"),
   },
 
