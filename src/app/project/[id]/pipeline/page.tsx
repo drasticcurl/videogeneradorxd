@@ -62,6 +62,7 @@ import {
   CheckCircle,
   Coins,
   Copy,
+  DownloadSimple,
   Eye,
   EyeSlash,
   FilmSlate,
@@ -1310,15 +1311,26 @@ const FixRow = memo(function FixRow({
           <td />
           <td colSpan={5} className="px-2 pb-3">
             {videoUrl ? (
-              <video
-                key={videoUrl}
-                src={videoUrl}
-                controls
-                preload="none"
-                playsInline
-                aria-label={`Video del clip ${orden}`}
-                className="max-h-[60vh] w-auto rounded-lg bg-bg"
-              />
+              <div className="flex flex-col items-start gap-1.5">
+                <video
+                  key={videoUrl}
+                  src={videoUrl}
+                  controls
+                  preload="none"
+                  playsInline
+                  aria-label={`Video del clip ${orden}`}
+                  className="max-h-[70vh] w-auto max-w-full rounded-lg bg-bg"
+                />
+                <a
+                  href={`${videoUrl}${videoUrl.includes("?") ? "&" : "?"}dl=1`}
+                  download
+                  className="inline-flex items-center gap-1.5 rounded-sm text-label text-accent transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  title="Baja este clip solo, sin el zip del proyecto entero"
+                >
+                  <DownloadSimple aria-hidden className="size-3.5" />
+                  Descargar este clip
+                </a>
+              </div>
             ) : (
               <span className="text-label text-fg-dim">
                 {estado.animado ? "Todavía se está generando." : "Sin video todavía."}
@@ -1731,15 +1743,32 @@ function ReviewCard({
             </p>
             {outUrl ? (
               showVideo ? (
-                <video
-                  key={outUrl}
-                  src={outUrl}
-                  controls
-                  preload="none"
-                  playsInline
-                  aria-label={`Resultado del clip ${orden}`}
-                  className="max-h-72 w-auto rounded-lg bg-bg"
-                />
+                <>
+                  {/*
+                    `max-h-[70vh]` y no `max-h-72` (288px): un clip vertical en 288px de
+                    alto queda de 162px de ancho, del tamaño de un sello, y esta es la
+                    pantalla donde hay que decidir si el clip sirve o se regenera.
+                    `max-w-full` para que en un formato horizontal no desborde la tarjeta.
+                  */}
+                  <video
+                    key={outUrl}
+                    src={outUrl}
+                    controls
+                    preload="none"
+                    playsInline
+                    aria-label={`Resultado del clip ${orden}`}
+                    className="max-h-[70vh] w-auto max-w-full rounded-lg bg-bg"
+                  />
+                  <a
+                    href={`${outUrl}${outUrl.includes("?") ? "&" : "?"}dl=1`}
+                    download
+                    className="inline-flex w-fit items-center gap-1.5 rounded-sm text-label text-accent transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    title="Baja este clip solo, sin el zip del proyecto entero"
+                  >
+                    <DownloadSimple aria-hidden className="size-3.5" />
+                    Descargar este clip
+                  </a>
+                </>
               ) : (
                 // El <video> se monta recien al tocar el boton: es el mismo criterio
                 // de la lista, y con varios clips abiertos suma.

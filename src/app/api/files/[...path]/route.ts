@@ -2,6 +2,15 @@
  * GET /api/files/<projectId>/<relPath...>
  * Sirve archivos generados desde ./output/<projectId>/ (imagenes, clips, el video unido,
  * manifest.json). Con guardia anti path-traversal y soporte basico de Range (video).
+ *
+ * `?dl=1` fuerza la descarga en vez de mostrar el archivo en el browser. Sirve para
+ * bajar UNA imagen o UN clip suelto: sin esto, la unica forma era el zip del proyecto
+ * entero, o click derecho y "guardar como" (que en un <img> dentro de un <button> no
+ * siempre aparece).
+ *
+ * `?name=` cambia el nombre con el que se guarda. Por defecto usa el del archivo, que
+ * para los candidatos es feo (`crema__v2.png`), asi que quien linkea puede pasarle uno
+ * legible.
  */
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -52,6 +61,23 @@ export async function GET(
   const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
   const range = req.headers.get("range");
 
+  /*
+    Descarga forzada. El nombre se sanea a mano: va dentro de una cabecera HTTP y una
+    comilla o un salto de linea ahi permite inyectar cabeceras. Se dejan solo caracteres
+    de nombre de archivo y se recorta.
+  */
+  const url = new URL(req.url);
+  const forzarDescarga = url.searchParams.get("dl") === "1";
+  const nombrePedido = url.searchParams.get("name");
+  const nombreLimpio = (nombrePedido || path.basename(abs))
+    .replace(/[^\w.\- ]+/g, "_")
+    .slice(0, 120);
+  // Record<string,string> explicito: con un objeto condicional el spread le da a TS un
+  // tipo union con la clave opcional y deja de encajar en HeadersInit.
+  const disposition: Record<string, string> = forzarDescarga
+    ? { "Content-Disposition": `attachment; filename="${nombreLimpio}"` }
+    : {};
+
   // Soporte de Range (util para seek de video).
   if (range) {
     const m = /bytes=(\d*)-(\d*)/.exec(range);
@@ -82,6 +108,7 @@ export async function GET(
       "Content-Length": String(stat.size),
       "Accept-Ranges": "bytes",
       "Cache-Control": "no-store",
+      ...disposition,
     },
   });
 }

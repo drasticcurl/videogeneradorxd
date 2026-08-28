@@ -70,28 +70,52 @@ export async function GET(
 
     const manifest = buildManifest(project, jobsDb.byProject(project.id));
 
-    // Juntamos los clips existentes en disco (en orden) + el video unido si existe,
-    // sin duplicar si por algun motivo apuntaran al mismo archivo.
+    /*
+      Que meter en el zip. Antes juntaba SOLO videos, y eso dejaba a los proyectos de
+      /imagenes sin ninguna forma de descarga: no tienen clips, asi que el boton
+      contestaba "todavia no hay videos" para siempre aunque hubiera 4 imagenes listas.
+
+      El default es automatico: si el proyecto tiene videos, manda videos (es lo que se
+      espera de un VSL); si no tiene ninguno, manda las imagenes. Con `?que=` se fuerza.
+    */
+    const que = new URL(_req.url).searchParams.get("que") ?? "auto";
     const seen = new Set<string>();
     const absPaths: string[] = [];
 
-    for (const clip of [...manifest.clips].sort((a, b) => a.orden - b.orden)) {
-      if (!clip.file) continue;
-      const abs = absPathFor(project.id, clip.file);
-      if (!fs.existsSync(abs) || seen.has(abs)) continue;
+    const agregar = (rel: string | null | undefined): void => {
+      if (!rel) return;
+      const abs = absPathFor(project.id, rel);
+      if (!fs.existsSync(abs) || seen.has(abs)) return;
       seen.add(abs);
       absPaths.push(abs);
-    }
-    if (manifest.final_video) {
-      const abs = absPathFor(project.id, manifest.final_video);
-      if (fs.existsSync(abs) && !seen.has(abs)) {
-        seen.add(abs);
-        absPaths.push(abs);
+    };
+
+    const hayVideos = manifest.clips.some(
+      (c) => c.file && fs.existsSync(absPathFor(project.id, c.file))
+    );
+    const quiereVideos =
+      que === "videos" || que === "todo" || (que === "auto" && hayVideos);
+    const quiereImagenes =
+      que === "imagenes" || que === "todo" || (que === "auto" && !hayVideos);
+
+    if (quiereVideos) {
+      for (const clip of [...manifest.clips].sort((a, b) => a.orden - b.orden)) {
+        agregar(clip.file);
       }
+      agregar(manifest.final_video);
+    }
+    if (quiereImagenes) {
+      // Solo las APROBADAS: los candidatos sin elegir son borradores y meterlos en el
+      // zip obligaria a adivinar cual era el bueno al abrirlo.
+      for (const img of manifest.images) agregar(img.file);
     }
 
     if (absPaths.length === 0) {
-      return badRequest("Todavia no hay videos generados para descargar.");
+      return badRequest(
+        quiereVideos && !quiereImagenes
+          ? "Todavia no hay videos generados para descargar."
+          : "Todavia no hay nada generado y aprobado para descargar."
+      );
     }
 
     // "-j" junta todo en la raiz del zip (junk paths, sin la carpeta "clips/"

@@ -32,6 +32,7 @@
 
 import {
   ArrowsClockwise,
+  ArrowsOut,
   Check,
   CursorClick,
   DownloadSimple,
@@ -40,6 +41,7 @@ import {
   Sparkle,
   Spinner,
   WarningCircle,
+  X,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -313,6 +315,12 @@ export default function ImagenesBoard({
   }, [calidadesPermitidas, calidad]);
 
   const [projectId, setProjectId] = useState<string | null>(null);
+  /** Formato con el que se genero lo que se esta viendo (sale del manifest). */
+  const [formatoGenerado, setFormatoGenerado] = useState<string | null>(null);
+  /** Imagen abierta en el visor grande, o null. */
+  const [ampliada, setAmpliada] = useState<{ url: string; titulo: string } | null>(
+    null,
+  );
   const [jobs, setJobs] = useState<Job[]>([]);
   const [prompts, setPrompts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -359,12 +367,19 @@ export default function ImagenesBoard({
       if (!res.ok) return;
       const data = (await res.json()) as {
         jobs?: Job[];
-        manifest?: { images?: ManifestImage[] };
+        manifest?: { images?: ManifestImage[]; global?: { formato?: string } };
       };
       setJobs((data.jobs ?? []).filter((j) => j.type === "image"));
       const mapa: Record<string, string> = {};
       for (const img of data.manifest?.images ?? []) mapa[img.id] = img.prompt;
       setPrompts(mapa);
+      /*
+        El formato del proyecto GENERADO, que no es necesariamente el que dice el
+        selector: si ya generaste en 16:9 y despues moviste el selector a 9:16, las
+        miniaturas de lo que ya existe tienen que seguir mostrandose en 16:9.
+      */
+      const fmt = data.manifest?.global?.formato;
+      if (fmt) setFormatoGenerado(fmt);
     } catch {
       // Un fallo de red puntual no tiene que romper la pantalla: el proximo tick
       // reintenta solo.
@@ -697,15 +712,23 @@ export default function ImagenesBoard({
                 </span>
               </CardTitle>
               <CardDescription>
-                Tocá una miniatura para que quede esa variante.
+                Tocá una miniatura para que quede esa variante. Pasá el mouse por
+                encima para verla en grande o bajarla sola.
               </CardDescription>
             </div>
+            {/*
+              `?que=imagenes` explicito. El default de la ruta es automatico y en un
+              proyecto sin clips ya devolveria imagenes, pero decirlo evita que el dia
+              que este proyecto tenga un video el boton de ESTA pantalla empiece a bajar
+              otra cosa.
+            */}
             <a
-              href={`/api/projects/${projectId}/download`}
+              href={`/api/projects/${projectId}/download?que=imagenes`}
               className="inline-flex shrink-0 items-center gap-1.5 rounded-sm text-body text-accent transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              title="Un .zip con las imágenes aprobadas del proyecto"
             >
               <DownloadSimple aria-hidden className="size-4" />
-              Descargar todo (zip)
+              Descargar todas (zip)
             </a>
           </CardHeader>
 
@@ -761,6 +784,7 @@ export default function ImagenesBoard({
                   job={job}
                   projectId={projectId}
                   prompt={prompts[job.refId] ?? ""}
+                  formato={formatoGenerado ?? formato}
                   enEdicion={editando[job.refId]}
                   ocupado={Boolean(ocupado[job.id])}
                   onEditar={(valor) =>
@@ -768,12 +792,88 @@ export default function ImagenesBoard({
                   }
                   onElegir={(index) => void elegir(job, index)}
                   onVariar={() => void variar(job)}
+                  onAmpliar={(url, titulo) => setAmpliada({ url, titulo })}
                 />
               ))}
             </div>
           )}
         </section>
       )}
+
+      {ampliada && (
+        <Visor
+          url={ampliada.url}
+          titulo={ampliada.titulo}
+          onCerrar={() => setAmpliada(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Visor a pantalla completa. La miniatura de la grilla es chica por definicion, y para
+ * decidir entre dos variantes hay que ver la imagen entera y grande.
+ *
+ * `object-contain` con el alto y el ancho acotados al viewport: la imagen se ve COMPLETA
+ * en cualquier formato, de 21:9 a 9:16, sin recortes y sin desbordar la pantalla.
+ */
+function Visor({
+  url,
+  titulo,
+  onCerrar,
+}: {
+  url: string;
+  titulo: string;
+  onCerrar: () => void;
+}) {
+  // Escape para cerrar: es lo que uno aprieta sin pensar cuando algo se abre encima.
+  useEffect(() => {
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCerrar();
+    };
+    window.addEventListener("keydown", alTeclear);
+    return () => window.removeEventListener("keydown", alTeclear);
+  }, [onCerrar]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Vista ampliada de ${titulo}`}
+      onClick={onCerrar}
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-bg/95 p-4"
+    >
+      <div className="flex w-full max-w-5xl items-center justify-between gap-3">
+        <span className="code truncate text-label text-fg-dim">{titulo}</span>
+        <span className="flex shrink-0 gap-2">
+          <a
+            href={`${url}&dl=1`}
+            download
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1.5 text-label text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <DownloadSimple aria-hidden className="size-3.5" />
+            Descargar
+          </a>
+          <button
+            type="button"
+            onClick={onCerrar}
+            aria-label="Cerrar la vista ampliada"
+            className="inline-flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1.5 text-label text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <X aria-hidden className="size-3.5" />
+            Cerrar (Esc)
+          </button>
+        </span>
+      </div>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={titulo}
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[85vh] max-w-full rounded-lg object-contain"
+      />
     </div>
   );
 }
@@ -791,20 +891,25 @@ function TarjetaImagen({
   job,
   projectId,
   prompt,
+  formato,
   enEdicion,
   ocupado,
   onEditar,
   onElegir,
   onVariar,
+  onAmpliar,
 }: {
   job: Job;
   projectId: string;
   prompt: string;
+  /** Formato del proyecto ("16:9", "4:5", ...). Define la proporcion de la miniatura. */
+  formato: string;
   enEdicion: string | undefined;
   ocupado: boolean;
   onEditar: (valor: string) => void;
   onElegir: (index: number) => void;
   onVariar: () => void;
+  onAmpliar: (url: string, titulo: string) => void;
 }) {
   // El estado y el label salen de `estadoDeJob` y de ningun switch local (§6.1 del
   // plan). Los derivados se leen del TONO, no del string de status, asi que si mañana
@@ -812,6 +917,14 @@ function TarjetaImagen({
   const estado = estadoDeJob(job.status);
   const fallo = estado.tone === "danger";
   const trabajando = ocupado || EN_CURSO.has(job.status);
+
+  /*
+    "16:9" -> "16 / 9", que es lo que entiende la propiedad CSS aspect-ratio. Va por
+    `style` y no por una clase de Tailwind porque el valor es dinamico: Tailwind
+    compila las clases que encuentra en el codigo y `aspect-[${x}]` armado en runtime
+    no existe en el CSS final.
+  */
+  const proporcionCss = formato.replace(":", " / ");
 
   const candidatas = job.candidates.length;
   // Menos candidatas que las pedidas es LEGITIMO: se resalta el conteo, pero el tono
@@ -848,7 +961,8 @@ function TarjetaImagen({
                   className={cn(
                     // `border-2` en los dos estados: si solo la elegida tuviera borde,
                     // la miniatura cambiaria de tamaño al elegirla y saltaria la fila.
-                    "relative overflow-hidden rounded-sm border-2 transition-colors",
+                    // `group` para que los botones de ver/bajar aparezcan al pasar el mouse.
+                    "group relative overflow-hidden rounded-sm border-2 transition-colors",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
                     "disabled:cursor-not-allowed disabled:opacity-60",
                     elegida
@@ -856,6 +970,13 @@ function TarjetaImagen({
                       : "border-divider hover:border-border",
                   )}
                 >
+                  {/*
+                    `object-contain` y la proporcion REAL del proyecto, no un 9/16 fijo
+                    con object-cover como estaba: generando en 16:9 la miniatura
+                    recortaba la imagen a un rectangulo vertical y se veia cortada,
+                    justo lo que hay que evitar en una pantalla que existe para elegir
+                    entre variantes.
+                  */}
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     key={url}
@@ -863,7 +984,8 @@ function TarjetaImagen({
                     alt={`Variante ${c.index} de ${job.refId}`}
                     loading="lazy"
                     decoding="async"
-                    className="aspect-[9/16] w-full object-cover"
+                    style={{ aspectRatio: proporcionCss }}
+                    className="w-full bg-bg object-contain"
                   />
                   <span
                     className={cn(
@@ -874,12 +996,57 @@ function TarjetaImagen({
                   >
                     {elegida && <Check aria-hidden className="size-3" />}v{c.index}
                   </span>
+
+                  {/*
+                    Ver en grande y bajar, arriba de cada variante.
+
+                    Son <span role="button"> y no <button>, y el click hace
+                    stopPropagation: esto vive DENTRO del boton que elige la variante, y
+                    un <button> anidado en otro <button> es HTML invalido (el browser lo
+                    desanida y el layout se rompe). Con role + onKeyDown quedan igual de
+                    accesibles por teclado.
+                  */}
+                  <span className="absolute right-1 top-1 flex gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Ver la variante ${c.index} en grande`}
+                      title="Ver en grande"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAmpliar(url, `${job.refId} · v${c.index}`);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onAmpliar(url, `${job.refId} · v${c.index}`);
+                        }
+                      }}
+                      className="inline-flex size-6 cursor-pointer items-center justify-center rounded-sm bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      <ArrowsOut aria-hidden className="size-3.5" />
+                    </span>
+                    <a
+                      href={`${url}&dl=1&name=${encodeURIComponent(`${job.refId}_v${c.index}.png`)}`}
+                      download
+                      aria-label={`Descargar la variante ${c.index}`}
+                      title="Descargar esta imagen"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex size-6 items-center justify-center rounded-sm bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      <DownloadSimple aria-hidden className="size-3.5" />
+                    </a>
+                  </span>
                 </button>
               );
             })}
           </div>
         ) : (
-          <div className="flex aspect-[9/16] max-h-56 items-center justify-center">
+          <div
+            style={{ aspectRatio: proporcionCss }}
+            className="flex max-h-56 items-center justify-center"
+          >
             <span
               className={cn(
                 "flex flex-col items-center gap-1.5 px-2 text-center text-label",
