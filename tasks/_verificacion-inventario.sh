@@ -86,26 +86,31 @@ for f in \
 do chequear "$f"; done
 
 echo
-echo "═══ 5. Lo que el plan afirma que NO existe todavia ═══"
-for f in src/components/ui src/lib/ui-tokens.ts src/lib/cn.ts; do
-  if [ -e "$f" ]; then
-    printf "  PROBLEMA: %s ya existe y el plan dice que T01 lo crea\n" "$f"
-    fallos=$((fallos + 1))
-  else
-    printf "  OK    %s no existe (lo crea T01)\n" "$f"
-  fi
+echo "═══ 5. El sistema de diseño que crea T01 ═══"
+# Hasta que T01 corrio, esta seccion verificaba que estos tres NO existieran, para
+# atrapar el caso de un agente duplicando algo ya hecho. T01 los creo, asi que ahora
+# verifica lo contrario. Si alguno falta, las 11 tasks siguientes no compilan: todas
+# importan de aca.
+for f in src/components/ui/index.ts src/lib/ui-tokens.ts src/lib/cn.ts; do
+  chequear "$f"
 done
+printf "  primitivas en ui/: %s (esperado 9 archivos + index)\n" \
+  "$(find src/components/ui -name '*.tsx' 2>/dev/null | wc -l | tr -d ' ')"
 
 echo
-echo "═══ 6. Conteos que el plan cita ═══"
+echo "═══ 6. Conteos, informativos ═══"
+# Los numeros de referencia son PRE-T01, cuando se escribio el plan. Suben a medida
+# que el rediseño avanza (T01 solo agrego 11 archivos), asi que no son un criterio de
+# aprobacion: estan para ver la magnitud. Los dos ultimos tienen que BAJAR a cero
+# cuando termine T12.
 tsx_total=$(find src/app src/components -name "*.tsx" | wc -l | tr -d ' ')
 lineas=$(find src/app src/components -name "*.tsx" -exec cat {} + | wc -l | tr -d ' ')
 botones=$(grep -ro "<button" src/ | wc -l | tr -d ' ')
 bg_accent=$(grep -ro "bg-accent" src/ | wc -l | tr -d ' ')
-printf "  archivos .tsx: %s   (el plan dice 23)\n" "$tsx_total"
-printf "  lineas de tsx: %s   (el plan dice ~6545)\n" "$lineas"
-printf "  <button a mano: %s  (el plan dice 91)\n" "$botones"
-printf "  usos de bg-accent: %s  (el plan dice 25, y es lo que rompe el CLI de shadcn)\n" "$bg_accent"
+printf "  archivos .tsx:     %s   (pre-T01: 24)\n" "$tsx_total"
+printf "  lineas de tsx:     %s   (pre-T01: 6545)\n" "$lineas"
+printf "  <button a mano:    %s   (pre-T01: 91. T12 espera ~0 fuera de ui/)\n" "$botones"
+printf "  usos de bg-accent: %s   (pre-T01: 25. T12 espera 0: es un alias viejo)\n" "$bg_accent"
 
 echo
 if [ "$fallos" -eq 0 ]; then

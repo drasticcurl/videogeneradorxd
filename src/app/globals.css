@@ -1,3 +1,6 @@
+/* El orden importa: `utilities` va ULTIMO para que una utilidad pueda pisar a un
+   componente. Invertido, las clases de utilidad pierden contra las de componente y
+   el override deja de funcionar sin ningun error visible. */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -6,20 +9,56 @@
   color-scheme: dark;
 }
 
-html,
-body {
-  background-color: #0b1020;
-  color: #e5e7eb;
+html {
+  scroll-behavior: smooth;
 }
 
-/* Editor JSON monoespaciado */
+html,
+body {
+  background-color: #09090b;
+  color: #fafafa;
+}
+
+/* Editor JSON monoespaciado.
+   NO borrar ni renombrar: `JsonEditor` y varios <textarea> la referencian por
+   nombre, incluidas pantallas que todavia no se migraron. */
 .code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/* Numeros de ancho fijo.
+   Se aplica a TODO dato numerico: contadores de variantes, montos, timestamps,
+   duraciones. Sin esto los numeros cambian de ancho cuando el polling los
+   actualiza y la fila entera salta cada 3 segundos. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
 }
 
 /* Scrollbar discreta */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  scrollbar-color: #3f3f46 transparent;
+}
+
+/* El anillo de foco NUNCA se saca sin reemplazo: son dos personas que trabajan con
+   teclado. Se usa focus-visible para que no aparezca al clickear con el mouse. */
+:focus-visible {
+  outline: 2px solid #fbbf24;
+  outline-offset: 2px;
+}
+
+/* Respetar la preferencia del sistema. Lo unico que se anima en la app es el pulso
+   del estado "generando", y con esto se apaga solo, sin que cada pantalla tenga que
+   preguntarlo. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

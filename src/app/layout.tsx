@@ -1,17 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { cookies } from "next/headers";
+import { GeistMono } from "geist/font/mono";
+import { GeistSans } from "geist/font/sans";
 import "./globals.css";
 
 import { currentUser } from "@/lib/auth";
+import { cn } from "@/lib/cn";
 
+import NavLinks from "./NavLinks";
 import SessionBar from "./SessionBar";
 
 export const metadata: Metadata = {
   title: "AUGC Pipeline",
   description:
     "Genera anuncios UGC (imagenes + videos) en cadena con Vertex AI. Todo guardado localmente.",
-  // La app corre en un subdominio publico y es interna: no se indexa.
+  // Herramienta interna en un subdominio publico: no se indexa.
   robots: { index: false, follow: false },
 };
 
@@ -20,49 +24,68 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // Se lee en el server: la cookie es httpOnly y el cliente no la ve. Esto hace
-  // dinamico el layout, que en esta app no cambia nada (todas las rutas ya son
-  // `force-dynamic`: es una herramienta interna, no hay nada prerenderizable).
+  // Se lee en el SERVER: la cookie es httpOnly y el cliente no la ve, que es lo que
+  // impide que un XSS se la lleve. Por eso el layout no puede ser "use client" y los
+  // links activos viven en <NavLinks />, que es cliente y no toca la sesion.
   const usuario = currentUser(cookies());
 
   return (
-    <html lang="es">
-      <body className="min-h-screen">
-        <header className="border-b border-slate-800 bg-panel/60 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-            <Link href="/" className="flex items-center gap-2 font-semibold">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-accent text-sm font-bold text-white">
+    <html
+      lang="es"
+      className={cn(GeistSans.variable, GeistMono.variable)}
+      suppressHydrationWarning
+    >
+      <body className="min-h-screen bg-bg font-sans text-body text-fg antialiased">
+        {/* Salta el nav. Son dos personas que trabajan con teclado y hoy hay que
+            tabular los 4 links en cada pantalla para llegar al contenido. */}
+        <a
+          href="#contenido"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-md focus:bg-surface focus:px-3 focus:py-2 focus:text-body focus:text-fg"
+        >
+          Saltar al contenido
+        </a>
+
+        <header className="border-b border-divider bg-bg">
+          <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-6 px-4">
+            <Link
+              href="/"
+              className="flex shrink-0 items-center gap-2 rounded-md font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <span className="inline-flex size-6 items-center justify-center rounded-sm bg-accent text-label font-bold text-on-accent">
                 A
               </span>
-              <span>AUGC Pipeline</span>
+              <span className="hidden sm:inline">AUGC</span>
             </Link>
-            {/* Sin sesion el header queda solo con la marca: los links no llevan
-                a ningun lado porque el middleware los redirige al login. */}
+
+            {/* Sin sesion el header queda solo con la marca: los links no llevan a
+                ningun lado porque el middleware los redirige al login. */}
             {usuario && (
-              <nav className="flex items-center gap-4 text-sm text-slate-300">
-                <Link href="/" className="hover:text-white">
-                  Nuevo proyecto
-                </Link>
-                <Link href="/batch" className="hover:text-white">
-                  Tablero
-                </Link>
-                <Link href="/imagenes" className="hover:text-white">
-                  Imágenes
-                </Link>
-                <a
-                  href="https://cloud.google.com/vertex-ai/generative-ai/docs"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="hover:text-white"
-                >
-                  Docs Vertex AI
-                </a>
-                <SessionBar usuario={usuario} />
+              <nav
+                aria-label="Principal"
+                className="flex min-w-0 flex-1 items-center gap-1"
+              >
+                <NavLinks />
+                <span className="ml-auto flex shrink-0 items-center gap-3">
+                  <a
+                    href="https://cloud.google.com/vertex-ai/generative-ai/docs"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hidden rounded-md px-2.5 py-1.5 text-body text-fg-dim transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent lg:inline"
+                  >
+                    Docs Vertex
+                  </a>
+                  <SessionBar usuario={usuario} />
+                </span>
               </nav>
             )}
           </div>
         </header>
-        <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+
+        {/* 1400px y no max-w-6xl (1152): esta app muestra grillas de medios y en un
+            monitor ancho el limite viejo desperdiciaba media pantalla. */}
+        <main id="contenido" className="mx-auto max-w-[1400px] px-4 py-6">
+          {children}
+        </main>
       </body>
     </html>
   );

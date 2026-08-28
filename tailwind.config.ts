@@ -1,5 +1,16 @@
 import type { Config } from "tailwindcss";
 
+/**
+ * Tokens de diseño. FUENTE DE VERDAD UNICA de los colores.
+ *
+ * Ninguna pantalla escribe un color literal: ni `#hex`, ni `zinc-700`, ni
+ * `slate-800`. Solo estos nombres. Es lo que evita el problema que tenia la app
+ * antes, con cinco grises distintos repartidos en cinco pantallas y ningun lugar
+ * donde cambiarlos.
+ *
+ * Los valores estan verificados en `tasks/_verificacion-contraste.mjs`: 15 pares,
+ * WCAG AA, 0 fallos. Si hace falta un par nuevo, se agrega ahi PRIMERO y se corre.
+ */
 const config: Config = {
   content: [
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
@@ -8,13 +19,80 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#0b1020",
-        panel: "#11182b",
-        accent: "#6366f1",
+        // ─── Superficies ────────────────────────────────────────────────────
+        bg: "#09090b", // zinc-950, fondo de la app
+        surface: "#18181b", // zinc-900, tarjetas y paneles
+        "surface-hi": "#27272a", // zinc-800, hover e inputs
+
+        // ─── Bordes: SON DOS, y no es un descuido ───────────────────────────
+        // WCAG 1.4.11 exige 3:1 para el borde de un componente INTERACTIVO.
+        // Verificado: zinc-600 da 2.57:1, zinc-700 1.91:1 y zinc-800 1.34:1, o sea
+        // que ninguno sirve. El minimo real es zinc-500.
+        // Pero un separador decorativo NO es un componente y no tiene que pasar
+        // nada, y usar zinc-500 para separar grita. De ahi los dos tokens.
+        border: "#71717a", // zinc-500, inputs y todo lo enfocable
+        divider: "#27272a", // zinc-800, separar bloques
+
+        // ─── Texto ──────────────────────────────────────────────────────────
+        fg: "#fafafa", // zinc-50
+        // El texto mas apagado que existe. NO bajar a zinc-500: da 4.12:1 y no
+        // pasa AA. Verificado.
+        "fg-dim": "#a1a1aa", // zinc-400
+
+        // ─── Acento, uno solo ───────────────────────────────────────────────
+        // Ambar y no indigo por dos razones. La medible: el indigo-500 que usaba
+        // la app da 4.45:1 como texto y 4.28:1 con texto claro encima, o sea que
+        // NO pasa AA en ningun sentido. La otra: el violeta/indigo es el tell
+        // visual mas reconocible de interfaz generada.
+        // En esta app el acento significa "esto espera algo de vos", y por eso el
+        // estado `awaiting_approval` usa el mismo color: es coherente, no una
+        // colision.
+        accent: "#fbbf24", // amber-400
+        "on-accent": "#09090b", // texto sobre el acento
+
+        // ─── Estados: escala FUNCIONAL, aparte del acento ───────────────────
+        ok: "#34d399", // emerald-400, terminado
+        danger: "#fb7185", // rose-400, fallo
+        info: "#38bdf8", // sky-400, la maquina esta trabajando
+
+        // ─── ALIAS DE TRANSICION — LOS BORRA T12, NO VOS ────────────────────
+        // Unico lugar del modulo con dos dueños (T01 los crea, T12 los borra). Ver
+        // §8 del plan. Mientras las 8 pantallas se migran de a una, las que faltan
+        // siguen usando bg-panel / bg-ink / bg-accent: si desaparecen antes de que
+        // termine T11, la app ENTERA queda sin estilos, y se esta usando en
+        // produccion mientras esto se hace.
+        // `accent` ya apunta al ambar, asi que las pantallas sin migrar mejoran
+        // gratis y de paso se ve el acento nuevo en contexto real desde el dia 1.
+        ink: "#09090b", // era #0b1020 (navy)
+        panel: "#18181b", // era #11182b
+      },
+      fontFamily: {
+        // Las define `layout.tsx` con next/font. El fallback importa: si la
+        // variable no cargara, cae en la del sistema y no en Times.
+        sans: ["var(--font-geist-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["var(--font-geist-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
+      },
+      fontSize: {
+        // Escala cerrada, 4 niveles. No hay nada por debajo de 12px: la app tenia
+        // 194 usos de text-xs o menor y por eso no habia jerarquia, todo gritaba
+        // bajito.
+        label: ["0.75rem", { lineHeight: "1rem", letterSpacing: "0.02em" }], // 12
+        body: ["0.875rem", { lineHeight: "1.375rem" }], // 14
+        title: ["1rem", { lineHeight: "1.5rem" }], // 16
+        display: ["1.5rem", { lineHeight: "2rem", letterSpacing: "-0.01em" }], // 24
+      },
+      borderRadius: {
+        // Tres radios y nada mas. `rounded-full` solo para el punto de estado.
+        sm: "4px", // inputs, badges
+        md: "6px", // botones
+        lg: "10px", // tarjetas, paneles
+      },
+      transitionDuration: {
+        DEFAULT: "150ms",
       },
     },
   },
-  plugins: [],
+  plugins: [require("tailwindcss-animate")],
 };
 
 export default config;
