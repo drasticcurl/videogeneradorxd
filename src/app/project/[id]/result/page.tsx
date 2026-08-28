@@ -25,7 +25,7 @@
  * porque una descarga con Content-Disposition la maneja el navegador y no fetch).
  *
  * La condicion que habilita el zip es la misma de antes, y es a proposito la MISMA
- * que usa el server para armarlo (algun clip con archivo, o el final.mp4). Si
+ * que usa el server para armarlo (algun clip con archivo, o el video unido). Si
  * divergen, el boton se habilita y la descarga contesta 400.
  *
  * Las URLs de los archivos se copiaron tal cual, SIN `?v=`: la ruta que los sirve
@@ -197,11 +197,20 @@ export default function ResultPage({ params }: { params: { id: string } }) {
       });
       const data = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
+        finalPath?: string;
         reason?: string;
         error?: string;
       };
       if (data.ok) {
-        setStitch({ ok: true, msg: "final.mp4 listo. Ya entra en el zip." });
+        /*
+          El nombre sale de la respuesta y no esta escrito aca: el archivo se llama
+          como el proyecto, asi que hardcodear "final.mp4" mostraria un nombre que no
+          existe en el disco.
+        */
+        setStitch({
+          ok: true,
+          msg: `${data.finalPath ?? "El video unido"} listo. Ya entra en el zip.`,
+        });
         await loadProject(projectId);
       } else {
         setStitch({ ok: false, msg: data.reason ?? data.error ?? "No se pudo unir." });
@@ -230,7 +239,7 @@ export default function ResultPage({ params }: { params: { id: string } }) {
   const conArchivo = clips.filter((c) => c.file).length;
   const segundosTotales = clips.reduce((t, c) => t + (c.duracion_seg || 0), 0);
 
-  // Hay algo para descargar si al menos un clip tiene archivo (o esta el final.mp4).
+  // Hay algo para descargar si al menos un clip tiene archivo (o esta el video unido).
   // Misma condicion que usa el server para armar el zip: no inventar una propia.
   const hasDownloadableVideos = Boolean(
     manifest?.clips.some((c) => c.file) || manifest?.final_video,
@@ -345,7 +354,7 @@ export default function ResultPage({ params }: { params: { id: string } }) {
                 }}
                 title={
                   hasDownloadableVideos
-                    ? "Un .zip con todos los clips generados y el final.mp4 si existe"
+                    ? "Un .zip con todos los clips generados y el video unido si existe"
                     : "Todavía no hay videos generados"
                 }
               >
@@ -360,12 +369,12 @@ export default function ResultPage({ params }: { params: { id: string } }) {
               disabled={!config?.ffmpeg}
               title={
                 config?.ffmpeg
-                  ? "Une los clips en orden en un único final.mp4"
+                  ? "Une los clips en orden en un solo mp4 con el nombre del proyecto. Tarda ~1s por segundo de video."
                   : "ffmpeg no detectado en este server"
               }
               icon={<Stack aria-hidden className="size-4" />}
             >
-              Unir en final.mp4
+              Unir en un video
             </Button>
           </div>
         </CardHeader>

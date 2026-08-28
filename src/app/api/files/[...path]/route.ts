@@ -1,6 +1,6 @@
 /**
  * GET /api/files/<projectId>/<relPath...>
- * Sirve archivos generados desde ./output/<projectId>/ (imagenes, clips, final.mp4,
+ * Sirve archivos generados desde ./output/<projectId>/ (imagenes, clips, el video unido,
  * manifest.json). Con guardia anti path-traversal y soporte basico de Range (video).
  */
 import fs from "node:fs";

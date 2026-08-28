@@ -178,6 +178,6 @@ export interface Manifest {
   references: ManifestReference[];
   images: ManifestImage[];
   clips: ManifestClip[];
-  final_video: string | null; // "final.mp4" si se hizo stitch
+  final_video: string | null; // "<nombre-del-proyecto>.mp4" si se hizo stitch
   warnings: string[];
 }

@@ -1,7 +1,7 @@
 /**
  * GET /api/projects/:id/download
  *
- * Arma un .zip con todos los clips de video generados/subidos (+ final.mp4 si
+ * Arma un .zip con todos los clips de video generados/subidos (+ el video unido si
  * existe) y lo devuelve como descarga (Content-Disposition: attachment). El
  * navegador la guarda en la carpeta de Descargas configurada (por defecto
  * ~/Downloads en macOS).
@@ -70,7 +70,7 @@ export async function GET(
 
     const manifest = buildManifest(project, jobsDb.byProject(project.id));
 
-    // Juntamos los clips existentes en disco (en orden) + final.mp4 si existe,
+    // Juntamos los clips existentes en disco (en orden) + el video unido si existe,
     // sin duplicar si por algun motivo apuntaran al mismo archivo.
     const seen = new Set<string>();
     const absPaths: string[] = [];

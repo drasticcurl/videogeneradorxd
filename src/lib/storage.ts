@@ -8,7 +8,7 @@
  *     clips/NN_<clip>.mp4
  *     manifest.json
  *     pipeline.log
- *     final.mp4                          (opcional, si se hace stitch con ffmpeg)
+ *     <nombre-del-proyecto>.mp4          (opcional, si se hace stitch con ffmpeg)
  *
  * NADA se sube a servicios externos.
  */
@@ -17,6 +17,29 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config";
 import type { JobRecord, Manifest, ProjectRecord } from "./types";
+
+/**
+ * Como se llamaba el video unido antes: un `final.mp4` igual en todos los proyectos.
+ * Se sigue leyendo para no perder de vista los que ya estaban unidos.
+ */
+export const LEGACY_FINAL_VIDEO = "final.mp4";
+
+/**
+ * Nombre del video unido: `<nombre del proyecto>.mp4`.
+ *
+ * Es el archivo que el usuario baja y archiva, asi que el nombre tiene que decir de
+ * que es. Con `final.mp4` cinco proyectos distintos bajaban cinco archivos con el
+ * mismo nombre y el navegador los guardaba como final.mp4, final-1.mp4, final-2.mp4.
+ *
+ * No choca con nada: los clips viven en `clips/`, las imagenes en `images/` y este
+ * queda en la raiz de la carpeta del proyecto.
+ */
+export function finalVideoRelPath(project: {
+  id: string;
+  name: string;
+}): string {
+  return `${slugify(project.name || project.id)}.mp4`;
+}
 
 export function slugify(input: string): string {
   return (
@@ -126,7 +149,7 @@ export function absPathFor(projectId: string, relPath: string): string {
 
 /**
  * Borra ENTERA la carpeta del proyecto en disco: output/<project_id>/
- * (imagenes, candidatos, clips, referencias, manifest.json, pipeline.log, final.mp4).
+ * (imagenes, candidatos, clips, referencias, manifest.json, pipeline.log, el video unido).
  *
  * Es destructivo e irreversible, asi que se valida que el path resultante quede
  * DENTRO de config.storage.outputDir y que el id parezca un id de proyecto
@@ -245,8 +268,15 @@ export function buildManifest(
       };
     });
 
-  const finalRel = "final.mp4";
+  /*
+    El video unido se llama <nombre del proyecto>.mp4. Se busca TAMBIEN el nombre
+    viejo, `final.mp4`: los proyectos que se unieron antes de este cambio lo tienen
+    asi en disco, y si solo mirara el nombre nuevo el archivo desapareceria de la
+    pantalla de resultado y del zip, con el video igual de presente en el disco.
+  */
+  const finalRel = finalVideoRelPath(project);
   const finalExists = existsRel(project.id, finalRel);
+  const legacyExists = !finalExists && existsRel(project.id, LEGACY_FINAL_VIDEO);
 
   return {
     project_id: project.id,
@@ -259,7 +289,7 @@ export function buildManifest(
     references,
     images,
     clips,
-    final_video: finalExists ? finalRel : null,
+    final_video: finalExists ? finalRel : legacyExists ? LEGACY_FINAL_VIDEO : null,
     warnings: project.plan.warnings ?? [],
   };
 }

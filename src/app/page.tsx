@@ -213,7 +213,7 @@ export default function HomePage() {
 
   /**
    * Borra un proyecto: registro en db.json + jobs + logs + la carpeta
-   * output/<id>/ ENTERA (imagenes, clips, referencias, final.mp4).
+   * output/<id>/ ENTERA (imagenes, clips, referencias, el video unido).
    * Es irreversible, y por eso pasa por el dialogo de confirmacion, que muestra
    * cuantos archivos se pierden.
    */

@@ -1,6 +1,6 @@
 /**
  * POST /api/projects/:id/stitch
- * Une los clips en orden en un unico final.mp4 (paso OPCIONAL, requiere ffmpeg).
+ * Une los clips en orden en un unico <nombre-del-proyecto>.mp4 (OPCIONAL, requiere ffmpeg).
  */
 import { jobsDb, projectsDb } from "@/lib/db";
 import { stitchProject } from "@/lib/ffmpeg";

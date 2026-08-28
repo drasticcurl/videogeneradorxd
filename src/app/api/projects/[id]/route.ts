@@ -94,7 +94,7 @@ export async function PUT(
  * Borra el proyecto por completo:
  *  - lo saca del estado en memoria de la cola (no se reencola nada),
  *  - borra el registro + sus jobs + sus logs de data/db.json,
- *  - borra la carpeta output/<id>/ ENTERA (imagenes, clips, referencias, final.mp4).
+ *  - borra la carpeta output/<id>/ ENTERA (imagenes, clips, referencias, video unido).
  *
  * Con ?keepFiles=1 se conserva la carpeta en disco (solo limpia la DB).
  */

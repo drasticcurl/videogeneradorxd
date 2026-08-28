@@ -1,21 +1,39 @@
 /**
- * Stitch OPCIONAL con ffmpeg: une los clips en orden en un unico final.mp4 dentro
- * de la carpeta del proyecto. Si ffmpeg no esta instalado, se salta este paso.
+ * Stitch OPCIONAL con ffmpeg: une los clips en orden en un unico mp4 dentro de la
+ * carpeta del proyecto, llamado `<nombre del proyecto>.mp4`. Si ffmpeg no esta
+ * instalado, se salta este paso.
  *
  * Normalizamos cada entrada (escala + pad al formato 9:16) y concatenamos VIDEO + AUDIO.
  * Para que la concatenacion no falle si algun clip no tiene pista de audio (b-roll mudo,
  * placeholder, etc.), a esos clips les agregamos una pista de SILENCIO de su misma duracion.
- * Asi el final.mp4 conserva el audio de los clips que lo tienen.
+ * Asi el video unido conserva el audio de los clips que lo tienen.
+ *
+ * ─── COSTO ───────────────────────────────────────────────────────────────────
+ *
+ * Medido en la VPS (4 cores EPYC): con `-preset slow` tarda ~1 segundo de reloj por
+ * cada segundo de video de salida. 8 clips de 8s = 64s de video -> 61s de encodeo,
+ * saturando los 4 cores (load 6.4). Los funnels que comparten la maquina NO se vieron
+ * afectados: p50 de 5-6ms antes y durante.
+ *
+ * Lo que SI importa: esto es `spawnSync`, o sea que bloquea el event loop de este
+ * proceso mientras encodea. Un VSL de 95 clips son ~13 minutos con la app entera
+ * congelada, y el request se va a comer el timeout del proxy. Para esos casos hay que
+ * pasarlo a async con estado en la DB, como los jobs de la cola.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { projectsDb, jobsDb } from "./db";
-import { buildManifest, absPathFor, projectDir } from "./storage";
+import {
+  buildManifest,
+  absPathFor,
+  finalVideoRelPath,
+  projectDir,
+} from "./storage";
 import { hasFfmpeg } from "./providers/placeholder";
 
 export interface StitchResult {
   ok: boolean;
-  finalPath?: string; // relativo: "final.mp4"
+  finalPath?: string; // relativo: "<nombre del proyecto>.mp4"
   skipped?: boolean;
   reason?: string;
 }
@@ -23,7 +41,7 @@ export interface StitchResult {
 /**
  * Dimensiones del lienzo de salida 9:16 segun la resolucion objetivo.
  * IMPORTANTE: usamos resolucion REAL de video (no los placeholders de 360x640),
- * para que el final.mp4 NO pierda calidad al unir clips 720p/1080p.
+ * para que el video unido NO pierda calidad al unir clips 720p/1080p.
  */
 function canvasForResolution(resolution?: string): { w: number; h: number } {
   switch ((resolution ?? "720p").toLowerCase()) {
@@ -97,7 +115,7 @@ export function stitchProject(projectId: string): StitchResult {
       ok: false,
       skipped: true,
       reason:
-        "ffmpeg no esta instalado. Instalalo para unir los clips en final.mp4 (paso opcional).",
+        "ffmpeg no esta instalado. Instalalo para unir los clips en un solo video (paso opcional).",
     };
   }
 
@@ -171,7 +189,7 @@ export function stitchProject(projectId: string): StitchResult {
     filters.join(";") +
     `;${concatPairs}concat=n=${clipMeta.length}:v=1:a=1[outv][outa]`;
 
-  const finalRel = "final.mp4";
+  const finalRel = finalVideoRelPath(project);
   const finalAbs = absPathFor(projectId, finalRel);
 
   const args = [
