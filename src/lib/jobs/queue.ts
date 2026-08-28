@@ -494,6 +494,26 @@ function finalizeProjects(): void {
     );
     if (generating || runnablePending) continue; // sigue trabajando
 
+    /**
+     * Reintento con backoff YA PROGRAMADO (429 o red): el `setTimeout(pump)` que lo
+     * va a levantar solo encuentra el job si el proyecto sigue ACTIVO. Si se
+     * desactiva, el job queda colgado en "pending" para siempre.
+     *
+     * Esto tiene que evaluarse ANTES de la rama de `awaiting_approval`, porque esa
+     * rama hace `activeProjects.delete()` y `continue`, y se saltea el chequeo de
+     * pendientes que hay mas abajo (que ya documentaba este caso).
+     *
+     * El bug se veia asi, con auto-aprobacion apagada: de dos imagenes con 2
+     * variantes, una terminaba y quedaba en awaiting_approval, la otra se comia un
+     * 429 en su segunda variante y programaba el reintento a 45s. Como ya no habia
+     * nada generando, finalizeProjects entraba por `awaiting`, desactivaba el
+     * proyecto y esa segunda imagen se quedaba en 1/2 sin retomar NUNCA. La primera
+     * si se recuperaba, pero solo porque la otra la mantenia viva mientras generaba.
+     */
+    const conReintentoProgramado = jobs.some(
+      (j) => j.status === "pending" && (state.retryAt.get(j.id) ?? 0) > Date.now()
+    );
+
     const awaiting = jobs.some((j) => j.status === "awaiting_approval");
     if (awaiting) {
       projectsDb.update(projectId, { status: "review" });
@@ -503,14 +523,19 @@ function finalizeProjects(): void {
       const awaitingCount = jobs.filter(
         (j) => j.status === "awaiting_approval"
       ).length;
-      if (morePending && config.pipeline.approvalBatchSize > 0) {
+      if (morePending && config.pipeline.approvalBatchSize > 0 && !conReintentoProgramado) {
         logEvent(
           projectId,
           "info",
           `Lote de ${awaitingCount} listo. Aprobalos para seguir generando el resto (de a ${config.pipeline.approvalBatchSize}).`
         );
       }
-      state.activeProjects.delete(projectId); // se re-activa al aprobar/regenerar
+      // Solo se desactiva si NO hay un reintento esperando. Si hay, el proyecto
+      // queda activo aunque haya jobs esperando aprobacion: el usuario puede
+      // aprobar mientras el reintento sigue su curso en paralelo.
+      if (!conReintentoProgramado) {
+        state.activeProjects.delete(projectId); // se re-activa al aprobar/regenerar
+      }
       void refreshManifest(projectId);
       continue;
     }
