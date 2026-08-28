@@ -916,3 +916,200 @@ código**. Si bloquea, la task se detiene y no sigue con suposiciones.
   exige (el texto que cambia mueve el ancho del botón).
 - **Bloquea:** no
 - **Resolución:** _pendiente_
+
+> **Nota de numeración.** P-17 y P-18 las agregó **T07**. T08 corría en paralelo en la misma ola, así
+> que si aparece otra `P-17` es una colisión de numeración y no un duplicado de contenido.
+
+### P-17 (T07) — `ClipTimeline` deja de servir como vista de conjunto a partir de ~41 clips, y con los 95 del VSL real necesita 2,3 pantallas de scroll a ciegas
+- **Task:** T07. La decisión de rediseñarla o no **no la toma T07**: la task decía "migralo a tokens
+  sin cambiar la estructura, y si con 95 clips deja de ser usable, anotalo con el número".
+- **Sección del plan:** §0 (no se construye: cambios de estructura no pedidos), D13, y §4 de `T07-batch.md`
+- **Archivo:** `src/app/batch/ClipTimeline.tsx`
+- **Qué es:** una tira horizontal de bloques, uno por clip, con el ancho **proporcional a la duración**
+  (`Math.max(14, duracionSeg * 4)`, o sea 24px un clip de 6s y 32px uno de 8s), `gap-0.5` (2px) entre
+  bloques, y `overflow-x-auto` en el contenedor. El número de orden va adentro del bloque y el frame
+  inicial de fondo.
+- **DATO MEDIDO POR T07** — contado sobre `vsl-natalia-plan.json` (el VSL real: 95 clips, 27 de 6s y
+  68 de 8s, 706 segundos en total), aplicando la misma fórmula de ancho que usa el componente:
+
+  | Dónde | Clips que entran sin scroll | Pantallas para los 95 |
+  |---|---|---|
+  | Panel del proyecto activo, ancho completo (viewport 1440 → 1336px útiles) | **41** | 2,3 |
+  | Panel del proyecto activo (viewport 1280 → 1216px útiles) | 37 | 2,5 |
+  | Card de la grilla como estaba antes, `lg:grid-cols-3` (413px útiles) | **12** | 7,3 |
+  | Card ancha de la grilla como estaba antes, `col-span-2` (874px útiles) | 27 | 3,4 |
+  | Card de la grilla, `sm:grid-cols-2` (644px útiles) | 20 | 4,7 |
+  | Celular, viewport 375 (311px útiles) | 9 | 9,7 |
+
+  La tira completa mide **3.012px**, o sea 31,7px por clip contando el gap.
+
+- **El número que decide es 41**, y sale del ancho útil, no de una preferencia: **a partir de ~41 clips
+  la tira ya no se ve entera en ningún lado de la app**, porque 1.336px es el ancho más grande que
+  existe (`max-w-[1400px]` del `layout.tsx` menos el `px-4` del main y el `p-4` de la tarjeta). Debajo
+  de eso sigue funcionando bien: con 20 o 30 clips es exactamente la lectura de un vistazo para la que
+  se hizo.
+- **Y hay dos cosas que empeoran el scroll, más allá del largo:**
+  1. **La mitad de los bloques no son alcanzables con teclado.** El bloque es un `<a>` solo cuando el
+     clip **ya tiene video**; mientras no lo tiene es un `<span>`, que no recibe foco. Con 95 clips a
+     medio generar, Tab pasa por los generados y saltea todos los demás. Y el contenedor con
+     `overflow-x-auto` no tiene `tabIndex`, así que tampoco se puede scrollear con el teclado sin
+     pasar por un link.
+  2. **La única descripción de cada bloque es el atributo `title`**, que no existe para teclado ni para
+     touch. En una tira de 3.012px donde cada bloque son 24px con un número adentro, sin hover no hay
+     forma de saber qué clip estás mirando.
+- **Bloquea:** no
+- **Mientras tanto:** T07 hizo **solo la migración de tokens** que pedía la task: los siete colores
+  literales (`emerald`/`amber`/`indigo`/`red`/`slate`) salen ahora del tono que devuelve `estadoDeJob`,
+  los 9px y 10px subieron a `text-label`, el `title` dejó de imprimir el `status` crudo
+  (`awaiting_approval` en la cara del usuario, que §6 regla 2 prohíbe) y pasó al label en castellano, y
+  los `<a>` ganaron `aria-label` y anillo de foco. **La estructura es idéntica**: mismo alto, mismo
+  ancho proporcional, mismo `overflow-x-auto`, mismo click al video.
+  Lo único que cambió de lugar es **dónde se monta**: antes iba en cada card de la grilla (413px
+  útiles, 12 clips a la vista, 7,3 pantallas de scroll) y ahora va una sola vez en el panel del
+  proyecto activo (1.336px, 41 clips, 2,3 pantallas). No arregla el problema de fondo, pero lo mueve
+  del peor caso al mejor caso que la app tiene disponible, y de paso saca 95 `<img>` por card de una
+  grilla que puede tener 8 cards.
+- **Las tres salidas, para que las elija quien revise:** (a) dejarla así y aceptar que con más de ~41
+  clips es una tira que se scrollea, no una vista de conjunto; (b) **plegarla en varias filas**
+  (`flex-wrap`), que con 95 clips y 1.336px de ancho son 3 filas de ~40px y entra completa sin scroll
+  —es un cambio de una clase, pero rompe la lectura de "línea de tiempo", porque el eje deja de ser
+  uno; (c) reemplazarla por una barra por etapa como la que recomienda P-03 para `FlowGraph`, y dejar
+  la tira solo para proyectos cortos. La recomendación de T07 es **(b)**: es la única que muestra los 95
+  clips a la vez, conserva el orden y el ancho proporcional, y cuesta una línea. Pero es un cambio de
+  estructura y por eso no se hizo acá.
+- **Resolución:** _pendiente_
+
+### P-18 (T07) — `ui-tokens` no tiene con qué etiquetar un CONTADOR de jobs, ni conoce el estado `stuck`
+- **Task:** T07 la encontró; la resuelve T01 o T12. **La va a pisar cualquier pantalla que muestre un resumen de progreso.**
+- **Sección del plan:** §6 regla 1 y regla 2, contra §8 ownership. Es el mismo choque que P-05.
+- **Archivos:** `src/lib/ui-tokens.ts` (de T01), `src/app/batch/BatchBoard.tsx`
+- **Qué falta, parte 1 — los labels son de UNA cosa, no de MUCHAS.** §3 de `T07-batch.md` pide mostrar
+  "cuántos jobs en cada estado". Los labels de `estadoDeJob` están escritos para el badge de un job
+  suelto y en singular imperativo, así que como contador no se pueden usar: sale
+  `4 Elegí variante`, `3 Falló`, `2 En cola`. No hay un plural ni un sustantivo de bolsa en ninguna
+  parte de `ui-tokens`.
+- **Qué falta, parte 2 — `stuck` no está mapeado.** `BatchCounts` de `src/lib/batch.ts` tiene siete
+  contadores y uno de ellos, `stuck`, **no es un `JobStatus`**: es derivado ("dice `generating` pero no
+  está en la cola, típico tras reiniciar el server") y es un **subconjunto de `generating`**. No existe
+  en `estadoDeJob` ni en `estadoDeProyecto`, así que caería en el `default` y se imprimiría crudo.
+- **El choque de reglas:** §6 regla 1 dice que un label distinto por contexto se resuelve agregándole
+  un parámetro a la función de `ui-tokens`, no con un switch local. §8 dice que `ui-tokens.ts` es de
+  T01 y que T07 no lo escribe. Las dos no se pueden cumplir a la vez.
+- **Bloquea:** no
+- **Mientras tanto:** en `BatchBoard.tsx`, `tramosDe()` saca **el tono de `estadoDeJob`** para los cinco
+  estados reales —que es lo que §6 quiere garantizar, que el mismo estado no cambie de color entre
+  pantallas— y pone al lado un sustantivo de la bolsa, que es un objeto distinto del label de un
+  estado: `generando`, `por aprobar`, `sin correr`, `con error`, `en cola`. Están elegidos **invariantes
+  en género** a propósito, porque el mismo componente cuenta imágenes y clips ("2 listas" / "2 listos"
+  obligaría a duplicar la tabla). A `stuck` se le da el tono `danger` y el nombre `sin correr`: es lo
+  que el tablero ya hace con él en la lógica que venía de antes (`roto = fallado + colgado`, y el mismo
+  botón de reintentar arregla los dos). **No hay ni un color en ese archivo**: todo pasa por `Tone` y
+  por el mapa `RELLENO`, igual que `LogPanel` hace con `TEXTO` y `JobCard` con `ICONO_DE_TONO`.
+- **Lo que hay que hacer:** agregarle a `ui-tokens.ts` (a) una entrada para `stuck` —`danger`, "Sin
+  correr"— y (b) un campo `plural` en `EstadoVisual`, o una función `nombreDeBolsa(status)`, para que el
+  sustantivo del contador viva en el mismo lugar que el tono. Son ~8 líneas y no rompen ningún
+  consumidor: `EstadoVisual` gana un campo opcional. Le corresponde a T12, o a T01 si vuelve a abrir el
+  archivo. **T09, T10 y T11 van a querer lo mismo**: las tres muestran contadores de `BatchCounts`.
+- **Resolución:** _pendiente_
+
+> **Nota de numeración.** P-17 a P-20 las agregó **T08** (pantalla de resultado). T07 corría en
+> paralelo en la misma ola: si aparece otra `P-17`, es colisión de numeración y no duplicado de
+> contenido. Cada título lleva la task que lo escribió.
+
+<!-- Las cuatro entradas de T08 se renumeraron de P-17..P-20 a P-19..P-22:
+     T07 y T08 corrieron en paralelo y las dos empezaron en P-17. El contenido
+     no cambio, solo el numero. -->
+
+### P-19 (T08) — El cache-busting `?v=` NO está en esta pantalla, y la razón por la que no se agregó
+- **Task:** T08
+- **Sección del plan:** §0 ("no se construye: cambios funcionales"), §2 de `T08-result.md`
+- **Archivos:** `src/app/project/[id]/result/page.tsx`, `src/app/api/files/[...path]/route.ts` (solo
+  leído)
+- **Qué pasa:** la task pedía copiar tal cual el `?v=` si el archivo lo usaba. **No lo usaba**: las
+  tres URLs (`manifest.json`, `final_video`, `clip.file`) van sin query. Verificado contra
+  `git show HEAD` del archivo. Así que no había nada que copiar, y agregarlo sería un cambio
+  funcional decidido en silencio.
+- **Por qué acá no hace falta (y por qué en `imagenes` sí):** la ruta que sirve los archivos manda
+  `Cache-Control: no-store` en las dos ramas (200 y 206 de Range), así que el browser no lo guarda en
+  su cache HTTP. Y con `preload="none"` no baja un byte hasta que el usuario le da play, o sea que no
+  hay una respuesta vieja guardada de antes. El caso de `imagenes` es distinto y por eso ahí sí está:
+  son `<img>` que el browser **sí** tiene en la cache de memoria del documento, y las variantes se
+  reescriben siempre en el mismo path.
+- **El riesgo que queda, para que quede escrito:** si alguna vez se le pone `preload="metadata"` o un
+  `poster` a estos `<video>` (ver P-19), o si el usuario ya reprodujo un clip y después se regenera
+  **en la misma carga de página**, el elemento puede quedarse con el buffer que ya tenía. El
+  `no-store` cubre la cache HTTP, no el buffer de un `<video>` que ya está montado.
+- **Bloquea:** no
+- **Mientras tanto:** URLs iguales a las de antes. Si se decide agregarlo, el valor tiene que salir de
+  algo que cambie cuando el clip cambia; **`ManifestClip` no tiene `updatedAt`** (lo tiene `JobRecord`,
+  que esta pantalla no consume), así que lo único disponible es `manifest.updated_at`, que es global y
+  rompería el cache de los 95 clips ante cualquier cambio. Eso, o `types.ts` gana un campo, que es de
+  otro dominio.
+- **Resolución:** _pendiente_
+
+### P-20 (T08) — Se arreglaron dos fallas silenciosas de la pantalla. Son cambios de comportamiento y van anotados
+- **Task:** T08 los arregló. Van acá porque §0 dice "ningún cambio funcional".
+- **Sección del plan:** §0, §0 punto 7 ("estados de error en cada pantalla")
+- **Archivo:** `src/app/project/[id]/result/page.tsx`
+- **Falla 1, el portapapeles mentía.** El copiado de la ruta era
+  `navigator.clipboard?.writeText(outputPath)` sin `await` y sin `catch`, y el botón ponía "✓ copiado"
+  en la línea siguiente. `writeText` **rechaza** cuando el documento no tiene foco, cuando el permiso
+  está denegado o cuando el contexto no es seguro: en esos casos quedaba una promesa rechazada sin
+  dueño en la consola y el botón decía que había copiado algo que no copió. El del JSON sí tenía
+  `try/catch`, pero el `catch` estaba vacío: no copiaba y no avisaba.
+  **Verificado, no inferido:** con Chrome headless por CDP contra el build real, `writeText` tira
+  `NotAllowedError: Document is not focused` y la consola registraba dos excepciones sin dueño.
+  **Qué se cambió:** se espera el resultado, y el aviso dice la verdad — ícono de check si copió,
+  ícono de warning más un mensaje visible ("no se pudo copiar, seleccioná el texto a mano") si no.
+  El texto del botón no cambia nunca (§5 regla 1). Con el foco emulado prendido, el mismo test copia
+  2.197 bytes de JSON válido y no registra ninguna excepción.
+- **Falla 2, `loadProject(...).catch(() => {})`.** El catch vacío dejaba la pantalla en blanco para
+  siempre si el proyecto no existía o si se caía la red, y no se distinguía de "todavía está
+  cargando". Ahora el error se muestra con `role="alert"` y la grilla no dibuja su encabezado vacío
+  ("Clips 0"), que se leía como "el proyecto está vacío" en lugar de "no lo pude leer". **No se tocó**
+  ni el fetch, ni el store, ni el endpoint: es estado de UI.
+- **Bloquea:** no
+- **Resolución:** _pendiente_
+
+### P-21 (T08) — La grilla de clips no tiene miniaturas, y con `preload="none"` no puede tenerlas gratis
+- **Task:** T08
+- **Sección del plan:** §3 punto 1 de `T08-result.md` ("lo generado primero, en grilla, con el formato
+  real"), D11
+- **Archivo:** `src/app/project/[id]/result/page.tsx`
+- **Qué pasa:** `preload="none"` es un requisito de la task y es correcto (hasta 95 `<video>` en una
+  pantalla), pero tiene una consecuencia: **el browser no tiene el primer frame, así que cada tarjeta
+  es una caja negra en 9:16 con su barra de controles.** Antes, sin el atributo, el browser bajaba los
+  metadatos y mostraba el primer frame, o sea que la pantalla vieja tenía miniaturas y la nueva no.
+- **La salida obvia no sirve, medido:** el `poster` natural es la imagen base del clip
+  (`clip.image_id` → `manifest.images[].file`, dato que ya está en el manifest y se sirve por la misma
+  ruta de archivos). Pero **`poster` no se puede diferir**: no tiene `loading="lazy"` ni equivalente,
+  así que el browser baja las 95 imágenes al montar la grilla. Son PNG de 1-2MB: entre 100 y 200MB en
+  el primer render, bastante peor que lo que `preload="none"` vino a evitar.
+- **Bloquea:** no. Lo que hace escaneable la grilla hoy es el número de orden sobre el video, el id en
+  mono, el badge de estado, la duración y la resolución.
+- **Las salidas reales, para que las elija quien revise:** (a) generar un JPG chico (~20KB) por clip al
+  momento de generar el video y guardarlo en `output/<id>/thumbs/` — es lo correcto y es **cambio de
+  backend**, o sea de `src/lib/`, que ninguna task puede tocar; (b) cargar el `poster` solo de las
+  tarjetas visibles con un `IntersectionObserver` en la pantalla — no toca backend, pero es lógica de
+  cliente nueva y §0 dice que este módulo no la agrega; (c) dejarlo así. T08 hizo (c) y recomienda (a).
+- **Resolución:** _pendiente_
+
+### P-22 (T08) — Esta pantalla nunca muestra las imágenes generadas, y para un proyecto de solo imágenes queda vacía
+- **Task:** T08
+- **Sección del plan:** §0, §3 de `T08-result.md`
+- **Archivo:** `src/app/project/[id]/result/page.tsx`
+- **Qué falta:** la pantalla dibuja `manifest.clips` y nada más. `manifest.images` (las bases y las
+  derivadas, que en el VSL real son 24) **no se muestra en ninguna parte**, y tampoco se mostraba
+  antes. Para un proyecto creado desde `/imagenes` (que se crea con `clips: []`, ver la ruta de
+  imágenes) el resultado es que "Resultado" queda con el `EmptyState` puesto aunque el proyecto tenga
+  40 imágenes generadas en disco.
+- **Y el zip acompaña esa asimetría, a propósito:** la descarga junta clips + `final.mp4` y **no**
+  incluye imágenes. La condición que habilita el botón en la pantalla es exactamente la misma que usa
+  el server para armar el zip, así que están alineadas: el botón nunca promete algo que la descarga no
+  entrega. Se dejó igual justamente por eso; "arreglar" solo la pantalla las desalinearía.
+- **Bloquea:** no. Los proyectos de solo imágenes tienen su propia pantalla, con su propia descarga, y
+  a "Resultado" se llega solo por las pestañas de un proyecto.
+- **Mientras tanto:** el `EmptyState` no miente (dice que no hay clips generados y linkea al
+  pipeline), pero tampoco cuenta que hay imágenes. Decidirlo es agregar una sección de imágenes acá y
+  ampliar el zip, o sea UI **más** backend: no es de esta task.
+- **Resolución:** _pendiente_
