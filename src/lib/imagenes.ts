@@ -6,38 +6,26 @@
  * config conocidos. Exportar cualquier otra cosa rompe el build con
  * "does not match the required types of a Next.js Route" — y el `tsc --noEmit` NO
  * lo detecta, solo lo ve `next build`.
+ *
+ * ─── UN PROMPT POR PROYECTO ──────────────────────────────────────────────────
+ *
+ * Antes esta pantalla partia el texto pegado en un prompt POR LINEA y armaba un
+ * proyecto con N imagenes. Se saco: un prompt de imagen de verdad tiene varias
+ * lineas (encuadre, luz, estilo, negativos), asi que partir por linea convertia un
+ * prompt en cinco prompts cortados al medio. Ahora el textarea es UN prompt, los
+ * saltos de linea son parte del prompt, y la cantidad se maneja con variantes.
  */
 import { slugify } from "./storage";
 
 /**
- * Parte el texto pegado en prompts, uno por linea.
+ * Id de la imagen del proyecto, que es lo que termina siendo el NOMBRE DEL ARCHIVO:
+ * `storage.imageRelPath()` hace `images/<slug(id)>.png`.
  *
- * Se ignoran las lineas vacias (asi se puede separar con renglones en blanco) y se
- * saca la numeracion manual del estilo "1." o "3)" del arranque, que es como la
- * gente pega listas y quedaria dentro del prompt que se le manda al modelo.
- */
-export function parsePrompts(texto: string): string[] {
-  return texto
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0)
-    .map((l) => l.replace(/^\s*\d+\s*[.)-]\s*/, "").trim())
-    .filter((l) => l.length > 0);
-}
-
-/**
- * Ids de imagen derivados del nombre del proyecto, que es lo que termina siendo el
- * NOMBRE DEL ARCHIVO: `storage.imageRelPath()` hace `images/<slug(id)>.png`.
- * "Crema Manos" con 3 prompts -> crema_manos_01/02/03 -> images/crema_manos_01.png
+ * "Crema Manos" -> crema_manos -> images/crema_manos.png
  *
- * El indice va con padStart(2) para que el orden alfabetico del explorador de
- * archivos coincida con el orden en que se pegaron los prompts (asi _10 no cae
- * entre _1 y _2).
+ * Sin sufijo numerico: hay UNA imagen por proyecto. Las variantes no son imagenes
+ * distintas, son candidatas del mismo job y el storage las guarda aparte.
  */
-export function imageIdsPara(nombre: string, cantidad: number): string[] {
-  const base = slugify(nombre) || "imagen";
-  return Array.from(
-    { length: cantidad },
-    (_, i) => `${base}_${String(i + 1).padStart(2, "0")}`,
-  );
+export function imageIdPara(nombre: string): string {
+  return slugify(nombre) || "imagen";
 }

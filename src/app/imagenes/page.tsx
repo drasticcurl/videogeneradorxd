@@ -28,8 +28,8 @@ export default function ImagenesPage() {
       <header>
         <h1 className="text-display font-semibold text-fg">Imágenes</h1>
         <p className="mt-1 max-w-prose text-body text-fg-dim">
-          Pegás prompts y genera imágenes, sin video. Cada prompt sale con las
-          variantes que elijas y podés variar cualquiera sin tocar el resto.
+          Un prompt por proyecto, sin video. Elegís formato y calidad, sale con las
+          variantes que pidas y podés variarlas sin volver a empezar.
         </p>
       </header>
 

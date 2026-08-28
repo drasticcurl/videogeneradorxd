@@ -69,6 +69,11 @@ export interface ImageGenInput {
   refImages?: RefImage[];
   negativePrompt?: string;
   aspectRatio?: string;
+  /**
+   * Calidad: "1K" | "2K" | "4K". Si no viene, la API usa 1K.
+   * OJO: no todos los modelos la aceptan (ver IMAGE_MODELS_SOLO_1K en config).
+   */
+  imageSize?: string;
   /** id de modelo de imagen (Nano Banana). */
   model?: string;
 }

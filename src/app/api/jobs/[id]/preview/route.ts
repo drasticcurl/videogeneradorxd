@@ -109,10 +109,16 @@ export async function GET(
       return { id: rid, kind: "generada" as const, file: rj?.outputPath ?? null };
     });
 
+    /*
+      El formato sale del proyecto, igual que en el pipeline. Si acá quedara la
+      constante global, el preview diria "9:16" para un proyecto de 16:9 y estaria
+      mostrando un texto distinto del que realmente se ejecuta, que es justo lo que
+      esta pantalla existe para evitar.
+    */
     const executedPrompt = buildImageInstruction({
       prompt: img?.prompt ?? "",
       refCount: refs.length,
-      aspectRatio: ASPECT_RATIO,
+      aspectRatio: project.imageAspectRatio ?? ASPECT_RATIO,
       negativePrompt: img?.negative_prompt || project.plan.global.negative_prompt,
     });
 

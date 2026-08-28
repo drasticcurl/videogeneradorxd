@@ -326,7 +326,14 @@ async function runImageGeneration(
           prompt: img.prompt,
           refImages: refImages.length > 0 ? refImages : undefined,
           negativePrompt,
-          aspectRatio: ASPECT_RATIO,
+          /*
+            El formato y la calidad salen del PROYECTO y no de la constante global:
+            la pantalla de imagenes deja elegirlos por proyecto. Un proyecto viejo no
+            los tiene guardados, y ahi cae al 9:16 de siempre y a 1K, que es el
+            default de la API.
+          */
+          aspectRatio: project.imageAspectRatio ?? ASPECT_RATIO,
+          imageSize: project.imageSize,
           model,
         });
         const ext = result.mimeType.includes("jpeg") ? "jpg" : "png";

@@ -59,6 +59,17 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import type { ModelOption } from "@/lib/config";
+/*
+  De `@/lib/formatos` y NO de `@/lib/config`: config importa `node:path` y lee
+  AUTH_SECRET y PASSWORD_*, asi que no puede entrar al bundle del cliente. `ModelOption`
+  sigue viniendo de config porque es solo un tipo y se borra al compilar.
+*/
+import {
+  IMAGE_ASPECT_RATIOS,
+  IMAGE_SIZES,
+  imageSizesFor,
+  type Orientacion,
+} from "@/lib/formatos";
 import { estadoDeJob } from "@/lib/ui-tokens";
 
 interface Candidate {
@@ -104,6 +115,159 @@ const VARIANTES: ReadonlyArray<SelectOption<string>> = [1, 2, 3, 4].map((n) => (
 }));
 
 /**
+ * La forma del formato, dibujada a escala.
+ *
+ * Es un `div` con las proporciones reales y no un icono de una fuente: la pregunta
+ * que contesta es "¿esto es vertical u horizontal?", y para eso el rectangulo tiene
+ * que tener LA proporcion, no una aproximada. Sale gratis y no agrega dependencias.
+ *
+ * `border-current` a proposito: el color lo hereda del texto del padre, asi que
+ * cuando el boton queda elegido y cambia de color, la forma lo sigue sola. Sin esto
+ * habria que pasarle el estado por prop.
+ */
+function Forma({ w, h }: { w: number; h: number }) {
+  const MAX = 24;
+  const escala = MAX / Math.max(w, h);
+  return (
+    <span
+      aria-hidden
+      style={{ width: Math.round(w * escala), height: Math.round(h * escala) }}
+      className="block shrink-0 rounded-[2px] border-2 border-current"
+    />
+  );
+}
+
+/**
+ * Selector de formato: los 10 que acepta Vertex, agrupados por orientacion.
+ *
+ * Son `<input type="radio">` de verdad (escondidos con sr-only y estilados por
+ * `peer-checked`) y no botones con role="radio": el radio nativo trae la navegacion
+ * con flechas del grupo gratis, y un radiogroup hecho a mano hay que teclearlo a
+ * mano. El label envuelve al input, asi que toda la tarjeta es clickeable.
+ */
+function SelectorFormato({
+  valor,
+  onChange,
+}: {
+  valor: string;
+  onChange: (v: string) => void;
+}) {
+  const grupos: ReadonlyArray<[Orientacion, string]> = [
+    ["vertical", "Vertical"],
+    ["cuadrado", "Cuadrado"],
+    ["horizontal", "Horizontal"],
+  ];
+  return (
+    <div>
+      <span className="mb-1 block text-label font-medium text-fg-dim">Formato</span>
+      <div className="space-y-2">
+        {grupos.map(([orientacion, titulo]) => (
+          <div key={orientacion}>
+            <p className="mb-1 text-label text-fg-dim">{titulo}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {IMAGE_ASPECT_RATIOS.filter((f) => f.orientacion === orientacion).map(
+                (f) => (
+                  <label
+                    key={f.id}
+                    className="cursor-pointer"
+                    title={f.uso ? `${f.id} · ${f.uso}` : f.id}
+                  >
+                    <input
+                      type="radio"
+                      name="formato-imagen"
+                      value={f.id}
+                      checked={valor === f.id}
+                      onChange={() => onChange(f.id)}
+                      className="peer sr-only"
+                    />
+                    <span
+                      className={cn(
+                        "flex h-16 w-[4.5rem] flex-col items-center justify-center gap-1 rounded-md",
+                        "border border-divider bg-surface text-fg-dim transition-colors",
+                        "hover:text-fg",
+                        "peer-checked:border-accent peer-checked:bg-accent peer-checked:text-on-accent",
+                        "peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-accent",
+                      )}
+                    >
+                      <Forma w={f.w} h={f.h} />
+                      <span className="code text-label">{f.id}</span>
+                    </span>
+                  </label>
+                ),
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Selector de calidad. Las que el modelo no soporta quedan DESHABILITADAS y con el
+ * motivo al lado, en vez de desaparecer: si se esconden, el usuario que ya vio 4K en
+ * otro modelo cree que la app se rompio.
+ */
+function SelectorCalidad({
+  valor,
+  onChange,
+  permitidas,
+}: {
+  valor: string;
+  onChange: (v: string) => void;
+  permitidas: readonly string[];
+}) {
+  const recortado = permitidas.length < IMAGE_SIZES.length;
+  return (
+    <div>
+      <span className="mb-1 block text-label font-medium text-fg-dim">Calidad</span>
+      <div className="flex flex-wrap gap-1.5">
+        {IMAGE_SIZES.map((s) => {
+          const habilitada = permitidas.includes(s);
+          return (
+            <label
+              key={s}
+              className={habilitada ? "cursor-pointer" : "cursor-not-allowed"}
+              title={
+                habilitada ? undefined : "El modelo elegido no soporta esta calidad"
+              }
+            >
+              <input
+                type="radio"
+                name="calidad-imagen"
+                value={s}
+                checked={valor === s}
+                disabled={!habilitada}
+                onChange={() => onChange(s)}
+                className="peer sr-only"
+              />
+              <span
+                className={cn(
+                  "flex h-9 min-w-[3.25rem] items-center justify-center rounded-md px-3",
+                  "border border-divider bg-surface text-body text-fg-dim transition-colors",
+                  habilitada ? "hover:text-fg" : "opacity-40",
+                  "peer-checked:border-accent peer-checked:bg-accent peer-checked:font-medium peer-checked:text-on-accent",
+                  "peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-accent",
+                )}
+              >
+                {s}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <p className="mt-1 text-label text-fg-dim">
+        {recortado ? (
+          <>Este modelo solo genera en 1K. Cambiá de modelo para 2K o 4K.</>
+        ) : (
+          <>4K tarda bastante más y pesa ~15 MB por imagen.</>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/**
  * Como va a quedar el nombre del archivo. Es la misma transformación que hace
  * `slugify` en el server (`src/lib/storage.ts`), escrita acá porque ese módulo es de
  * Node y no baja al cliente. Es un PREVIEW, no la fuente de verdad: se mantiene
@@ -132,7 +296,21 @@ export default function ImagenesBoard({
   const [texto, setTexto] = useState("");
   const [variantes, setVariantes] = useState(2);
   const [modelo, setModelo] = useState(modeloDefault);
+  const [formato, setFormato] = useState("9:16");
+  const [calidad, setCalidad] = useState("1K");
   const [negativo, setNegativo] = useState("");
+
+  /*
+    Las calidades dependen del modelo. Si estabas en 4K y cambias al lite (que solo
+    hace 1K), la calidad se baja SOLA: dejarla en 4K mandaria un pedido que el server
+    rechaza con 400 y el boton de Generar parecería roto sin explicación.
+  */
+  const calidadesPermitidas = useMemo(() => imageSizesFor(modelo), [modelo]);
+  useEffect(() => {
+    if (!calidadesPermitidas.includes(calidad as (typeof calidadesPermitidas)[number])) {
+      setCalidad(calidadesPermitidas[0]);
+    }
+  }, [calidadesPermitidas, calidad]);
 
   const [projectId, setProjectId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -148,11 +326,12 @@ export default function ImagenesBoard({
   // Para que el boton del estado vacio lleve al campo que hay que llenar.
   const promptsRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Cantidad de prompts en vivo, para mostrar el costo antes de apretar.
-  const cantidadPrompts = texto
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean).length;
+  /*
+    Hay UN prompt por proyecto, asi que los saltos de linea son parte del prompt y no
+    un separador. Antes esto contaba lineas: un prompt de imagen con encuadre, luz y
+    estilo en renglones distintos se convertia en cuatro prompts cortados al medio.
+  */
+  const tienePrompt = texto.trim().length > 0;
 
   /**
    * Si el modelo guardado no esta en el catalogo, se agrega como opcion. Con el
@@ -233,9 +412,11 @@ export default function ImagenesBoard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           nombre,
-          prompts: texto,
+          prompt: texto,
           variantes,
           model: modelo,
+          aspectRatio: formato,
+          imageSize: calidad,
           negativePrompt: negativo,
         }),
       });
@@ -376,8 +557,8 @@ export default function ImagenesBoard({
             <div>
               <CardTitle>Generar imágenes</CardTitle>
               <CardDescription>
-                Un prompt por línea. Los archivos se nombran con el nombre del
-                proyecto.
+                Un prompt, con las variantes que quieras. El archivo se nombra con el
+                nombre del proyecto.
               </CardDescription>
             </div>
           </CardHeader>
@@ -397,10 +578,8 @@ export default function ImagenesBoard({
                 aria-describedby="nombre-archivo"
               />
               <p id="nombre-archivo" className="mt-1 text-label text-fg-dim">
-                Los archivos van a salir como{" "}
-                <code className="font-mono text-fg">
-                  {slugPreview(nombre)}_01.png
-                </code>
+                El archivo va a salir como{" "}
+                <code className="font-mono text-fg">{slugPreview(nombre)}.png</code>
               </p>
             </div>
 
@@ -415,8 +594,8 @@ export default function ImagenesBoard({
           <Textarea
             ref={promptsRef}
             id="prompts"
-            label="Prompts (uno por línea)"
-            hint="Las líneas vacías se ignoran."
+            label="Prompt"
+            hint="Un prompt por proyecto. Podés usar varios renglones: todo es parte del mismo prompt."
             value={texto}
             onChange={(e) => setTexto(e.target.value)}
             required
@@ -424,26 +603,34 @@ export default function ImagenesBoard({
             mono
             spellCheck={false}
             placeholder={
-              "A woman applying hand cream, close up on dry hands, natural window light\nSame woman smiling, showing soft hydrated hands, warm kitchen background"
+              "A woman applying hand cream, close up on dry hands.\nNatural window light, shallow depth of field.\nPhotorealistic, documentary style."
             }
           />
 
-          <div className="grid gap-4 sm:grid-cols-[9rem_minmax(0,1fr)]">
+          <SelectorFormato valor={formato} onChange={setFormato} />
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SelectorCalidad
+              valor={calidad}
+              onChange={setCalidad}
+              permitidas={calidadesPermitidas}
+            />
             <Select
-              label="Variantes por prompt"
+              label="Variantes"
               value={String(variantes)}
               onValueChange={(v) => setVariantes(Number(v))}
               options={VARIANTES}
             />
-            <Input
-              id="negativo"
-              label="Negative prompt (opcional, aplica a todas)"
-              value={negativo}
-              onChange={(e) => setNegativo(e.target.value)}
-              placeholder="text, watermark, extra fingers"
-              autoComplete="off"
-            />
           </div>
+
+          <Input
+            id="negativo"
+            label="Negative prompt (opcional)"
+            value={negativo}
+            onChange={(e) => setNegativo(e.target.value)}
+            placeholder="text, watermark, extra fingers"
+            autoComplete="off"
+          />
 
           <div aria-live="polite">
             {error && (
@@ -462,22 +649,21 @@ export default function ImagenesBoard({
               type="submit"
               variant="primary"
               loading={enviando}
-              disabled={cantidadPrompts === 0 || nombre.trim().length === 0}
+              disabled={!tienePrompt || nombre.trim().length === 0}
               icon={<Sparkle aria-hidden className="size-4" />}
             >
               Generar
             </Button>
             {/*
-              El contador de costo. Va en mono con .tnum porque cambia con cada tecla
-              y en proporcional los numeros bailan de ancho (D4). Es lo unico que le
-              dice al usuario cuanto va a gastar antes de apretar.
+              El resumen de lo que se va a gastar. Va en mono con .tnum porque cambia
+              con cada tecla y en proporcional los numeros bailan de ancho (D4).
             */}
-            {cantidadPrompts > 0 && (
+            {tienePrompt && (
               <p className="font-mono text-label tnum text-fg-dim">
-                <span className="text-fg">{cantidadPrompts}</span> prompt
-                {cantidadPrompts === 1 ? "" : "s"} ×{" "}
-                <span className="text-fg">{variantes}</span> ={" "}
-                <span className="text-fg">{cantidadPrompts * variantes}</span> imágenes
+                <span className="text-fg">{variantes}</span>{" "}
+                {variantes === 1 ? "imagen" : "imágenes"} ·{" "}
+                <span className="text-fg">{formato}</span> ·{" "}
+                <span className="text-fg">{calidad}</span>
               </p>
             )}
           </div>
@@ -489,9 +675,9 @@ export default function ImagenesBoard({
         <EmptyState
           icon={<ImageSquare aria-hidden className="size-6" />}
           title="Todavía no generaste nada"
-          body="Pegá los prompts, elegí cuántas variantes querés de cada uno y dale Generar: las miniaturas caen acá y elegís la que queda."
+          body="Escribí el prompt, elegí formato, calidad y cuántas variantes querés, y dale Generar: las miniaturas caen acá y elegís la que queda."
           action={{
-            label: "Escribir los prompts",
+            label: "Escribir el prompt",
             onClick: () => promptsRef.current?.focus(),
           }}
         />

@@ -9,6 +9,7 @@ import {
   vertexBaseUrl,
   assertVertexConfig,
   resolveModel,
+  resolveImageSize,
   ASPECT_RATIO,
   config,
 } from "../../config";
@@ -69,13 +70,26 @@ export class VertexImageProvider implements ImageProvider {
       });
     }
 
+    /*
+      Calidad. Se recorta a lo que el modelo soporta ANTES de mandarla: el lite
+      contesta 400 "Request contains an invalid argument" con "2K" (probado contra la
+      API real), y un 400 se come reintentos de la cola y aparece como una falla
+      cualquiera. Mejor pedir 1K y que salga.
+    */
+    const size = resolveImageSize(input.imageSize, model);
+
     const body = {
       contents: [{ role: "user", parts }],
       generationConfig: {
         // El modelo de imagen de Gemini devuelve la imagen como inlineData.
         responseModalities: ["IMAGE"],
-        // TODO: confirmar - algunos modelos aceptan imageConfig.aspectRatio.
-        imageConfig: { aspectRatio: aspect },
+        /*
+          Verificado contra la API real (2026-08-28), ya no es un TODO: los dos campos
+          se respetan y no se ignoran. Se pidio 16:9 + 1K y volvio 1376x768; 4:5 + 2K
+          y volvio 1856x2304; 16:9 + 4K y volvio 5504x3072. El ratio de lo que vuelve
+          coincide con el pedido en los tres casos.
+        */
+        imageConfig: { aspectRatio: aspect, imageSize: size },
       },
     };
 

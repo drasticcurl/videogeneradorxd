@@ -1,8 +1,14 @@
 /**
  * POST /api/imagenes
- * Crea un proyecto de SOLO IMAGENES a partir de una lista de prompts y lo encola.
- * Body: { nombre: string, prompts: string[], variantes?: number, model?: string,
- *         negativePrompt?: string }
+ * Crea un proyecto de SOLO IMAGENES a partir de UN prompt y lo encola.
+ * Body: { nombre: string, prompt: string, variantes?: number, model?: string,
+ *         aspectRatio?: string, imageSize?: "1K"|"2K"|"4K", negativePrompt?: string }
+ *
+ * UN prompt por proyecto. Los saltos de linea son parte del prompt: un prompt de
+ * imagen serio tiene varias lineas (encuadre, luz, estilo, negativos) y partirlo por
+ * linea, como se hacia antes, lo convertia en varios prompts cortados al medio. La
+ * cantidad se maneja con `variantes`, que son candidatas de la MISMA imagen entre las
+ * que se elige.
  *
  * POR QUE ESTA RUTA EXISTE en vez de armar el plan en el cliente: el PlanJSON tiene
  * reglas cruzadas no obvias (la primera imagen de cada asset debe ser text2image, los
@@ -17,9 +23,15 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { config, resolveModel, resolveResolution } from "@/lib/config";
+import {
+  config,
+  imageSizesFor,
+  resolveAspectRatio,
+  resolveModel,
+  resolveResolution,
+} from "@/lib/config";
 import { jobsDb, projectsDb } from "@/lib/db";
-import { imageIdsPara, parsePrompts } from "@/lib/imagenes";
+import { imageIdPara } from "@/lib/imagenes";
 import { buildJobs } from "@/lib/jobs/pipeline";
 import { enqueueProject } from "@/lib/jobs/queue";
 import { validatePlan } from "@/lib/schema";
@@ -30,16 +42,15 @@ import { badRequest, ok, serverError } from "@/lib/http";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Tope de prompts por tanda. Es un guardrail de costo, no una limitacion tecnica. */
-const MAX_PROMPTS = 40;
-
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
       nombre?: string;
-      prompts?: unknown;
+      prompt?: string;
       variantes?: number;
       model?: string;
+      aspectRatio?: string;
+      imageSize?: string;
       negativePrompt?: string;
     };
 
@@ -48,32 +59,40 @@ export async function POST(req: Request) {
       return badRequest("Falta el nombre del proyecto: se usa para nombrar los archivos.");
     }
 
-    // Se acepta un array o el texto pegado tal cual, para que el cliente pueda
-    // mandar lo que tiene sin preprocesar.
-    const prompts = Array.isArray(body.prompts)
-      ? body.prompts.map((p) => String(p ?? "").trim()).filter(Boolean)
-      : parsePrompts(String(body.prompts ?? ""));
-
-    if (prompts.length === 0) {
-      return badRequest("No hay ningún prompt. Pegá uno por línea.");
-    }
-    if (prompts.length > MAX_PROMPTS) {
-      return badRequest(
-        `Son ${prompts.length} prompts y el máximo por tanda es ${MAX_PROMPTS}. ` +
-          `Con variantes eso serían ${prompts.length * (body.variantes ?? 2)} imágenes de una sola vez.`,
-      );
+    // Se preservan los saltos de linea: son parte del prompt.
+    const prompt = (body.prompt ?? "").trim();
+    if (!prompt) {
+      return badRequest("Falta el prompt de la imagen.");
     }
 
     const variantes = Math.min(4, Math.max(1, Math.round(body.variantes ?? 2)));
-    const ids = imageIdsPara(nombre, prompts.length);
+    const model = resolveModel("image", body.model);
+    const aspectRatio = resolveAspectRatio(body.aspectRatio);
 
-    // Un solo asset `broll` con todas las imagenes en text2image. `broll` y no
-    // `avatar` porque no hay una persona cuya identidad haya que mantener entre
-    // planos: cada prompt es independiente.
+    /*
+      La calidad se RECHAZA si el modelo no la soporta, en vez de bajarla en silencio:
+      el lite solo acepta 1K (verificado, con 2K devuelve 400) y si acá se degradara
+      sin decir nada, el usuario pediria 4K y recibiria una imagen de 1376px sin
+      entender por que. El provider igual la recorta como ultima red de seguridad,
+      para que un job nunca muera por esto.
+    */
+    const permitidas = imageSizesFor(model);
+    const imageSize = body.imageSize ?? "1K";
+    if (!permitidas.includes(imageSize as (typeof permitidas)[number])) {
+      return badRequest(
+        `El modelo elegido no soporta calidad ${imageSize}. ` +
+          `Solo acepta: ${permitidas.join(", ")}.`,
+      );
+    }
+
+    const imageId = imageIdPara(nombre);
+
+    // Un solo asset `broll` con UNA imagen en text2image. `broll` y no `avatar`
+    // porque no hay una persona cuya identidad haya que mantener entre planos.
     const planCrudo = {
       global: {
         idioma_dialogo: "es-AR",
-        formato: "9:16",
+        formato: aspectRatio,
         reglas_realismo: "",
         negative_prompt: body.negativePrompt?.trim() ?? "",
       },
@@ -82,11 +101,7 @@ export async function POST(req: Request) {
         {
           id: slugify(nombre) || "imagenes",
           tipo: "broll",
-          images: prompts.map((prompt, i) => ({
-            id: ids[i],
-            modo: "text2image",
-            prompt,
-          })),
+          images: [{ id: imageId, modo: "text2image", prompt }],
         },
       ],
       // Vacio a proposito: es lo que hace que este proyecto NO genere video.
@@ -109,16 +124,18 @@ export async function POST(req: Request) {
     const record: ProjectRecord = {
       id,
       name: nombre,
-      brief: `Solo imágenes: ${prompts.length} prompt(s), ${variantes} variante(s) cada uno.`,
+      brief: `Solo imágenes: 1 prompt, ${variantes} variante(s), ${aspectRatio} en ${imageSize}.`,
       plan: validacion.plan,
       status: "draft",
       models: {
         llm: resolveModel("llm"),
-        image: resolveModel("image", body.model),
+        image: model,
         video: resolveModel("video"),
       },
       imageVariants: variantes,
       defaultResolution: resolveResolution(),
+      imageAspectRatio: aspectRatio,
+      imageSize,
       // Auto-approve APAGADO a proposito, aunque el default global este en true.
       // El sentido de esta pantalla es elegir entre variantes: si se auto-aprueba la
       // primera, la eleccion ya esta hecha y el boton de elegir no significa nada.
@@ -142,7 +159,7 @@ export async function POST(req: Request) {
       {
         project: record,
         jobs: jobsDb.byProject(id),
-        totalImagenes: prompts.length * variantes,
+        totalImagenes: variantes,
       },
       { status: 201 },
     );

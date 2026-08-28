@@ -92,6 +92,16 @@ export interface ProjectRecord {
   /** resolucion de video por defecto del proyecto (720p / 1080p) */
   defaultResolution: string;
   /**
+   * Formato de las imagenes del proyecto (imageConfig.aspectRatio de Vertex).
+   * undefined = proyecto viejo, cae al default global 9:16.
+   */
+  imageAspectRatio?: string;
+  /**
+   * Calidad de las imagenes: "1K" | "2K" | "4K" (imageConfig.imageSize).
+   * undefined = proyecto viejo, cae a 1K, que es el default de la API.
+   */
+  imageSize?: string;
+  /**
    * Override del auto-approve por PROYECTO. Si es undefined, se usa el default
    * global (config.pipeline.autoApprove). Permite que cada proyecto elija:
    * - true  -> cada imagen/video se aprueba sola al terminar (modo "dejar correr").

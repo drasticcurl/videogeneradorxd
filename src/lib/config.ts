@@ -76,8 +76,25 @@ export const MODEL_CATALOG: Record<ModelKind, ModelOption[]> = {
   ],
 };
 
-/** Formato fijo por ahora: vertical 9:16. */
-export const ASPECT_RATIO = "9:16";
+/*
+  Formatos y calidades de imagen: viven en `./formatos`, que es un modulo puro (sin
+  imports ni environment). Se re-exportan desde aca para que el server siga teniendo
+  un solo lugar donde mirar, pero el CLIENTE importa `@/lib/formatos` directo: este
+  archivo trae `node:path` y lee AUTH_SECRET y PASSWORD_*, y no puede entrar al bundle
+  del browser.
+*/
+export {
+  ASPECT_RATIO,
+  IMAGE_ASPECT_RATIOS,
+  IMAGE_MODELS_SOLO_1K,
+  IMAGE_SIZES,
+  imageSizesFor,
+  resolveAspectRatio,
+  resolveImageSize,
+  type FormatoImagen,
+  type ImageSize,
+  type Orientacion,
+} from "./formatos";
 
 /** Resoluciones de video que el usuario puede elegir (por video). */
 export const VIDEO_RESOLUTIONS = ["720p", "1080p"] as const;
