@@ -49,7 +49,15 @@ export interface ButtonProps
   /** Deshabilita y muestra el spinner. NO cambia el texto: ver abajo. */
   loading?: boolean;
   icon?: React.ReactNode;
-  /** Renderiza como el hijo (para envolver un <Link> sin anidar interactivos). */
+  /**
+   * Aplica los estilos del boton al hijo en vez de renderizar un <button>. Se usa
+   * para que un <Link> se vea como boton sin anidar dos elementos interactivos.
+   *
+   * OJO: con `asChild`, `icon` y `loading` se IGNORAN. `Slot` de Radix acepta un
+   * unico hijo y revienta con cualquier cosa que sean dos, incluso `null` mas el
+   * hijo real ("Slot failed to slot onto its children"). Verificado. Asi que el
+   * contenido lo pone el hijo, incluido su propio icono si lo quiere.
+   */
   asChild?: boolean;
 }
 
@@ -57,30 +65,42 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   { className, variant, size, loading, icon, asChild, children, disabled, ...props },
   ref,
 ) {
-  const Comp = asChild ? Slot : "button";
+  const clases = cn(estilos({ variant, size }), className);
+
+  // Rama aparte y no un `Comp` polimorfico: con Slot hay que pasar UN solo hijo, y
+  // `disabled` no existe en un <a>. Intentar unificar las dos ramas es lo que hacia
+  // que `asChild` reventara siempre.
+  if (asChild) {
+    return (
+      <Slot ref={ref} className={clases} {...props}>
+        {children}
+      </Slot>
+    );
+  }
+
   return (
-    <Comp
+    <button
       ref={ref}
-      className={cn(estilos({ variant, size }), className)}
+      className={clases}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       {...props}
     >
       {/*
-        El texto NO cambia cuando `loading` esta activo, y el spinner reemplaza al
+        El texto NO cambia cuando `loading` esta activo, y el spinner REEMPLAZA al
         icono en lugar de sumarse. Las dos cosas por el mismo motivo: un boton que
         pasa de "Generar" a "Generando..." cambia de ancho y empuja el layout, y en
-        una grilla de tarjetas eso hace saltar toda la fila.
+        una grilla de tarjetas eso hace saltar la fila entera.
       */}
       {loading ? (
         <span
           aria-hidden
-          className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent"
+          className="size-3.5 shrink-0 rounded-full border-2 border-current border-t-transparent motion-safe:animate-spin"
         />
       ) : (
         icon
       )}
       {children}
-    </Comp>
+    </button>
   );
 });

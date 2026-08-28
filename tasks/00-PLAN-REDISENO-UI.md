@@ -524,6 +524,40 @@ código**. Si bloquea, la task se detiene y no sigue con suposiciones.
 - **Bloquea:** no
 - **Mientras tanto:** T02 lo migra a los tokens nuevos sin cambiar la estructura, y **anota cuántos
   nodos muestra con el VSL real de 95 clips** para poder decidir con un dato.
+- **DATO MEDIDO POR T02** — contado sobre `vsl-natalia-plan.json` (el VSL real) aplicándole el
+  `buildJobs` de `src/lib/jobs/pipeline.ts`, que es quien decide cuántos jobs existen:
+
+  | Qué | Cuánto |
+  |---|---|
+  | Assets del plan | 3 |
+  | Imágenes → columna "Imagenes base" (`modo != image2image`) | **22** |
+  | Imágenes → columna "Imagenes derivadas" (`modo == image2image`) | **2** |
+  | Clips → columna "Videos" (solo `etiqueta == "IA"`, y los 95 lo son) | **95** |
+  | **Nodos de job** | **119** |
+  | `StageBox` fijos ("Brief → Plan" y "Listo") | 2 |
+  | **Nodos totales en pantalla** | **121** |
+  | Flechas | 4 |
+
+  El número que decide no es 121, es **95 en una sola columna**. Las tres columnas son `flex-col`
+  y la de videos apila los 95 nodos uno abajo del otro: cada nodo mide 20px (`text-label` 16px +
+  `py-0.5`) y el `gap-2` suma 8px, así que la columna mide **~2.700px de alto**
+  (16 de `p-2` + 16 del título + 95×20 + 95×8). El contenedor solo tiene `overflow-x-auto`: **no hay
+  scroll vertical**, así que esa columna estira la página ~2.700px y las otras dos quedan como dos
+  tiras cortas al lado de un chorizo.
+
+  Los ~2.700px son con los tokens aplicándose como corresponde. **Mientras P-09 esté sin arreglar son
+  ~3.400px**, porque `Badge` pierde su `text-label` y cada nodo hereda los 16px del body en lugar de
+  los 12px de la escala. Cuando se resuelva P-09 el número baja al de arriba; el problema de fondo es
+  el mismo. Las flechas, que son lo único que comunica que hay un flujo,
+  quedan centradas verticalmente a ~1.350px de la primera columna, o sea fuera de la pantalla.
+
+  Con eso, la pregunta de P-03 se responde sola en un sentido: **como grafo no sirve con 95 clips**.
+  Lo que sí sirve del componente hoy es que muestra las tres etapas y el estado de cada job de un
+  vistazo, y eso es exactamente una barra de progreso por etapa (3 barras con `hechos/total` y el
+  conteo de fallados y de "te toca a vos"). T02 **no lo cambió** porque eso es rediseñar estructura y
+  no migrar tokens, y porque la vista `flow` no es la default con muchos clips: `pipeline/page.tsx`
+  arranca en `fix` cuando hay más de 24 videos, así que hoy el usuario ve esto solo si lo elige a
+  mano. No urge, pero la recomendación de T02 es la barra por etapa.
 - **Resolución:** _pendiente_
 
 ### P-04 — Decidido por el usuario: no confirmó paleta ni fundación
@@ -536,4 +570,170 @@ código**. Si bloquea, la task se detiene y no sigue con suposiciones.
 - **Mientras tanto:** se avanza con lo decidido. D2 es reversible barato porque todo sale de tokens en
   un solo archivo: cambiar el acento es una línea. D1 no es reversible barato, pero está verificado
   con evidencia concreta de por qué el CLI rompe la app.
+- **Resolución:** _pendiente_
+
+### P-05 — `ui-tokens` no mapea `placeholder` ni `partial`, y T02 no puede agregarlos
+- **Task:** T02 (`StatusBadge`), la encontró; la resuelve T01 o T12
+- **Sección del plan:** §6 regla 1 contra §8 ownership
+- **Archivos:** `src/lib/ui-tokens.ts` (de T01), `src/components/StatusBadge.tsx`
+- **Qué falta:** `StatusBadge` recibe estados de **tres** dominios, no de uno. Los consumidores reales
+  le pasan `job.status` (`JobCard`, `VideoDeck`), `project.status` (home, batch, pipeline, result) y
+  `clip.status` del manifest (result, línea 313). Su unión de props ya era
+  `JobStatus | "placeholder" | "draft" | "running" | "review" | "partial" | "paused"` y no se puede
+  angostar sin romper el typecheck de cuatro pantallas. De esos, `estadoDeJob` cubre cinco y
+  `estadoDeProyecto` cubre seis (con `done` y `failed` idénticos en las dos, así que no hay
+  ambigüedad), pero **`placeholder` y `partial` no están en ninguna**: caen en el `default`, que
+  devuelve el string crudo. O sea que la UI imprimiría `placeholder` y `partial` en la cara del
+  usuario, que es exactamente lo que §6 regla 2 prohíbe.
+- **El choque de reglas:** §6 regla 1 dice que el label se agrega a `ui-tokens`, no a un switch local.
+  §8 dice que `src/lib/ui-tokens.ts` es de T01 y que T02 no lo escribe. Las dos reglas no se pueden
+  cumplir a la vez, y por eso esto está acá y no decidido en silencio.
+- **Bloquea:** no
+- **Mientras tanto:** `StatusBadge` tiene una tabla `SIN_MAPEO` de **exactamente dos entradas**, con el
+  comentario que apunta a esta pregunta: `placeholder` → `attention` "A filmar" (clip que graba una
+  persona, no la IA) y `partial` → `attention` "Incompleto" (proyecto que cerró con jobs fallados).
+  Las dos usan `Tone`, así que **no hay ni un color en el archivo** y `Badge` sigue siendo el único que
+  traduce tono a clases: el problema de divergencia que §6 quiere matar no vuelve. Lo que queda mal es
+  la ubicación, no el valor.
+- **Lo que hay que hacer:** mover esas dos entradas a `ui-tokens.ts` y borrar `SIN_MAPEO`. Es un
+  copy-paste de 2 líneas. Le corresponde a T12 (o a T01 si vuelve a abrir el archivo).
+- **Resolución:** _pendiente_
+
+### P-06 — `Button asChild` de T01 revienta en runtime. Verificado, no inferido
+- **Task:** T02 la encontró; la resuelve T01 o T12. **La van a pisar T04 a T11.**
+- **Sección del plan:** §5
+- **Archivo:** `src/components/ui/Button.tsx` (de T01)
+- **Qué falta:** `Button` declara y documenta la prop `asChild` ("para envolver un `<Link>` sin anidar
+  interactivos"), pero **tira una excepción cada vez que se usa**. El motivo: el cuerpo renderiza
+  siempre dos hijos, `{loading ? spinner : icon}` y `{children}`, y `Slot` de Radix exige uno solo.
+  Con `icon` sin pasar, el primer hijo es `undefined`, y `React.Children.count([undefined, <a/>])` da
+  **2** (`Children.count` cuenta los nulos), así que la rama
+  `count(children) === 1 && isValidElement(children)` de `Slot` no entra y cae en el `throw`.
+- **Cómo se verificó:** renderizando el árbol real con `react-dom/server` contra el `@radix-ui/react-slot`
+  instalado. `<Slot>{undefined}{<a/>}</Slot>` y `<Slot>{<svg/>}{<a/>}</Slot>` tiran las dos
+  `"Slot failed to slot onto its children. Expected a single React element child or Slottable"`;
+  `<Slot>{<a/>}</Slot>` sale bien. No compila mal ni falla el typecheck: revienta al montar.
+- **Por qué importa más de lo que parece:** no falla el `build` porque ninguna pantalla lo usa todavía.
+  La primera task que quiera un link con forma de botón (T04 login, T05 home, cualquier "ver
+  resultado") se lo come, y el síntoma va a parecer un error de la pantalla y no del botón.
+- **Bloquea:** no a T02
+- **Mientras tanto:** T02 no usa `asChild` en ningún lado. El único link con forma de control que
+  necesitaba (el "+ Nuevo" de `ProjectTabs`) es un `<Link>` con clases de token escritas ahí.
+- **El arreglo son 2 líneas** en `Button.tsx`: importar `Slottable` de `@radix-ui/react-slot` y
+  envolver `{children}` con él cuando `asChild` está activo, que es para lo que existe.
+- **Resolución:** _pendiente_
+
+### P-07 — `ProjectTabs` no son pestañas, son rutas, y Radix Tabs lo trata como pestañas
+- **Task:** T02
+- **Sección del plan:** §5 (primitiva `Tabs`), §4 de `T02-componentes-compartidos.md`
+- **Archivos:** `src/components/ProjectTabs.tsx`, `src/components/ui/Tabs.tsx`
+- **Qué falta:** la task pedía montar `ProjectTabs` sobre el `Tabs` de Radix porque "gana navegación
+  con flechas del teclado, que hoy no tiene", y el comentario de `ui/Tabs.tsx` dice que la versión
+  anterior "eran botones sueltos: no se podía navegar con teclado". **Las dos afirmaciones parten de
+  una observación equivocada**: eran `<Link>` de Next, o sea `<a href>`, que ya se navegan con Tab y
+  se activan con Enter. Lo que se gana es menos de lo que decía el plan.
+- **Y lo que se paga, medido renderizando el árbol real:** cada pestaña sale
+  `<a role="tab" aria-selected aria-controls="radix-...-content-/project/x/result">`, y **ese
+  `aria-controls` apunta a un `tabpanel` que no existe**, porque el "panel" de estas pestañas es una
+  ruta entera de Next, no un nodo del DOM. Un lector de pantalla anuncia "pestaña 1 de 2,
+  seleccionada" y después no hay panel que abrir. Aparte, Radix le mete `type="button"` al hijo
+  (viene de `Primitive.button`), que en un `<a>` es un atributo inválido.
+- **Bloquea:** no
+- **Mientras tanto:** T02 hizo lo que pedía la task —está montado sobre el `Tabs` de T01, controlado
+  por `usePathname()`, con `activationMode="manual"` para que la flecha mueva el foco y no navegue
+  sola— y arregló lo que estaba a su alcance: `type={undefined}` en el `<Link>` saca el atributo
+  inválido (verificado: el hijo gana el merge de props) y `aria-current="page"` marca la ruta activa
+  de la forma correcta. El `aria-controls` colgado **queda**: sacarlo o arreglarlo es cambiar la
+  primitiva de T01 o dejar de usarla, y ninguna de las dos la decide T02.
+- **Las dos salidas, para que la elija quien revise:** (a) `ProjectTabs` vuelve a ser un `<nav>` con
+  `<Link>` y `aria-current`, copiando las clases de `TabsList`/`TabsTrigger` para que se vea igual
+  —correcto en HTML y ARIA, pero duplica las clases de la primitiva, que es justo lo que el módulo
+  quiere matar; (b) `ui/Tabs.tsx` gana una variante de navegación que renderiza `<nav>` + links con la
+  misma pinta, y `ProjectTabs` la usa —una sola fuente de estilos y ARIA correcto, pero le agrega
+  superficie a un contrato congelado. T02 recomienda **(b)**, para T12.
+- **Resolución:** _pendiente_
+
+### P-08 — La verificación 3 de T02 no puede dar limpia: la ensucia un comentario de T01
+- **Task:** T02 la encontró; la resuelve T12
+- **Sección del plan:** §9, y §11 de `T02-componentes-compartidos.md`
+- **Archivo:** `src/components/ui/Badge.tsx` (de T01)
+- **Qué falta:** el chequeo `grep -rn "awaiting_approval" src/components/ | grep -v "ui-tokens"` tiene
+  que dar cero líneas. Da una: `ui/Badge.tsx:8`, que menciona el estado **en un comentario** contando
+  por qué existe el archivo. No es un switch ni código: el filtro `grep -v "ui-tokens"` solo saca las
+  líneas que contienen el texto "ui-tokens", y esa no lo contiene.
+- **Bloquea:** no. Los 8 archivos de T02 dan cero:
+  `grep -rn "awaiting_approval" <los 8 archivos de T02>` → sin resultados. T02 reescribió su propio
+  comentario de `StatusBadge` para no nombrar el estado justamente para que el grep pruebe algo.
+- **Mientras tanto:** queda esa línea. T02 no puede editar `src/components/ui/**` (§8).
+- **El arreglo:** una de dos, y las dos son de T12. O el comentario de `Badge.tsx` deja de nombrar el
+  estado (como hizo `StatusBadge`), o el chequeo pasa a ser
+  `grep -rn "awaiting_approval" src/components/ --include=*.tsx | grep -v "^src/components/ui/"`, que
+  es lo que el chequeo quiere decir en realidad: **ninguna pantalla ni componente de dominio conoce
+  los nombres crudos de los estados.**
+- **Resolución:** _pendiente_
+
+### P-09 — `cn()` le come el tamaño o el color a las 10 primitivas. **Es la más grave de las cuatro**
+- **Task:** T02 la encontró; la resuelve T01 o T12. **Afecta a las 11 tasks y a toda la app.**
+- **Sección del plan:** §4 (escala tipográfica), §5 (primitivas), D1, D13
+- **Archivos:** `src/lib/cn.ts` y `tailwind.config.ts` (los dos de T01)
+- **Qué pasa:** los tokens de `fontSize` se llaman `label`, `body`, `title` y `display`, y los de color
+  se llaman `fg`, `fg-dim`, `accent`, `ok`, `danger`, `info`, `bg`, `on-accent`. Para
+  `tailwind-merge` **las dos familias son la misma cosa**: solo ve `text-<algo>` donde `<algo>` no es
+  un tamaño conocido (`xs`, `sm`, `lg`…), así que mete `text-label` y `text-fg-dim` en el mismo grupo
+  de conflicto y **se queda con el último**. No hay forma de que lo adivine: no lee
+  `tailwind.config.ts`.
+
+  El resultado es que **cada primitiva pierde el tamaño o pierde el color**, según el orden en que
+  estén escritos. Verificado corriendo el `cn()` real de la app con el `tailwind-merge` 2.6.1
+  instalado:
+
+  | Primitiva | Lo que sale de `cn()` | Qué se perdió |
+  |---|---|---|
+  | `Badge` | `rounded-sm px-1.5 py-0.5 font-medium bg-accent/10 text-accent` | **`text-label`** → hereda el tamaño del padre |
+  | `TabsTrigger` | `px-3 py-2 font-medium text-fg-dim` | **`text-body`** |
+  | `Field` (label) | `mb-1 block font-medium text-fg-dim` | **`text-label`** |
+  | `EmptyState` (título) | `font-semibold text-fg` | **`text-title`** |
+  | `Textarea` | `… resize-y font-mono text-label border-border` | **`text-fg`** (el color) |
+  | `Button primary` | `… bg-fg hover:bg-fg-dim h-9 px-3.5 text-body` | **`text-bg`** (el color) |
+
+- **Por qué esto es lo más urgente de las cuatro:** la última fila. `Button variant="primary"` es
+  `bg-fg` (#fafafa, casi blanco) con `text-bg` (#09090b, casi negro), y **`text-bg` se cae**. El botón
+  queda con fondo casi blanco y texto heredado del body, que es `text-fg`, o sea casi blanco también:
+  **botón primario con el texto invisible, y sin ningún error en consola.** Es exactamente el modo de
+  falla que D1 describe para el CLI de shadcn ("los botones invisibles y sin ningún error"), pero
+  entró por otra puerta. Hoy no explotó solo porque ninguna pantalla migrada usa todavía un primario:
+  T02 usa `ghost` y T03 hace lo suyo. **La primera pantalla que ponga un botón primario lo publica.**
+- **Y de paso mata a D13:** el sentido de la escala de 4 niveles era "3 niveles reales de tamaño y usar
+  peso y color para separar". Con `text-label`, `text-body` y `text-title` cayéndose de las
+  primitivas, todo hereda el tamaño del padre y la jerarquía tipográfica no existe. Se comprobó en el
+  HTML servido: la pestaña activa de `ProjectTabs` sale con
+  `class="… px-3 py-2 font-medium text-fg-dim …"`, sin `text-body`.
+- **Bloquea:** no a T02 (los 8 archivos compilan y renderizan), pero **es un defecto de producción**.
+- **Mientras tanto:** T02 no lo puede evitar ni mitigar. Pasar el tamaño por `className` no sirve:
+  `className` va último en el `cn()` de la primitiva, así que ganaría el tamaño y se caería el color,
+  que es peor. El arreglo tiene que estar en `cn.ts`.
+- **El arreglo, verificado:** en `src/lib/cn.ts`, cambiar `twMerge` por una instancia que conozca los
+  tokens del proyecto.
+
+  ```ts
+  import { extendTailwindMerge } from "tailwind-merge";
+
+  // tailwind-merge no lee tailwind.config.ts: hay que decirle que `label`, `body`,
+  // `title` y `display` son TAMAÑOS y no colores. Sin esto los mete en el mismo grupo
+  // que text-fg / text-accent y se queda con el ultimo, asi que cada primitiva pierde
+  // el tamaño o pierde el color.
+  const twMerge = extendTailwindMerge({
+    extend: {
+      classGroups: { "font-size": [{ text: ["label", "body", "title", "display"] }] },
+    },
+  });
+  ```
+
+  Probado con el `tailwind-merge` instalado: las seis filas de la tabla quedan completas
+  (`… bg-fg text-bg … text-body`, `… text-label … text-accent`) y lo que **sí** tiene que colapsar
+  sigue colapsando: `text-body text-title` → `text-title`, `text-fg text-accent` → `text-accent`,
+  `p-2 p-4` → `p-4`.
+- **Cómo evitar que vuelva:** el chequeo es de una línea y le corresponde a T12 —
+  `node -e` con el `cn()` real sobre `cn("bg-fg text-bg", "text-body")` tiene que devolver un string
+  que contenga `text-bg` **y** `text-body`. Hoy devuelve solo `text-body`.
 - **Resolución:** _pendiente_

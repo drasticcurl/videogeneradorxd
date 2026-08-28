@@ -1,21 +1,93 @@
 "use client";
 /**
- * Tarjeta de job con flujo de aprobacion:
- *  - awaiting_approval (imagen): muestra las variantes candidatas, elegís una y Aprobás.
- *  - awaiting_approval (video): muestra el video y Aprobás.
- *  - Acciones: Aprobar / Regenerar / Editar.
- *    Al "Editar" se PRECARGA el prompt actual (el que se usó para generar), el diálogo,
- *    la duración y la resolución, y se muestra un selector de modelo. Desde el editor
- *    podés:
- *      · "Guardar sin regenerar": solo persiste los cambios (texto/tiempo/diálogo) para
- *        poder revisarlos y controlarlos ANTES de generar en batch (no consume cuota).
+ * Tarjeta de un job. El componente mas reusado de la app: el pipeline de un VSL la
+ * monta hasta 95 veces en una sola pantalla.
+ *
+ * ─── QUE COMUNICA, EN ORDEN DE PRIORIDAD (§3 de T03) ─────────────────────────
+ *
+ *   1. el medio (imagen o video): es el contenido, se queda con el espacio
+ *   2. el estado, con icono ADEMAS de color (solo color es inaccesible)
+ *   3. el label del job, en mono porque es un identificador
+ *   4. las variantes, con la elegida en borde de acento
+ *   5. las acciones, agrupadas y con la primaria distinguida
+ *   6. el prompt, colapsado
+ *
+ * Antes todo tenia el mismo peso visual (todo `text-xs`, todo gris) y por eso no se
+ * leia ninguna de las seis cosas.
+ *
+ * ─── EL FLUJO DE APROBACION NO CAMBIO ────────────────────────────────────────
+ *
+ *  - imagen esperando decision: se ven las candidatas, elegis una y Aprobas.
+ *  - video esperando decision: se ve el video y Aprobas.
+ *  - "Editar" PRECARGA el prompt actual (el que se uso para generar), el dialogo, la
+ *    duracion, la resolucion y el modelo efectivo. Desde el editor:
+ *      · "Guardar sin regenerar": solo persiste los cambios (texto/tiempo/dialogo)
+ *        para poder revisarlos ANTES de generar en batch. No consume cuota.
  *      · "Guardar y regenerar": guarda y vuelve a generar ese item puntual.
+ *
+ * ─── DOS COSAS QUE NO SE TOCAN ───────────────────────────────────────────────
+ *
+ * 1. `Props` es CONTRATO: cuatro pantallas la usan, entre ellas las tres de mayor
+ *    riesgo del proyecto (review, videos, pipeline). No se le agrega ni se le saca
+ *    un campo desde este archivo.
+ * 2. El cache-busting `?v=<updatedAt>` y el `key={url}` de los medios. Estan por un
+ *    bug real: sin eso, al regenerar una imagen el browser servia la vieja de cache
+ *    y la regeneracion parecia no haber hecho nada. Ver `withVer` mas abajo.
+ *
+ * Este archivo NO decide colores ni estados: el mapeo status -> tono/label sale de
+ * `estadoDeJob` y de nadie mas (§6 del plan). Por eso no hay ni un literal de status
+ * ni un color en todo el archivo.
+ *
+ * ─── NOTA HISTORICA sobre `cn()` ────────────────────────────────────────────
+ *
+ * Cuando se escribio esta tarjeta, `cn()` se comia el tamaño o el color de
+ * cualquier string que mezclara los dos: la escala tipografica del proyecto usa
+ * nombres propios (label/body/title/display) y tailwind-merge, que no lee
+ * tailwind.config.ts, los tomaba como COLOR de texto. El caso peor era el primario
+ * de Button (`bg-fg text-bg`), que perdia el color y quedaba invisible.
+ *
+ * YA ESTA ARREGLADO en `src/lib/cn.ts` con `extendTailwindMerge`, y hay un comando
+ * que lo cuida: `node tasks/_verificacion-cn.mjs`. Los parches que habia acá se
+ * borraron. Se deja escrito porque si alguien agrega un tamaño a `fontSize` sin
+ * declararlo en `cn.ts`, el sintoma vuelve exactamente igual: componentes que
+ * compilan, pasan el typecheck y no se ven.
  */
-import { useEffect, useState } from "react";
-import { StatusBadge } from "./StatusBadge";
-import { buildVeoVideoPrompt } from "@/lib/prompts";
+import {
+  ArrowCounterClockwise,
+  ArrowsClockwise,
+  Check,
+  CheckCircle,
+  Clock,
+  CursorClick,
+  DownloadSimple,
+  FastForward,
+  FilmSlate,
+  FloppyDisk,
+  type Icon,
+  ImageSquare,
+  Info,
+  LockSimple,
+  PencilSimple,
+  Spinner,
+  WarningCircle,
+} from "@phosphor-icons/react";
+import { memo, useEffect, useMemo, useState } from "react";
+
+import {
+  Badge,
+  Button,
+  Card,
+  Dialog,
+  DialogContent,
+  Select,
+  Textarea,
+  type SelectOption,
+} from "@/components/ui";
+import { cn } from "@/lib/cn";
 import { DEFAULT_VEO_PROMPT_TEMPLATE } from "@/lib/promptTemplate";
+import { buildVeoVideoPrompt } from "@/lib/prompts";
 import type { JobRecord } from "@/lib/types";
+import { estadoDeJob, type Tone } from "@/lib/ui-tokens";
 
 interface ModelOption {
   id: string;
@@ -66,8 +138,66 @@ function fileUrl(projectId: string, rel: string) {
 }
 
 const DURATION_OPTIONS = [4, 6, 8];
+const RESOLUCIONES_DEFAULT = ["720p", "1080p"];
 
-export function JobCard({
+const DURACION_OPCIONES: ReadonlyArray<SelectOption<string>> = DURATION_OPTIONS.map(
+  (d) => ({ value: String(d), label: `${d}s` }),
+);
+
+/**
+ * Un icono por tono, para que el estado no dependa SOLO del color: un daltonismo
+ * rojo-verde no distingue "Listo" de "Fallo" si lo unico que cambia es el tinte.
+ * Las claves son los tonos de `ui-tokens`, no los status: el mapeo de status vive
+ * en un solo lugar y no se duplica acá.
+ */
+const ICONO_DE_TONO: Record<Tone, Icon> = {
+  neutral: Clock,
+  info: Spinner,
+  attention: CursorClick,
+  ok: CheckCircle,
+  danger: WarningCircle,
+};
+
+/**
+ * La plantilla del prompt de Veo se pide UNA vez por carga de pagina, no una por
+ * tarjeta. El pipeline de un VSL monta hasta 95 tarjetas de video y cada una hacia
+ * su propio GET a `/api/prompt-template`: misma URL, mismo momento (al montar), 95
+ * veces. Compartiendo la promesa quedan en una sola request.
+ *
+ * El endpoint, el metodo y el momento en que se pide son los de antes. Lo unico que
+ * cambia es que no se repite.
+ *
+ * Contra conocida: si alguien edita `prompts/veo-video-prompt.md` con la pagina
+ * abierta, el texto nuevo entra al recargar. Antes tampoco entraba en las tarjetas
+ * ya montadas, asi que no se pierde nada.
+ */
+let plantillaEnVuelo: Promise<string | null> | null = null;
+
+function cargarPlantilla(): Promise<string | null> {
+  if (!plantillaEnVuelo) {
+    plantillaEnVuelo = fetch("/api/prompt-template")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: unknown) => {
+        const contenido = (d as { content?: unknown } | null)?.content;
+        return typeof contenido === "string" && contenido.trim() ? contenido : null;
+      })
+      .catch(() => null); // si falla, queda el DEFAULT embebido
+  }
+  return plantillaEnVuelo;
+}
+
+/**
+ * `memo` porque el padre la renderiza en listas de hasta 95 items y el polling
+ * actualiza el store cada pocos segundos.
+ *
+ * OJO, y esto le toca al padre, no acá: hoy el pipeline arma `handlers` como un
+ * objeto literal con arrow functions nuevas en cada render, asi que la comparacion
+ * shallow de `memo` falla siempre y las 95 tarjetas se vuelven a renderizar igual.
+ * El memo queda puesto porque es correcto y gratis, pero no rinde hasta que la
+ * pantalla que la monta estabilice `onApprove`/`onRegenerate`/`onChangePrompt`/
+ * `onExtend` con `useCallback` y el objeto `meta` con `useMemo`.
+ */
+export const JobCard = memo(function JobCard({
   job,
   projectId,
   currentPrompt,
@@ -95,6 +225,9 @@ export function JobCard({
   // Override del prompt final (avanzado): si esta activo, se manda TAL CUAL a Veo.
   const [overrideOn, setOverrideOn] = useState(false);
   const [finalPromptText, setFinalPromptText] = useState("");
+  // El <details> del prompt monta su contenido recien cuando se abre: 95 tarjetas
+  // por 2.000 caracteres de prompt son 190 KB de nodos de texto que nadie mira.
+  const [promptAbierto, setPromptAbierto] = useState(false);
   // Texto de la plantilla del prompt (prompts/veo-video-prompt.md). Arranca con el
   // DEFAULT embebido y se actualiza con el .md real para que el preview del editor
   // coincida con lo que ejecuta el server.
@@ -103,23 +236,29 @@ export function JobCard({
   useEffect(() => {
     if (job.type === "image") return; // la plantilla solo aplica a videos
     let alive = true;
-    fetch("/api/prompt-template")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (alive && d && typeof d.content === "string" && d.content.trim()) {
-          setTemplateText(d.content);
-        }
-      })
-      .catch(() => {
-        /* si falla, queda el DEFAULT embebido */
-      });
+    cargarPlantilla().then((texto) => {
+      if (alive && texto) setTemplateText(texto);
+    });
     return () => {
       alive = false;
     };
   }, [job.type]);
 
   const isImage = job.type === "image";
-  const awaiting = job.status === "awaiting_approval";
+
+  // ─── El estado sale de `estadoDeJob` y de ningun switch local ───────────────
+  // Los tres derivados de abajo se leen del tono, no del string de status: asi este
+  // archivo no repite el mapeo (§6.1 del plan) y si mañana aparece un status nuevo,
+  // se agrega en un solo lugar.
+  //   attention -> el job espera una decision del usuario
+  //   animado   -> la maquina esta trabajando; es lo UNICO que se anima
+  //   danger    -> el job fallo de verdad
+  const estado = estadoDeJob(job.status);
+  const IconoEstado = ICONO_DE_TONO[estado.tone];
+  const esperaDecision = estado.tone === "attention";
+  const trabajando = estado.animado;
+  const fallo = estado.tone === "danger";
+
   // Cache-busting: la URL cambia cuando el job se actualiza (regenera/aprueba), asi el
   // navegador NO muestra el video/imagen viejo cacheado (el archivo va al mismo path).
   const ver = encodeURIComponent(job.updatedAt ?? "");
@@ -131,6 +270,29 @@ export function JobCard({
 
   // El modelo efectivo de este job: override > modelo usado > modelo del proyecto.
   const effectiveModel = job.modelOverride || job.model || projectModel;
+
+  // Menos candidatas que `variants` es un estado LEGITIMO: la cuota del modelo
+  // rechazo una variante y el pipeline lo dejo escrito en `job.error`. El job sigue
+  // siendo aprobable, asi que se muestra el conteo real y NO se pinta como fallado.
+  const candidatas = job.candidates.length;
+  const mostrarConteo = isImage && job.variants > 1 && candidatas > 0;
+  const faltanVariantes = mostrarConteo && candidatas < job.variants;
+
+  const opcionesResolucion = useMemo<ReadonlyArray<SelectOption<string>>>(
+    () => (resolutionOptions ?? RESOLUCIONES_DEFAULT).map((r) => ({ value: r, label: r })),
+    [resolutionOptions],
+  );
+
+  // Si el modelo efectivo no esta en el catalogo (quedo uno viejo guardado en el
+  // job), se agrega como opcion: sin esto el selector arranca en blanco y guardar
+  // pisaria el modelo con otro sin que el usuario lo haya elegido.
+  const opcionesModelo = useMemo<ReadonlyArray<SelectOption<string>>>(() => {
+    const base = modelOptions.map((o) => ({ value: o.id, label: o.label }));
+    if (modelChoice && !base.some((o) => o.value === modelChoice)) {
+      base.push({ value: modelChoice, label: modelChoice });
+    }
+    return base;
+  }, [modelOptions, modelChoice]);
 
   function openEditor() {
     // PRECARGAMOS prompt + dialogo + duracion + resolucion + modelo efectivo.
@@ -188,51 +350,63 @@ export function JobCard({
     setEditing(false);
   }
 
-  return (
-    <div className="flex flex-col gap-2 rounded-lg border border-slate-700 bg-panel p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-slate-100">{job.label}</div>
-          <div className="text-xs text-slate-500">
-            {isImage ? "imagen" : "video"}
-            {effectiveModel ? ` · ${effectiveModel}` : ""}
-            {job.attempts > 0 && ` · intento ${job.attempts}/${job.maxAttempts}`}
-            {job.locked && " · 🔒"}
-          </div>
-        </div>
-        <StatusBadge status={job.status} />
-      </div>
+  const IconoTipo = isImage ? ImageSquare : FilmSlate;
+  const tipoLabel = isImage ? "imagen" : "video";
 
-      {/* Preview / candidatos */}
-      <div className="overflow-hidden rounded-md bg-ink">
-        {awaiting && isImage && job.candidates.length > 0 ? (
+  return (
+    <Card flush className="flex flex-col overflow-hidden">
+      {/* ─── 1. El contenido primero: candidatas o preview ─────────────────── */}
+      <div className="bg-bg">
+        {esperaDecision && isImage && job.candidates.length > 0 ? (
           <div
-            className={`grid gap-1 p-1 ${
-              job.candidates.length > 1 ? "grid-cols-2" : "grid-cols-1"
-            }`}
+            role="group"
+            aria-label={`Variantes de ${job.label}`}
+            className={cn(
+              "grid gap-1 p-1",
+              job.candidates.length > 1 ? "grid-cols-2" : "grid-cols-1",
+            )}
           >
-            {job.candidates.map((c) => (
-              <button
-                key={c.index}
-                onClick={() => setSelected(c.index)}
-                className={`relative overflow-hidden rounded ${
-                  chosen === c.index ? "ring-2 ring-emerald-400" : "ring-1 ring-slate-700"
-                }`}
-                title={`Variante ${c.index}`}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={withVer(fileUrl(projectId, c.file))}
-                  alt={`v${c.index}`}
-                  className="aspect-[9/16] w-full object-cover"
-                />
-                {chosen === c.index && (
-                  <span className="absolute bottom-1 right-1 rounded bg-emerald-500 px-1 text-[10px] font-bold text-white">
-                    ✓
+            {job.candidates.map((c) => {
+              const elegida = chosen === c.index;
+              const url = withVer(fileUrl(projectId, c.file));
+              return (
+                <button
+                  key={c.index}
+                  type="button"
+                  onClick={() => setSelected(c.index)}
+                  aria-pressed={elegida}
+                  aria-label={`Variante ${c.index}${elegida ? " (elegida)" : ""}`}
+                  title={`Variante ${c.index}`}
+                  className={cn(
+                    "relative overflow-hidden rounded-sm transition-shadow",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                    elegida
+                      ? "ring-2 ring-inset ring-accent"
+                      : "ring-1 ring-inset ring-divider hover:ring-border",
+                  )}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    key={url}
+                    src={url}
+                    alt={`Variante ${c.index} de ${job.label}`}
+                    loading="lazy"
+                    decoding="async"
+                    className="aspect-[9/16] w-full object-cover"
+                  />
+                  {/* string plano, no cn(): mezcla tamaño con color. Ver cabecera. */}
+                  <span
+                    className={
+                      "absolute bottom-1 right-1 inline-flex items-center gap-0.5 " +
+                      "rounded-sm px-1 py-px font-mono text-label font-semibold tnum " +
+                      (elegida ? "bg-accent text-on-accent" : "bg-bg/80 text-fg-dim")
+                    }
+                  >
+                    {elegida && <Check aria-hidden className="size-3" />}v{c.index}
                   </span>
-                )}
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         ) : (
           <div className="flex aspect-[9/16] max-h-56 items-center justify-center">
@@ -243,302 +417,426 @@ export function JobCard({
                   key={approvedUrl}
                   src={approvedUrl}
                   alt={job.label}
+                  loading="lazy"
+                  decoding="async"
                   className="h-full w-full object-contain"
                 />
               ) : (
+                /*
+                  preload="none" y sin autoplay, a proposito: la pantalla del VSL monta
+                  hasta 95 clips y con preload="metadata" el browser dispara 95 requests
+                  de rango al abrir la pagina. El video se baja cuando el usuario le da
+                  play, no antes.
+                */
                 <video
                   key={approvedUrl}
                   src={approvedUrl}
                   controls
-                  preload="metadata"
+                  preload="none"
+                  playsInline
                   className="h-full w-full object-contain"
                 />
               )
-            ) : job.status === "generating" ? (
-              <span className="text-xs text-amber-300">generando…</span>
-            ) : job.status === "failed" ? (
-              <span className="px-2 text-center text-xs text-red-300">error</span>
             ) : (
-              <span className="text-xs text-slate-600">en cola…</span>
+              <span
+                className={
+                  "flex flex-col items-center gap-1.5 px-2 text-center text-label " +
+                  (fallo ? "text-danger" : "text-fg-dim")
+                }
+              >
+                {trabajando ? (
+                  <>
+                    <Spinner
+                      aria-hidden
+                      className="size-5 motion-safe:animate-spin"
+                    />
+                    generando…
+                  </>
+                ) : fallo ? (
+                  <>
+                    <WarningCircle aria-hidden className="size-5" />
+                    no se generó
+                  </>
+                ) : (
+                  <>
+                    <IconoTipo aria-hidden className="size-5" />
+                    en cola…
+                  </>
+                )}
+              </span>
             )}
           </div>
         )}
       </div>
 
-      {job.error && (
-        <p className="line-clamp-3 rounded bg-red-500/10 p-1.5 text-[11px] text-red-300">
-          {job.error}
-        </p>
-      )}
-
-      {/* Editor de prompt en MODAL grande: se ve TODO el prompt completo. */}
-      {editing && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setEditing(false)}
-        >
-          <div
-            className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-3 overflow-y-auto rounded-xl border border-slate-700 bg-panel p-5 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-100">
-                Editar · <span className="text-slate-400">{job.label}</span>
-              </h3>
-              <span className="rounded bg-slate-700 px-2 py-0.5 text-xs text-slate-300">
-                {isImage ? "imagen" : "video"}
+      {/* ─── 2 y 3. Estado + identificador ─────────────────────────────────── */}
+      <div className="flex min-w-0 flex-col gap-2 p-2.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p
+              className="truncate font-mono text-body font-medium text-fg"
+              title={job.label}
+            >
+              {job.label}
+            </p>
+            <p
+              className="flex items-center gap-1 truncate text-label text-fg-dim"
+              title={effectiveModel ? `${tipoLabel} · ${effectiveModel}` : tipoLabel}
+            >
+              <IconoTipo aria-hidden className="size-3.5 shrink-0" />
+              <span className="truncate">
+                {tipoLabel}
+                {effectiveModel ? ` · ${effectiveModel}` : ""}
               </span>
-            </div>
+            </p>
+          </div>
+          <Badge tone={estado.tone} className="shrink-0 whitespace-nowrap">
+            <IconoEstado
+              aria-hidden
+              className={cn(
+                "size-3.5 shrink-0",
+                estado.animado && "motion-safe:animate-spin",
+              )}
+            />
+            {estado.label}
+          </Badge>
+        </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs uppercase tracking-wide text-slate-400">
-                {isImage
-                  ? "Prompt de la imagen (editá lo que quieras)"
-                  : "Prompt visual del video (cámara, acción, escena)"}
-              </label>
-              <textarea
+        {/* ─── 4. Variantes, reintentos y candado ──────────────────────────── */}
+        {(mostrarConteo || job.attempts > 1 || job.locked) && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {mostrarConteo && (
+              <Badge
+                tone={faltanVariantes ? "attention" : "neutral"}
+                className="tnum"
+                // El conteo real, no el pedido. Si faltan, se resalta pero NO se
+                // pinta como error: el job es aprobable igual.
+              >
+                {candidatas} de {job.variants} variantes
+              </Badge>
+            )}
+            {/*
+              `attempts > 1` es la UNICA señal de que hubo un 429 y la cola reintento.
+              Antes no se veia en ningun lado y el job parecia haber salido derecho.
+            */}
+            {job.attempts > 1 && (
+              <Badge
+                tone="neutral"
+                className="tnum"
+              >
+                <ArrowsClockwise aria-hidden className="size-3 shrink-0" />
+                intento {job.attempts}/{job.maxAttempts}
+              </Badge>
+            )}
+            {job.locked && (
+              <span
+                className="inline-flex items-center gap-1 text-label text-fg-dim"
+                title="Aprobado y bloqueado: 'reanudar' no lo vuelve a generar"
+              >
+                <LockSimple aria-hidden className="size-3.5" />
+                bloqueado
+              </span>
+            )}
+          </div>
+        )}
+
+        {/*
+          `job.error` puede estar poblado en un job que NO fallo: el pipeline lo usa
+          como nota informativa ("Salieron 1/2 variantes"). El estado sale de
+          `job.status`, nunca de `error`, asi que el tinte de este bloque depende del
+          tono del estado y no de que haya texto acá.
+        */}
+        {job.error && (
+          <p
+            title={job.error}
+            className={
+              "flex items-start gap-1.5 rounded-sm p-1.5 text-label " +
+              (fallo ? "bg-danger/10 text-danger" : "bg-surface-hi text-fg-dim")
+            }
+          >
+            {fallo ? (
+              <WarningCircle aria-hidden className="mt-px size-3.5 shrink-0" />
+            ) : (
+              <Info aria-hidden className="mt-px size-3.5 shrink-0" />
+            )}
+            <span className="line-clamp-3">{job.error}</span>
+          </p>
+        )}
+
+        {/* ─── 6. El prompt, colapsado ─────────────────────────────────────── */}
+        {(currentPrompt || currentDialogue) && (
+          <details
+            className="rounded-sm bg-bg"
+            onToggle={(e) => setPromptAbierto(e.currentTarget.open)}
+          >
+            <summary
+              className={
+                "cursor-pointer select-none rounded-sm px-2 py-1 text-label text-fg-dim " +
+                "transition-colors hover:text-fg " +
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              }
+            >
+              Prompt
+            </summary>
+            {promptAbierto && (
+              <div className="max-h-44 space-y-2 overflow-auto px-2 pb-2">
+                {currentPrompt && (
+                  <pre className="whitespace-pre-wrap break-words font-mono text-label text-fg-dim">
+                    {currentPrompt}
+                  </pre>
+                )}
+                {currentDialogue && (
+                  <div>
+                    <p className="text-label font-medium text-fg-dim">Diálogo</p>
+                    <pre className="whitespace-pre-wrap break-words font-mono text-label text-fg-dim">
+                      {currentDialogue}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </details>
+        )}
+
+        {/*
+          Resolucion del clip (solo videos): cambia el plan, NO regenera. Es la misma
+          accion que tenia la tarjeta antes, con el mismo callback.
+          El label queda visible: un combo que solo dice "720p" al lado de un video no
+          se entiende, y el original tambien lo mostraba. Ancho acotado para que un
+          control secundario no ocupe todo el ancho de la tarjeta.
+        */}
+        {!isImage && onChangeResolution && (
+          <Select
+            label="Resolución"
+            value={resolution ?? "720p"}
+            onValueChange={(r) => onChangeResolution(job.refId, r)}
+            options={opcionesResolucion}
+            disabled={trabajando}
+            className="max-w-[8rem]"
+          />
+        )}
+
+        {/* ─── 5. Acciones: primaria distinguida, el resto en dos niveles ──── */}
+        <div className="flex flex-wrap gap-1.5">
+          {esperaDecision && (
+            <Button
+              size="sm"
+              variant="primary"
+              icon={<Check aria-hidden className="size-3.5" />}
+              onClick={() =>
+                onApprove(job.id, isImage ? chosen ?? undefined : undefined)
+              }
+            >
+              Aprobar
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<ArrowsClockwise aria-hidden className="size-3.5" />}
+            onClick={() => onRegenerate(job.id)}
+            title="Vuelve a generar este item. Sirve tambien para destrabar uno colgado en 'generando'."
+          >
+            Regenerar
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<PencilSimple aria-hidden className="size-3.5" />}
+            onClick={openEditor}
+            disabled={trabajando}
+            title="Editá prompt, diálogo, tiempo y resolución. Podés guardar sin regenerar para controlarlo antes del batch."
+          >
+            Editar
+          </Button>
+          {!isImage && onExtend && job.outputPath && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<FastForward aria-hidden className="size-3.5" />}
+              onClick={() => onExtend(job.id)}
+              disabled={trabajando}
+              title="Genera 7s más de continuación y los une al final del video"
+            >
+              Extender +7s
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/*
+        Editor en dialogo grande, para ver TODO el prompt. Se monta recien cuando se
+        abre: 95 Radix Dialog dormidos son 95 arboles de contexto que nadie usa.
+      */}
+      {editing && (
+        <Dialog open onOpenChange={(abierto) => !abierto && setEditing(false)}>
+          <DialogContent
+            title={`Editar · ${job.label}`}
+            description={
+              effectiveModel ? `${tipoLabel} · ${effectiveModel}` : tipoLabel
+            }
+            className="w-[min(52rem,calc(100vw-2rem))] max-h-[90vh] overflow-y-auto"
+          >
+            <div className="flex flex-col gap-4">
+              <Textarea
+                label={
+                  isImage
+                    ? "Prompt de la imagen (editá lo que quieras)"
+                    : "Prompt visual del video (cámara, acción, escena)"
+                }
+                hint={`${promptText.length} caracteres`}
                 value={promptText}
                 onChange={(e) => setPromptText(e.target.value)}
                 placeholder="Prompt…"
                 spellCheck={false}
-                className="code min-h-[240px] w-full resize-y whitespace-pre-wrap break-words rounded-lg border border-slate-600 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
+                mono
+                rows={10}
               />
-              <span className="text-[11px] text-slate-500">
-                {promptText.length} caracteres
-              </span>
-            </div>
 
-            {/* Solo videos: el DIALOGO que dice la persona (lo que se escucha). */}
-            {!isImage && (
-              <div className="flex flex-col gap-1">
-                <label className="text-xs uppercase tracking-wide text-slate-400">
-                  Diálogo (lo que dice la persona · es-AR)
-                </label>
-                <textarea
+              {/* Solo videos: el DIALOGO que dice la persona (lo que se escucha). */}
+              {!isImage && (
+                <Textarea
+                  label="Diálogo (lo que dice la persona · es-AR)"
+                  hint={`${dialogueText.length} caracteres`}
                   value={dialogueText}
                   onChange={(e) => setDialogueText(e.target.value)}
                   placeholder="Texto hablado… (vacío = b-roll mudo)"
                   spellCheck={false}
-                  className="min-h-[120px] w-full resize-y whitespace-pre-wrap break-words rounded-lg border border-slate-600 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
+                  rows={4}
                 />
-                <span className="text-[11px] text-slate-500">
-                  {dialogueText.length} caracteres
-                </span>
-              </div>
-            )}
+              )}
 
-            {/* Solo videos: duracion (4/6/8) + resolucion, campo por campo. */}
-            {!isImage && (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs uppercase tracking-wide text-slate-400">
-                    Duración (segundos)
-                  </label>
-                  <select
-                    value={durationChoice}
-                    onChange={(e) => setDurationChoice(Number(e.target.value))}
-                    className="rounded-lg border border-slate-600 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
-                  >
-                    {DURATION_OPTIONS.map((d) => (
-                      <option key={d} value={d}>
-                        {d}s
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs uppercase tracking-wide text-slate-400">
-                    Resolución
-                  </label>
-                  <select
-                    value={resChoice}
-                    onChange={(e) => setResChoice(e.target.value)}
-                    className="rounded-lg border border-slate-600 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
-                  >
-                    {(resolutionOptions ?? ["720p", "1080p"]).map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            )}
-
-            {/* Solo videos: OVERRIDE del prompt final que se ejecuta en Veo (avanzado). */}
-            {!isImage && (
-              <div className="flex flex-col gap-2 rounded-lg border border-amber-600/40 bg-amber-500/5 p-3">
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-amber-100">
-                  <input
-                    type="checkbox"
-                    checked={overrideOn}
-                    onChange={(e) => toggleOverride(e.target.checked)}
-                    className="h-4 w-4"
+              {/* Solo videos: duracion (4/6/8) + resolucion, campo por campo. */}
+              {!isImage && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Select
+                    label="Duración (segundos)"
+                    value={String(durationChoice)}
+                    onValueChange={(v) => setDurationChoice(Number(v))}
+                    options={DURACION_OPCIONES}
                   />
-                  Editar manualmente el prompt final que se ejecuta (avanzado)
-                </label>
-                {overrideOn ? (
-                  <>
-                    <p className="text-[11px] leading-relaxed text-amber-200/80">
-                      Esto se manda <b>TAL CUAL</b> a Veo: ignora el armado automático
-                      (estilo de grabación, lip-sync, voz/acento). Útil para b-roll que NO
-                      debe mostrar a una persona hablando. Si querés que se escuche el
-                      diálogo, incluilo acá vos mismo.
-                    </p>
-                    <textarea
-                      value={finalPromptText}
-                      onChange={(e) => setFinalPromptText(e.target.value)}
-                      placeholder="Prompt final exacto que se le manda a Veo…"
-                      spellCheck={false}
-                      className="code min-h-[200px] w-full resize-y whitespace-pre-wrap break-words rounded-lg border border-amber-600/50 bg-ink p-3 text-sm leading-relaxed focus:border-accent focus:outline-none"
+                  <Select
+                    label="Resolución"
+                    value={resChoice}
+                    onValueChange={setResChoice}
+                    options={opcionesResolucion}
+                  />
+                </div>
+              )}
+
+              {/* Solo videos: OVERRIDE del prompt final que se ejecuta en Veo (avanzado). */}
+              {!isImage && (
+                <div className="flex flex-col gap-2 rounded-lg border border-accent/40 bg-accent/5 p-3">
+                  <label className="flex cursor-pointer items-start gap-2 text-body text-fg">
+                    <input
+                      type="checkbox"
+                      checked={overrideOn}
+                      onChange={(e) => toggleOverride(e.target.checked)}
+                      className="mt-0.5 size-4 shrink-0 accent-accent"
                     />
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-slate-500">
-                        {finalPromptText.length} caracteres
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setFinalPromptText(computeAutoFinalPrompt())}
-                        className="rounded border border-slate-600 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800"
-                        title="Reemplaza el texto por el prompt automático actual (visual + voz/acento + diálogo) para editarlo desde ahí"
-                      >
-                        ↺ Cargar prompt automático
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <details className="rounded border border-slate-700 bg-ink/50">
-                    <summary className="cursor-pointer px-2 py-1 text-[11px] uppercase text-slate-500">
-                      Ver prompt final automático (lo que se ejecuta si no lo editás)
-                    </summary>
-                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap px-2 py-2 text-[11px] text-slate-300">
-                      {computeAutoFinalPrompt()}
-                    </pre>
-                  </details>
-                )}
-                <p className="text-[10px] leading-relaxed text-slate-500">
-                  El texto base del prompt (estilo de grabación, voz/acento, voz en off
-                  de b-roll) vive en la plantilla{" "}
-                  <code className="text-slate-400">prompts/veo-video-prompt.md</code>.
-                  Editá ese archivo para cambiar el estilo de todos los clips.{" "}
-                  <a
-                    href="/api/prompt-template?download=1"
-                    className="text-accent underline hover:opacity-80"
-                  >
-                    ↓ Descargar plantilla (MD)
-                  </a>
-                </p>
-              </div>
-            )}
+                    Editar manualmente el prompt final que se ejecuta (avanzado)
+                  </label>
+                  {overrideOn ? (
+                    <>
+                      <p className="text-label leading-relaxed text-fg-dim">
+                        Esto se manda <b className="text-fg">TAL CUAL</b> a Veo: ignora
+                        el armado automático (estilo de grabación, lip-sync,
+                        voz/acento). Útil para b-roll que NO debe mostrar a una persona
+                        hablando. Si querés que se escuche el diálogo, incluilo acá vos
+                        mismo.
+                      </p>
+                      <Textarea
+                        label="Prompt final exacto que se ejecuta"
+                        hint={`${finalPromptText.length} caracteres`}
+                        value={finalPromptText}
+                        onChange={(e) => setFinalPromptText(e.target.value)}
+                        placeholder="Prompt final exacto que se le manda a Veo…"
+                        spellCheck={false}
+                        mono
+                        rows={9}
+                      />
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          icon={<ArrowCounterClockwise aria-hidden className="size-3.5" />}
+                          onClick={() => setFinalPromptText(computeAutoFinalPrompt())}
+                          title="Reemplaza el texto por el prompt automático actual (visual + voz/acento + diálogo) para editarlo desde ahí"
+                        >
+                          Cargar prompt automático
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <details className="rounded-sm bg-bg">
+                      <summary className="cursor-pointer select-none px-2 py-1 text-label text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                        Ver prompt final automático (lo que se ejecuta si no lo editás)
+                      </summary>
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words px-2 py-2 font-mono text-label text-fg-dim">
+                        {computeAutoFinalPrompt()}
+                      </pre>
+                    </details>
+                  )}
+                  <p className="text-label leading-relaxed text-fg-dim">
+                    El texto base del prompt (estilo de grabación, voz/acento, voz en
+                    off de b-roll) vive en la plantilla{" "}
+                    <code className="font-mono text-fg">prompts/veo-video-prompt.md</code>
+                    . Editá ese archivo para cambiar el estilo de todos los clips.{" "}
+                    <a
+                      href="/api/prompt-template?download=1"
+                      className="inline-flex items-center gap-1 text-accent underline hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      <DownloadSimple aria-hidden className="size-3.5" />
+                      Descargar plantilla (MD)
+                    </a>
+                  </p>
+                </div>
+              )}
 
-            <div className="flex flex-col gap-1">
-              <label className="text-xs uppercase tracking-wide text-slate-400">
-                Modelo para regenerar
-              </label>
-              <select
+              <Select
+                label="Modelo para regenerar"
                 value={modelChoice}
-                onChange={(e) => setModelChoice(e.target.value)}
-                className="rounded-lg border border-slate-600 bg-ink px-3 py-2 text-sm focus:border-accent focus:outline-none"
-              >
-                {modelOptions.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-                {!modelOptions.some((o) => o.id === modelChoice) && modelChoice && (
-                  <option value={modelChoice}>{modelChoice}</option>
-                )}
-              </select>
-            </div>
+                onValueChange={setModelChoice}
+                options={opcionesModelo}
+              />
 
-            <div className="flex flex-col gap-2 pt-1">
-              <p className="text-[11px] leading-relaxed text-slate-500">
-                «Guardar sin regenerar» actualiza el texto, el tiempo y el diálogo
-                (audio) sin volver a generar — útil para revisarlos y controlarlos
-                antes de generar en batch. No consume cuota.
-              </p>
-              <div className="flex flex-wrap justify-end gap-2">
-                <button
-                  onClick={() => setEditing(false)}
-                  className="rounded-lg border border-slate-600 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={() => submitEdits(false)}
-                  className="rounded-lg border border-emerald-600/60 px-4 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10"
-                >
-                  💾 Guardar sin regenerar
-                </button>
-                <button
-                  onClick={() => submitEdits(true)}
-                  className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-                >
-                  ↻ Guardar y regenerar
-                </button>
+              <div className="flex flex-col gap-2 border-t border-divider pt-3">
+                <p className="text-label leading-relaxed text-fg-dim">
+                  «Guardar sin regenerar» actualiza el texto, el tiempo y el diálogo
+                  (audio) sin volver a generar — útil para revisarlos y controlarlos
+                  antes de generar en batch. No consume cuota.
+                </p>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button variant="ghost" onClick={() => setEditing(false)}>
+                    Cancelar
+                  </Button>
+                  {/*
+                    `submitEdits` no guarda nada si el prompt quedo vacio. Antes el
+                    dialogo se cerraba igual y parecia que habia guardado, asi que
+                    ahora la guarda esta a la vista en vez de escondida.
+                  */}
+                  <Button
+                    variant="secondary"
+                    icon={<FloppyDisk aria-hidden className="size-4" />}
+                    onClick={() => submitEdits(false)}
+                    disabled={!promptText.trim()}
+                  >
+                    Guardar sin regenerar
+                  </Button>
+                  <Button
+                    variant="primary"
+                    icon={<ArrowsClockwise aria-hidden className="size-4" />}
+                    onClick={() => submitEdits(true)}
+                    disabled={!promptText.trim()}
+                  >
+                    Guardar y regenerar
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          </DialogContent>
+        </Dialog>
       )}
-
-      {/* Selector de resolucion (solo videos) */}
-      {!isImage && onChangeResolution && (
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-slate-400">Resolucion:</span>
-          <select
-            value={resolution ?? "720p"}
-            disabled={job.status === "generating"}
-            onChange={(e) => onChangeResolution(job.refId, e.target.value)}
-            className="rounded border border-slate-600 bg-ink px-2 py-1 text-xs focus:border-accent focus:outline-none disabled:opacity-40"
-          >
-            {(resolutionOptions ?? ["720p", "1080p"]).map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* Acciones */}
-      {!editing && (
-        <div className="flex flex-wrap gap-1">
-          {awaiting && (
-            <button
-              onClick={() => onApprove(job.id, isImage ? chosen ?? undefined : undefined)}
-              className="rounded-md bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-500"
-            >
-              ✓ Aprobar
-            </button>
-          )}
-          <button
-            onClick={() => onRegenerate(job.id)}
-            title="Vuelve a generar este item. Sirve tambien para destrabar uno colgado en 'generando'."
-            className="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
-          >
-            ↻ Regenerar
-          </button>
-          <button
-            onClick={openEditor}
-            disabled={job.status === "generating"}
-            title="Editá prompt, diálogo, tiempo y resolución. Podés guardar sin regenerar para controlarlo antes del batch."
-            className="rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
-          >
-            ✎ Editar
-          </button>
-          {!isImage && onExtend && job.outputPath && (
-            <button
-              onClick={() => onExtend(job.id)}
-              disabled={job.status === "generating"}
-              title="Genera 7s más de continuación y los une al final del video"
-              className="rounded-md border border-sky-600/60 px-2 py-1 text-xs text-sky-200 hover:bg-sky-500/10 disabled:opacity-40"
-            >
-              ⏩ Extender +7s
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+    </Card>
   );
-}
+});

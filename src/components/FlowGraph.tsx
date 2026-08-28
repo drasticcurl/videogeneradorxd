@@ -1,17 +1,29 @@
 "use client";
 /**
- * Vista "flujo agentico": muestra la cadena en etapas (columnas) con nodos por job,
- * conectadas por flechas, resaltando lo que esta corriendo / esperando aprobacion.
+ * Vista "flujo agentico": la cadena en etapas (columnas) con un nodo por job,
+ * conectadas por flechas, resaltando lo que esta corriendo o esperando aprobacion.
+ *
+ * ─── MIGRACION A TOKENS, MISMA ESTRUCTURA ────────────────────────────────────
+ *
+ * Ver P-03 del plan: este componente puede no valer la pena con el VSL real, y eso se
+ * decide con un dato, no de prepo. Asi que se migro a los tokens nuevos SIN cambiar la
+ * estructura: las mismas tres columnas, los mismos dos StageBox, las mismas cuatro
+ * flechas y un nodo por job. Ni se agrego scroll vertical ni se colapso nada.
+ *
+ * El dato quedo medido y anotado en §10 del plan: con `vsl-natalia-plan.json`
+ * (95 clips) son 119 nodos de job, 95 de ellos apilados en la columna "Videos", que
+ * mide ~3.000px de alto. El contenedor solo tiene scroll horizontal, asi que esa
+ * columna estira la pagina.
+ *
+ * El color de cada nodo sale de `estadoDeJob` + `Badge`, no de un switch local: era
+ * la cuarta copia divergente del mapeo de estados (tenia su propio `DOT` con indigo,
+ * amber y red escritos a mano).
  */
-import type { JobRecord, JobStatus } from "@/lib/types";
+import { ArrowRight } from "@phosphor-icons/react";
 
-const DOT: Record<JobStatus, string> = {
-  pending: "bg-slate-500",
-  generating: "bg-amber-400 animate-pulse",
-  awaiting_approval: "bg-indigo-400",
-  done: "bg-emerald-400",
-  failed: "bg-red-400",
-};
+import { Badge } from "@/components/ui";
+import type { JobRecord } from "@/lib/types";
+import { estadoDeJob } from "@/lib/ui-tokens";
 
 interface Stage {
   title: string;
@@ -19,68 +31,75 @@ interface Stage {
 }
 
 export function FlowGraph({ stages }: { stages: Stage[] }) {
+  const terminado =
+    stages.every((s) => s.jobs.every((j) => j.status === "done")) &&
+    stages.some((s) => s.jobs.length > 0);
+
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-700 bg-panel p-4">
+    <div className="overflow-x-auto rounded-lg bg-surface p-4">
       <div className="flex min-w-max items-stretch gap-2">
         <StageBox title="Brief → Plan" done />
         {stages.map((stage, i) => (
           <div key={i} className="flex items-stretch gap-2">
-            <Arrow />
-            <div className="flex w-44 flex-col gap-2 rounded-lg border border-slate-800 bg-ink p-2">
-              <div className="text-xs font-semibold text-slate-300">{stage.title}</div>
+            <Flecha />
+            <div className="flex w-44 flex-col gap-2 rounded-lg border border-divider bg-bg p-2">
+              <h3 className="text-label font-semibold text-fg-dim">{stage.title}</h3>
               {stage.jobs.length === 0 ? (
-                <div className="text-[11px] text-slate-600">—</div>
+                <p className="text-label text-fg-dim">—</p>
               ) : (
-                stage.jobs.map((j) => (
-                  <div
-                    key={j.id}
-                    className={`flex items-center gap-2 rounded px-2 py-1 text-[11px] ${
-                      j.status === "generating"
-                        ? "bg-amber-500/10"
-                        : j.status === "awaiting_approval"
-                        ? "bg-indigo-500/10"
-                        : j.status === "failed"
-                        ? "bg-red-500/10"
-                        : "bg-slate-800/40"
-                    }`}
-                    title={j.error ?? j.status}
-                  >
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${DOT[j.status]}`} />
-                    <span className="truncate text-slate-200">{j.label}</span>
-                  </div>
-                ))
+                stage.jobs.map((j) => <Nodo key={j.id} job={j} />)
               )}
             </div>
           </div>
         ))}
-        <Arrow />
-        <StageBox
-          title="Listo"
-          done={stages.every((s) => s.jobs.every((j) => j.status === "done")) &&
-            stages.some((s) => s.jobs.length > 0)}
-        />
+        <Flecha />
+        <StageBox title="Listo" done={terminado} />
       </div>
     </div>
   );
 }
 
-function Arrow() {
+/**
+ * Un job. Es un `Badge` y no un div con clases propias: asi el color del estado sale
+ * del mismo lugar que en el resto de la app y este archivo no traduce ni un tono.
+ *
+ * El texto es la etiqueta del job ("01_hook"), que es un id: va en mono. El estado se
+ * lee por el punto de color, y el `title` lo dice con palabras.
+ */
+function Nodo({ job }: { job: JobRecord }) {
+  const estado = estadoDeJob(job.status);
   return (
-    <div className="flex items-center self-center text-slate-600">
-      <span className="text-lg">→</span>
+    // El title va en el envoltorio porque `Badge` no acepta atributos sueltos: su
+    // contrato son `tone`, `punto`, `animado` y `className`, y no se cambia (§5).
+    <div title={job.error ?? estado.label}>
+      <Badge
+        tone={estado.tone}
+        punto
+        animado={estado.animado}
+        className="w-full justify-start"
+      >
+        <span className="code min-w-0 truncate">{job.label}</span>
+      </Badge>
+    </div>
+  );
+}
+
+function Flecha() {
+  return (
+    <div className="flex items-center self-center text-fg-dim">
+      <ArrowRight aria-hidden className="size-4" />
     </div>
   );
 }
 
 function StageBox({ title, done }: { title: string; done?: boolean }) {
   return (
-    <div className="flex w-28 flex-col items-center justify-center rounded-lg border border-slate-800 bg-ink p-2 text-center">
+    <div className="flex w-28 flex-col items-center justify-center rounded-lg border border-divider bg-bg p-2 text-center">
       <span
-        className={`mb-1 h-2.5 w-2.5 rounded-full ${
-          done ? "bg-emerald-400" : "bg-slate-600"
-        }`}
+        aria-hidden
+        className={`mb-1 size-2.5 rounded-full ${done ? "bg-ok" : "bg-fg-dim"}`}
       />
-      <span className="text-[11px] font-medium text-slate-300">{title}</span>
+      <span className="text-label font-medium text-fg-dim">{title}</span>
     </div>
   );
 }
