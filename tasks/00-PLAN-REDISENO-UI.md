@@ -1113,3 +1113,194 @@ código**. Si bloquea, la task se detiene y no sigue con suposiciones.
   pipeline), pero tampoco cuenta que hay imágenes. Decidirlo es agregar una sección de imágenes acá y
   ampliar el zip, o sea UI **más** backend: no es de esta task.
 - **Resolución:** _pendiente_
+
+> **Nota de numeración.** P-23 a P-27 las agregó **T10** (deck de videos). T09 y T11 corrían en
+> paralelo en la misma ola: si aparece otra `P-23`, es colisión de numeración y no duplicado de
+> contenido. Cada título lleva la task que lo escribió.
+
+### P-23 (T10) — La pantalla de videos NO es una grilla y no se convirtió en una, contra lo que pide §3 de la task
+- **Task:** T10. Es la decisión más grande de la task y por eso está acá y no solo en un comentario.
+- **Sección del plan:** §0 ("no se construye: refactor de lógica de cliente"), D11, y §2 contra §3 de
+  `T10-videos.md`
+- **Archivo:** `src/app/batch/videos/VideoDeck.tsx`
+- **El choque:** §3 punto 1 de la task dice "**Grilla de videos** en `aspect-[9/16]`, con `poster` y
+  `preload="none"`". §2 de la misma task dice "**Cómo se cargan los videos.** Con 95 clips esto es lo
+  que hace o rompe la pantalla: si monta 95 `<video>` con `preload="auto"`, el browser se arrastra.
+  Verificá qué hace hoy y **no lo empeores**". Y §4 pide "un solo elemento animado" y verificar el
+  scroll con más de 40 items.
+- **Qué hace hoy, verificado antes de escribir:** la pantalla **nunca fue una grilla**. Es un deck: un
+  clip a la vez, navegado con `→ ← A R`, con **un solo `<video>` en el DOM** y una tira de 95 botones
+  numerados para saltar. Convertirla en una grilla de 95 `<video>` es exactamente lo que §2 prohíbe, y
+  es el mismo peor caso que P-21 ya documentó para la pantalla de resultado: 95 elementos de media
+  montados a la vez.
+- **Qué se hizo:** se conservó el deck y se aplicaron a **ese** video los tres requisitos concretos de
+  §3 punto 1 —`aspect-[9/16]`, `poster` y `preload="none"`—, que son los que tienen efecto medible.
+  Verificado en el browser: `document.querySelectorAll('video').length === 1` con los 95 clips
+  cargados, y **237 nodos de DOM en total** en toda la pantalla.
+- **Y acá `poster` SÍ va, aunque P-21 lo haya descartado, y no es una contradicción:** P-21 lo
+  descartó porque en una grilla de 95 tarjetas el `poster` no se puede diferir y el browser bajaría 95
+  PNG de 1-2MB al montar. Acá hay **un** video, o sea **una** imagen, y es la misma que la pantalla ya
+  mostraba en la rama "todavía no se generó" (`imageUrl`, el frame inicial del clip). Medido: 2
+  requests de imagen en total al montar, 0 de video.
+- **Bloquea:** no
+- **DATO MEDIDO POR T10, que es lo que §4 pide** — Chrome headless, viewport 1440×900, build de
+  producción, snapshot de 95 clips con la mezcla real de estados:
+
+  | Qué | Medido |
+  |---|---|
+  | `<video>` en el DOM con 95 clips | **1** |
+  | Nodos de DOM de toda la pantalla | **237** |
+  | Requests de `.mp4` al montar | **0** |
+  | Requests de `.mp4` tras arrowear por 20 clips | **0** |
+  | Requests de imagen al montar (el poster) | 2 |
+  | Elementos con animación infinita, clip actual generando | **1** |
+  | Elementos con animación infinita, clip actual no generando | **0** |
+  | Frame medio scrolleando la página entera (60 frames) | **16,7 ms** |
+  | Frame p95 / peor | **17,6 ms / 17,7 ms** |
+  | Frames por encima de 32 ms | **0 de 59** |
+
+  **La grilla no lagea con 95 items**: 60 frames de scroll continuo y ninguno pasó de 32 ms, o sea que
+  se mantiene en 60fps. El número que había que reportar es ese, y la razón por la que sale así es que
+  no hay 95 elementos de media montados, hay uno.
+- **Lo otro que se midió, y que sí cambió de estructura:** la tira de navegación pasó de
+  `overflow-x-auto` a `flex-wrap`. Medido en el mismo browser, forzando las dos clases sobre el mismo
+  DOM: **sin plegar mide 3.036px de ancho en 1.348px visibles = 2,25 pantallas de scroll horizontal**
+  (28px de alto); plegada mide **1.348×92px, 3 filas, cero scroll**. Es la opción (b) que P-17
+  recomienda para `ClipTimeline`, aplicada acá porque acá **no rompe nada**: esta tira nunca fue una
+  línea de tiempo con ancho proporcional a la duración, son botones de igual tamaño para saltar de
+  clip, así que plegarlos no destruye ningún eje. Con 95 clips es la diferencia entre ver el lote
+  entero y scrollear a ciegas 2,25 pantallas.
+- **Lo que hay que decidir, si alguien no está de acuerdo:** si el plan realmente quiere una grilla de
+  videos acá, es una pantalla nueva, no un rediseño, y hay que resolver primero cómo se muestran 95
+  medias sin montarlas (la opción (a) de P-21: miniaturas JPG generadas en el backend). T10 recomienda
+  **dejar el deck**: es la pantalla donde se revisa lip-sync de a un clip, y para eso un clip grande es
+  mejor que 95 chicos.
+- **Resolución:** _pendiente_
+
+### P-24 (T10) — Se le agregó confirmación a los DOS caminos que llaman a Veo, no a uno. Y el atajo `R` era el agujero más caro
+- **Task:** T10. Es el cambio de comportamiento que §3 de la task autoriza explícitamente.
+- **Sección del plan:** §0 ("ningún cambio funcional"), §3 punto 3 y §6 de `T10-videos.md`
+- **Archivo:** `src/app/batch/videos/VideoDeck.tsx`
+- **Qué pedía la task:** "Regenerar como acción secundaria y con confirmación: usá el `Dialog` de T01 y
+  decí en el diálogo que cuesta plata. Hoy es un click directo."
+- **Por qué son dos y no uno:** leyendo las 628 líneas, esta pantalla tiene **dos** caminos que mandan
+  un clip a Veo, no uno:
+  1. `act("retry")` → `POST /api/jobs/<id>/retry`, del botón "Rechazar y regenerar" **y del atajo `R`**.
+  2. `save(true)` → `POST /api/jobs/<id>/prompt` con `regenerate: true`, del botón "Guardar y
+     regenerar" de la pestaña Editar.
+
+  Los dos cuestan lo mismo. Poner el diálogo solo en el primero dejaría la mitad del riesgo sin cubrir,
+  así que **los dos confirman**. Aprobar, desaprobar y "Guardar" (sin regenerar) **no** confirman: no
+  generan nada, y sumarles un diálogo sería fricción sin motivo en la acción que se hace 95 veces.
+- **El agujero que apareció leyendo, y que no estaba en la task:** el atajo **`R` mandaba el clip a Veo
+  directo, sin ninguna confirmación**. Una `r` tipeada con el foco en el `<body>` —que es donde queda
+  después de cerrar un diálogo o de clickear en un espacio vacío— gastaba varios dólares en silencio.
+  Ahora `R` abre el mismo diálogo.
+- **Y el segundo agujero, que es el que hacía peligrosa la confirmación misma:** Radix atrapa el foco
+  pero **no** los listeners de `window`, así que con el diálogo abierto las flechas seguían moviendo el
+  cursor por detrás del overlay. O sea: abrías la confirmación para el clip 21, apretabas `→` tres
+  veces sin querer, confirmabas, y **regenerabas el clip 24 mientras el diálogo decía 21**. Dos
+  arreglos, los dos verificados en el browser: (a) con el diálogo abierto los atajos se apagan; (b) el
+  pedido de regeneración **captura el `jobId` al abrirse** y `act()` recibe ese id explícito, en vez de
+  leer `current` al confirmar. Sin (b) el poll de 3s podía cambiar el clip actual bajo los pies.
+- **Cómo se verificó, con el componente real en Chrome headless por CDP:** `/api/batch` respondido
+  sintético con 95 clips y **todas** las llamadas a `/api/jobs/` contadas y frenadas antes de salir del
+  browser (Vertex nunca se enteró). 38 chequeos, 38 pasan:
+
+  | Caso | Llamadas a `/api/jobs/` |
+  |---|---|
+  | Abrir el diálogo | **0** |
+  | Cancelar | **0** |
+  | Escape | **0** |
+  | Apretar `R` | **0** (abre el diálogo) |
+  | Confirmar | **1** |
+  | Tres clicks seguidos en "Sí, regenerar" | **1** |
+  | Confirmar tras mover las flechas con el diálogo abierto | **1**, y al `job-21` que el diálogo nombra |
+  | Doble click en "Guardar y regenerar" confirmado | **1**, `regenerate:true`, los 6 campos de siempre |
+  | "Guardar" solo | **1**, `regenerate:false`, sin diálogo |
+
+  Total de la corrida completa: **5 llamadas, todas deliberadas**.
+- **Bloquea:** no
+- **Lo que queda para que decida quien use la pantalla:** §6 de la task dice "anotalo si la
+  confirmación molesta en el uso real". Un diálogo por clip en una revisión de 95 es fricción real, y
+  la pregunta honesta es si molesta más de lo que protege. T10 cree que no, porque regenerar es la
+  excepción y no el camino normal (el camino normal es `A` para aprobar, que sigue siendo un tecla sin
+  diálogo), pero eso solo se sabe usándola. Si molesta, la salida que **no** vuelve al click directo es
+  un deshacer con ventana de unos segundos en lugar de una confirmación previa.
+- **Resolución:** _pendiente_
+
+### P-25 (T10) — Bug real encontrado y arreglado: "Guardar y regenerar" mandaba DOS pedidos a Veo con un doble click. Verificado, no inferido
+- **Task:** T10 lo encontró y lo arregló. Va acá porque §0 dice "ningún cambio funcional" y porque §6
+  de la task dice que un regenerar que se dispara más de una vez por click es motivo de parar.
+- **Sección del plan:** §0, §6 de `T10-videos.md`
+- **Archivo:** `src/app/batch/videos/VideoDeck.tsx`, función `save()` de `ClipPanel`
+- **Qué pasaba:** `act()` (el camino de `retry`) siempre tuvo un candado por **ref** (`lockRef`), así
+  que dos clicks en el mismo tick colapsan en una sola llamada. `save()` **no tenía ninguno**: su única
+  protección era `setSaving(true)` y el `disabled` del botón, y las dos son **estado**, que se aplica en
+  el render siguiente. Dos handlers disparados en el mismo tick ven los dos `saving === false` y los dos
+  hacen `fetch`.
+- **Cómo se verificó:** en el harness de CDP, dos clicks seguidos sobre "Guardar y regenerar" dentro del
+  diálogo produjeron **2** POST a `/api/jobs/job-1/prompt`, los dos con `"regenerate":true`, o sea **el
+  doble de plata**. El mismo test con el arreglo puesto da **1**.
+- **Que quede claro de dónde viene:** el defecto **es anterior a esta task**, no lo introdujo el
+  rediseño. `save()` nunca tuvo el candado, y antes el botón no tenía ni diálogo: era un click directo
+  con la misma ventana de doble disparo. Lo que hizo el rediseño fue ponerlo a prueba.
+- **Qué se cambió, exactamente:** un `guardandoRef` en `ClipPanel`, con la misma forma que el `lockRef`
+  que ya usaba `act()` en el mismo archivo: se levanta al entrar, se baja en el `finally`. **No se tocó**
+  la URL, ni el método, ni un solo campo del body, ni el `onSaved()`, ni el manejo de errores. Son 3
+  líneas.
+- **Por qué se arregló en vez de anotarse y seguir:** §6 de la task lo pone como condición de parada
+  ("se dispara más de una vez por click. **Esto cuesta plata: pará**"). Dejarlo anotado y seguir sería
+  publicar una pantalla que puede cobrar doble. El arreglo usa un patrón que ya estaba en el archivo, no
+  inventa nada, y es verificable con el mismo test que lo encontró.
+- **Bloquea:** no, ya está arreglado.
+- **Lo que conviene revisar en las otras pantallas:** el patrón "protejo la acción con `useState` y el
+  `disabled` del botón" es el que falla, y no es exclusivo de acá. Vale la pena que T12 grepee los
+  handlers que hacen `fetch` con `POST` en las 8 pantallas y chequee cuáles tienen candado por ref: los
+  que gastan plata (`/retry`, `/prompt` con `regenerate`, `/generate`, `/regenerate-batch`) son los que
+  importan.
+- **Resolución:** _pendiente_
+
+### P-26 (T10) — Sacarle el arranque automático al video es correcto para el rendimiento y cuesta un click por clip en la revisión
+- **Task:** T10
+- **Sección del plan:** §4 de `T10-videos.md` ("nada de autoplay", requisito), D11
+- **Archivo:** `src/app/batch/videos/VideoDeck.tsx`
+- **Qué había:** el `<video>` tenía el atributo de arranque automático y **ningún** `preload`. Como el
+  elemento se remonta con `key` cada vez que cambia la URL, arrowear por los 95 clips hacía que el
+  browser empezara a bajar los 95, completos, uno por uno al pasar.
+- **Qué hay ahora:** `preload="none"` y sin arranque automático, que es lo que §4 exige. Medido: **0
+  requests de `.mp4` tras pasar por 20 clips con las flechas**, y el video **sí** se baja cuando le das
+  play (verificado: 1 request después de un `play()`). O sea que la carga bajo demanda que la task pide
+  conservar no solo se conserva, se refuerza.
+- **La contra, que es real y por eso está anotada:** el propósito de esta pantalla es chequear lip-sync
+  de a un clip. Antes apretabas `→` y el clip arrancaba solo; ahora apretás `→` y tenés que darle play.
+  En una revisión de 95 clips eso son 95 clicks que antes no existían.
+- **Bloquea:** no. El requisito de §4 es explícito y el chequeo 5 de la task lo cuenta con `grep`.
+- **Las dos salidas, para que las elija quien revise:** (a) dejarlo así, que es lo que está y lo que la
+  task pide; (b) arranque automático **solo** para el clip visible, que en un deck de un video a la vez
+  es exactamente 1 elemento y no 95, con `preload="none"` igual puesto —recupera el flujo viejo sin
+  volver a bajar 95 videos, pero contradice la letra de §4 y del chequeo. T10 hizo (a) porque el
+  requisito es explícito y porque el costo se paga una vez por clip mirado, no por clip existente: con
+  el arranque automático se bajaban también los clips por los que solo pasabas de largo.
+- **Resolución:** _pendiente_
+
+### P-27 (T10) — El chequeo 5 de `T10-videos.md` no distingue código de comentario, igual que P-08
+- **Task:** T10 la encontró; la resuelve T12
+- **Sección del plan:** §9, y §5 chequeo 5 de `T10-videos.md`
+- **Archivo:** `tasks/T10-videos.md`
+- **Qué pasa:** el chequeo es
+  `grep -c 'preload="auto"\|autoPlay' src/app/batch/videos/VideoDeck.tsx` → "esperado exactamente: 0".
+  Un archivo que **explique** por qué le sacaron el arranque automático nombra el atributo en un
+  comentario y el chequeo da 3, sin que haya una sola línea de código con ese atributo. Es la misma
+  clase de problema que P-08 con `awaiting_approval` en un comentario de `Badge.tsx`.
+- **Bloquea:** no. **Da 0**, porque los comentarios del archivo se reescribieron para no nombrar el
+  atributo, con una nota que dice por qué —el mismo movimiento que hizo T02 con `StatusBadge` para que
+  su grep probara algo. El JSX tiene un solo `<video>` y va con `preload="none"`.
+- **El costo de que pase:** el archivo no puede escribir el nombre del atributo que sacó, así que la
+  explicación queda dando vueltas ("el atributo de arranque automático") en lugar de nombrarlo. Es
+  peor documentación a cambio de un chequeo que pasa.
+- **Lo que hay que hacer:** que el chequeo mire solo líneas de JSX y no comentarios, p. ej.
+  `grep -nE '^\s*(autoPlay|preload="auto")' <archivo>` (los atributos de un elemento van solos en su
+  línea en este código base), o `grep -v '^\s*\*'` antes de contar. Le corresponde a T12, junto con el
+  mismo arreglo de P-08.
+- **Resolución:** _pendiente_

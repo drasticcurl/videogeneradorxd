@@ -13,16 +13,140 @@
  *    con una pestaña para editarlos (se guardan en el plan).
  *
  * Atajos: → aprobar · ← rechazar y regenerar · S saltar · Z deshacer · 1-4 variante.
+ *
+ * ─── LOS 7 ENDPOINTS QUE VIVEN EN ESTE ARCHIVO ───────────────────────────────
+ *
+ * Es la pantalla con mas handlers de la app. El rediseño es VISUAL: los 7 `fetch`
+ * quedan con la MISMA url, el MISMO metodo y el MISMO payload. Un payload que cambia
+ * de forma es un 400 silencioso, y un `fetch` que se pierde deja un boton que no hace
+ * nada, compila y pasa el typecheck. Por eso van listados: el que reescriba esto
+ * despues tiene que poder contarlos sin leer las 900 lineas.
+ *
+ *   1. `load`         GET  /api/batch?ids=…              -> BatchSnapshot. Poll cada 2s.
+ *   2. `approve`      POST /api/jobs/:id/approve         { index }
+ *   3. `reject`       POST /api/jobs/:id/retry           sin body y sin headers
+ *   4. `undo`         POST /api/jobs/:id/unapprove       sin body y sin headers
+ *   5. `retryBroken`  POST /api/batch                    { ids, action: "retry-images" }
+ *   6. `save` (loop)  POST /api/jobs/:videoJobId/prompt  { dialogue, regenerate: false }
+ *   7. `save`         POST /api/jobs/:jobId/prompt       { prompt, regenerate }
+ *
+ * Los dos ultimos son el MISMO endpoint con payloads distintos y sobre jobs
+ * distintos: el 6 toca el job de VIDEO de cada clip (para guardar el dialogo) y el 7
+ * el job de IMAGEN que estas revisando (para el prompt visual). Unificarlos manda el
+ * dialogo al job equivocado.
+ *
+ * ─── CUATRO COSAS QUE NO SE TOCAN ────────────────────────────────────────────
+ *
+ * 1. EL CANDADO ES UN `ref`, NO STATE. `lockRef` corta en seco las acciones dobles.
+ *    El state de React se actualiza async, asi que con un click + una tecla (o con
+ *    key repeat) se disparaban dos acciones sobre el mismo job, y rechazar dos veces
+ *    es GENERAR DOS VECES. Si esto pasa a `useState`, la guarda llega tarde.
+ *
+ * 2. NO HAY SELECCION MULTIPLE DE TARJETAS, Y NO SE AGREGO. La unica seleccion es de
+ *    UNA variante dentro de la imagen actual (`selectedIndex`, teclas 1-4), que es la
+ *    que viaja en el payload de aprobar. La cola es de a una a proposito.
+ *
+ * 3. `snap.review` SON JOBS `awaiting_approval` Y NADA MAS (lo filtra `batch.ts`).
+ *    O sea que la tarjeta NUNCA esta fallada, y por lo tanto `item.error` de esta
+ *    pantalla es SIEMPRE una nota informativa ("salieron 1/2 variantes"), nunca un
+ *    fallo. Se muestra en tono neutro y el job sigue siendo aprobable (§3 del plan).
+ *
+ * 4. `ScriptPanel` GUARDA LO TIPEADO EN SU PROPIO STATE Y LO SINCRONIZA POR `jobIdRef`.
+ *    El poll de 2s reescribe `item` entero; si los campos leyeran de `item` en cada
+ *    render, lo que estas escribiendo se perderia dos veces por segundo.
+ *
+ * Rediseño VISUAL: no cambia ni un endpoint, ni un payload, ni una regla.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  ArrowUUpLeft,
+  ArrowsClockwise,
+  Camera,
+  Check,
+  CheckCircle,
+  FloppyDisk,
+  ImageSquare,
+  Info,
+  SkipForward,
+  Spinner,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import type { BatchReviewItem, BatchSnapshot } from "@/lib/batch";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  Badge,
+  Button,
+  EmptyState,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Textarea,
+} from "@/components/ui";
+import type { BatchCounts, BatchReviewItem, BatchSnapshot } from "@/lib/batch";
+import { cn } from "@/lib/cn";
+import { estadoDeJob, type Tone } from "@/lib/ui-tokens";
 
 const POLL_MS = 2000;
 
+/**
+ * Tono -> relleno de la barra de progreso. Mismo mapa (y mismo motivo) que el del
+ * tablero: el ESTADO se traduce a tono en `ui-tokens` y aca solo se elige la clase de
+ * ese tono, asi que un estado sale del mismo color que su badge. Ni un color literal.
+ */
+const RELLENO: Record<Tone, string> = {
+  neutral: "bg-surface-hi",
+  info: "bg-info",
+  attention: "bg-accent",
+  ok: "bg-ok",
+  danger: "bg-danger",
+};
+
+/** Tono -> fondo y texto de un aviso de bloque. Ver P-14: no hay primitiva. */
+const AVISO: Record<Tone, string> = {
+  neutral: "bg-surface text-fg-dim",
+  info: "bg-info/10 text-info",
+  attention: "bg-accent/10 text-accent",
+  ok: "bg-ok/10 text-ok",
+  danger: "bg-danger/10 text-danger",
+};
+
+interface Tramo {
+  clave: string;
+  n: number;
+  tone: Tone;
+  animado?: boolean;
+}
+
+/**
+ * Los contadores del lote como tramos de barra.
+ *
+ * `stuck` es un SUBCONJUNTO de `generating` (lo dice `batch.ts`), asi que hay que
+ * restarlo o la barra suma mas que el total y miente. No tiene entrada en
+ * `ui-tokens` porque no es un estado de job sino un contador derivado (P-18): se le
+ * da `danger` porque es lo que esta pantalla ya hace con el, contarlo como "roto"
+ * junto con los fallados, y el mismo boton arregla los dos.
+ */
+function tramosDe(c: BatchCounts): Tramo[] {
+  const generando = Math.max(0, c.generating - c.stuck);
+  const gen = estadoDeJob("generating");
+  const todos: Tramo[] = [
+    { clave: "done", n: c.done, tone: estadoDeJob("done").tone },
+    { clave: "awaiting", n: c.awaiting, tone: estadoDeJob("awaiting_approval").tone },
+    { clave: "generating", n: generando, tone: gen.tone, animado: gen.animado },
+    { clave: "stuck", n: c.stuck, tone: "danger" },
+    { clave: "failed", n: c.failed, tone: estadoDeJob("failed").tone },
+    { clave: "pending", n: c.pending, tone: estadoDeJob("pending").tone },
+  ];
+  return todos.filter((t) => t.n > 0);
+}
+
 export function ReviewDeck() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const idsParam = searchParams.get("ids") ?? "";
   const focusId = searchParams.get("focus");
 
@@ -228,6 +352,14 @@ export function ReviewDeck() {
       ) {
         return;
       }
+      /*
+        Ni mientras el foco esta en una pestaña. Radix usa las flechas para moverse
+        entre pestañas, asi que sin esta guarda un → para pasar de "Guión" a "Editar"
+        APROBARIA la imagen. Es la unica linea que el rediseño le agrego al handler, y
+        esta para tapar el agujero que abrio el rediseño mismo (antes las pestañas
+        eran dos <button> sueltos y las flechas no hacian nada ahi).
+      */
+      if (el?.getAttribute("role") === "tab") return;
       if (e.repeat) return; // sin auto-repeat: una tecla = una decision
       if (e.key === "ArrowRight") {
         e.preventDefault();
@@ -252,13 +384,15 @@ export function ReviewDeck() {
 
   if (ids.length === 0) {
     return (
-      <p className="text-sm text-slate-400">
-        Falta el lote.{" "}
-        <Link href="/batch" className="text-accent hover:underline">
-          Armá un tablero
-        </Link>{" "}
-        y volvé.
-      </p>
+      <div className="space-y-4">
+        <h1 className="text-display font-semibold text-fg">Revisar imágenes</h1>
+        <EmptyState
+          icon={<ImageSquare aria-hidden className="size-6" />}
+          title="Falta el lote"
+          body="Esta pantalla revisa las imágenes de los proyectos que armaste en el tablero. Armá uno, elegí los proyectos y volvé: las que estén esperando tu ojo caen acá de a una."
+          action={{ label: "Armar un tablero", onClick: () => router.push("/batch") }}
+        />
+      </div>
     );
   }
 
@@ -269,64 +403,139 @@ export function ReviewDeck() {
   const pending = totals?.pending ?? 0;
   const broken = (totals?.failed ?? 0) + stuck;
   const backHref = `/batch?ids=${ids.join(",")}`;
+  const enCola = queue.length - skippedPending;
+  const tramos = totals ? tramosDe(totals) : [];
+  /**
+   * Cuantas variantes PIDIO el proyecto. `BatchReviewItem.variants` son las que
+   * salieron, asi que sin este dato no se puede decir "1 de 2" y una tanda a la que
+   * la cuota le rechazo una variante se ve igual que una completa. Sale del snapshot
+   * que ya tenemos: ni un fetch nuevo.
+   */
+  const pedidasPorProyecto = new Map(
+    (snap?.projects ?? []).map((p) => [p.id, p.imageVariants])
+  );
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold">
-            Revisar imágenes{" "}
-            <span className="text-slate-500">
-              ({queue.length - skippedPending} en cola
-              {skippedPending > 0 ? `, ${skippedPending} salteadas` : ""})
-            </span>
-          </h1>
-          <p className="text-xs text-slate-500">
-            {totals
-              ? `${totals.done}/${totals.total} aprobadas · ${generating} generando · ${pending} pendientes`
-              : "Cargando…"}
-            {" · "}
-            <span className="text-slate-400">
-              → aprobar · ← rechazar · S saltar · Z deshacer
-            </span>
-          </p>
+      {/*
+        ─── Encabezado: que estas revisando y cuanto falta ───────────────────
+        `sticky`: en una cola de 40 imagenes el avance es la unica referencia de
+        cuanto queda, y con la imagen en 9:16 hay que scrollear. Si el contador vive
+        arriba y se va, no sirve de nada.
+      */}
+      <header className="sticky top-0 z-20 -mx-4 border-b border-divider bg-bg px-4 pb-3 pt-4">
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <div className="min-w-0">
+            <h1 className="flex flex-wrap items-baseline gap-x-2 text-display font-semibold text-fg">
+              Revisar imágenes
+              {totals && totals.total > 0 && (
+                <span className="code tnum text-title font-normal text-fg-dim">
+                  <b className="font-semibold text-fg">{totals.done}</b> de{" "}
+                  {totals.total} revisadas
+                </span>
+              )}
+            </h1>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <Badge tone={enCola > 0 ? "attention" : "neutral"} className="tnum">
+                {enCola} en cola
+              </Badge>
+              {skippedPending > 0 && (
+                <Badge tone="neutral" className="tnum">
+                  {skippedPending} salteadas
+                </Badge>
+              )}
+              {generating > 0 && (
+                <Badge tone="info" punto animado className="tnum">
+                  {generating} generando
+                </Badge>
+              )}
+              {pending > 0 && (
+                <Badge tone="neutral" className="tnum">
+                  {pending} en fila
+                </Badge>
+              )}
+              {broken > 0 && (
+                <Badge tone="danger" className="tnum">
+                  {broken} rotas
+                </Badge>
+              )}
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {broken > 0 && (
+              <Button
+                size="sm"
+                // Primario solo cuando NO hay nada corriendo: ahi la cola esta
+                // trabada y este boton es lo unico que la desatasca.
+                variant={generating === 0 ? "primary" : "secondary"}
+                loading={busy}
+                onClick={() => void retryBroken()}
+                icon={<ArrowsClockwise aria-hidden className="size-3.5" />}
+                title="Reencola las imágenes falladas y las colgadas en “generando”. Les da presupuesto de reintentos nuevo."
+              >
+                Reintentar <span className="tnum">{broken}</span> rotas
+              </Button>
+            )}
+            {lastApproved && (
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={busy}
+                onClick={() => void undo()}
+                icon={<ArrowUUpLeft aria-hidden className="size-3.5" />}
+                title="Vuelve la última aprobada a la cola. No regenera nada y no gasta cuota · Z"
+              >
+                Deshacer
+              </Button>
+            )}
+            <Button asChild size="sm" variant="ghost">
+              <Link href={backHref}>
+                <ArrowLeft aria-hidden className="size-3.5" />
+                Tablero
+              </Link>
+            </Button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {broken > 0 && (
-            <button
-              onClick={() => void retryBroken()}
-              disabled={busy}
-              className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
-              title="Reencola las imagenes falladas y las colgadas en 'generando'"
-            >
-              ↻ Reintentar {broken} rotas
-            </button>
-          )}
-          {lastApproved && (
-            <button
-              onClick={() => void undo()}
-              disabled={busy}
-              className="rounded-lg border border-slate-600 px-3 py-2 text-sm hover:bg-slate-800 disabled:opacity-50"
-              title="Vuelve la última aprobada a la cola (no regenera nada)"
-            >
-              ↩ Deshacer
-            </button>
-          )}
-          <Link
-            href={backHref}
-            className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+        {/*
+          La barra son los tramos y nada mas, cada uno del ancho de su proporcion
+          real: sin riel de fondo, que dibuja algo que no esta en los datos. Va
+          `aria-hidden` porque los badges de arriba ya dicen lo mismo en texto.
+        */}
+        {tramos.length > 0 && (
+          <div aria-hidden className="mt-2 flex h-1.5 overflow-hidden rounded-sm">
+            {tramos.map((t) => (
+              <span
+                key={t.clave}
+                className={cn(
+                  "h-full min-w-px",
+                  RELLENO[t.tone],
+                  t.animado && "motion-safe:animate-pulse"
+                )}
+                style={{ width: `${(t.n / (totals?.total || 1)) * 100}%` }}
+              />
+            ))}
+          </div>
+        )}
+      </header>
+
+      {/* El error del deck: aparece solo, despues de un click, asi que se anuncia. */}
+      <div aria-live="polite">
+        {error && (
+          <p
+            role="alert"
+            className={cn(
+              "flex items-start gap-2 rounded-lg px-3 py-2 text-body",
+              AVISO.danger
+            )}
           >
-            ← Tablero
-          </Link>
-        </div>
+            <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+            {error}
+          </p>
+        )}
       </div>
 
-      {error && (
-        <p className="rounded bg-red-500/10 p-2 text-sm text-red-300">{error}</p>
-      )}
-
       {!current ? (
-        <EmptyState
+        <ColaVacia
           generating={generating}
           pending={pending}
           broken={broken}
@@ -335,11 +544,13 @@ export function ReviewDeck() {
           skippedPending={skippedPending}
           onUnskip={() => setSkipped([])}
           backHref={backHref}
+          onIrAlTablero={() => router.push(backHref)}
           allDone={Boolean(totals && totals.total > 0 && totals.done === totals.total)}
         />
       ) : (
         <ReviewCard
           item={current}
+          pedidas={pedidasPorProyecto.get(current.projectId) ?? current.variants.length}
           selectedIndex={selectedIndex}
           onSelectIndex={setSelectedIndex}
           tab={tab}
@@ -359,9 +570,20 @@ export function ReviewDeck() {
   );
 }
 
-/* ------------------------------ empty state ------------------------------ */
+/* ------------------------------ cola vacia ------------------------------ */
 
-function EmptyState({
+/**
+ * Los cinco finales posibles de la cola. Se llama `ColaVacia` y no `EmptyState`
+ * porque `EmptyState` ahora es la primitiva de `ui/` (§5 del plan) y tener las dos
+ * con el mismo nombre en el mismo archivo es un import que se resuelve al que no
+ * querias, sin ningun error.
+ *
+ * Dos de los cinco usan la primitiva tal cual (nada esperando revision, y quedan
+ * salteadas). Los otros tres no son un vacio sino un ESTADO del lote —la cola se
+ * trabo, todo aprobado, todavia generando— y van como aviso de bloque en el tono que
+ * corresponde: la primitiva es un recuadro punteado neutro y aplanaria los tres.
+ */
+function ColaVacia({
   generating,
   pending,
   broken,
@@ -370,6 +592,7 @@ function EmptyState({
   skippedPending,
   onUnskip,
   backHref,
+  onIrAlTablero,
   allDone,
 }: {
   generating: number;
@@ -380,95 +603,102 @@ function EmptyState({
   skippedPending: number;
   onUnskip: () => void;
   backHref: string;
+  onIrAlTablero: () => void;
   allDone: boolean;
 }) {
   if (skippedPending > 0) {
     return (
-      <div className="space-y-3 rounded-xl border border-slate-800 bg-panel p-8 text-center">
-        <p className="text-sm text-slate-300">
-          Ya revisaste todo lo que había. Quedan {skippedPending} salteadas.
-        </p>
-        <button
-          onClick={onUnskip}
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white"
-        >
-          Volver a verlas
-        </button>
-      </div>
+      <EmptyState
+        icon={<SkipForward aria-hidden className="size-6" />}
+        title="Ya revisaste todo lo que había"
+        body={`Quedan ${skippedPending} que salteaste para el final. Volvé a verlas y decidí, o dejalas y seguí desde el tablero.`}
+        action={{ label: "Volver a verlas", onClick: onUnskip }}
+      />
     );
   }
   // Nada esperando revision + nada corriendo + hay roto => la cola quedo trabada.
   if (broken > 0 && generating === 0) {
     return (
-      <div className="space-y-3 rounded-xl border border-amber-800/60 bg-amber-500/5 p-8 text-center">
-        <p className="text-sm text-slate-300">
-          La cola se trabó: hay <b>{broken}</b> imágenes con error o colgadas en
-          “generando”, y ninguna corriendo.
+      <div
+        role="status"
+        className={cn("flex flex-col items-start gap-3 rounded-lg p-5", AVISO.attention)}
+      >
+        <p className="flex items-start gap-2 text-title font-semibold">
+          <WarningCircle aria-hidden className="mt-0.5 size-5 shrink-0" />
+          La cola se trabó
         </p>
-        <button
+        <p className="max-w-prose text-body text-fg-dim">
+          Hay <b className="code tnum font-semibold text-fg">{broken}</b> imágenes con
+          error o colgadas en “generando”, y ninguna corriendo. Reintentarlas les da
+          presupuesto de reintentos nuevo y la cola arranca de vuelta.
+        </p>
+        <Button
+          variant="primary"
+          loading={busy}
           onClick={onRetryBroken}
-          disabled={busy}
-          className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+          icon={<ArrowsClockwise aria-hidden className="size-4" />}
         >
-          {busy ? "Reintentando…" : `↻ Reintentar las ${broken} rotas`}
-        </button>
-        <p className="text-xs text-slate-500">
-          Se les da presupuesto de reintentos nuevo y la cola arranca de vuelta.
-        </p>
+          Reintentar las <span className="tnum">{broken}</span> rotas
+        </Button>
       </div>
     );
   }
   if (allDone) {
     return (
-      <div className="space-y-3 rounded-xl border border-emerald-800/60 bg-emerald-500/5 p-8 text-center">
-        <p className="text-lg font-semibold text-emerald-300">
-          ✓ Todas las imágenes aprobadas
+      <div
+        role="status"
+        className={cn("flex flex-col items-start gap-3 rounded-lg p-5", AVISO.ok)}
+      >
+        <p className="flex items-start gap-2 text-title font-semibold">
+          <CheckCircle aria-hidden className="mt-0.5 size-5 shrink-0" />
+          Todas las imágenes aprobadas
         </p>
-        <p className="text-sm text-slate-400">
-          Volvé al tablero y largá la generación de videos.
+        <p className="max-w-prose text-body text-fg-dim">
+          No queda nada por revisar. Volvé al tablero y largá la generación de videos,
+          que es el paso que cuesta plata: revisá el guion antes.
         </p>
-        <Link
-          href={backHref}
-          className="inline-block rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-semibold text-white hover:bg-fuchsia-500"
-        >
-          Ir al tablero →
-        </Link>
+        <Button asChild variant="primary">
+          <Link href={backHref}>Ir al tablero</Link>
+        </Button>
       </div>
     );
   }
   if (generating > 0 || pending > 0) {
     return (
-      <div className="space-y-2 rounded-xl border border-slate-800 bg-panel p-8 text-center">
-        <p className="text-sm text-slate-300">
-          <span className="animate-pulse">⏳</span> Generando… {generating} en curso,{" "}
-          {pending} en fila.
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex flex-col items-start gap-3 rounded-lg bg-surface p-5"
+      >
+        <p className="flex items-center gap-2 text-title font-semibold text-fg">
+          <Spinner aria-hidden className="size-5 text-info motion-safe:animate-spin" />
+          Generando
         </p>
-        <p className="text-xs text-slate-500">
-          La próxima imagen aparece acá sola cuando termina. Dejá esta pantalla
-          abierta.
+        <p className="max-w-prose text-body text-fg-dim">
+          <b className="code tnum font-semibold text-fg">{generating}</b> en curso y{" "}
+          <b className="code tnum font-semibold text-fg">{pending}</b> en fila. La
+          próxima imagen aparece acá sola cuando termina: dejá esta pantalla abierta.
         </p>
         {broken > 0 && (
-          <button
+          <Button
+            size="sm"
+            loading={busy}
             onClick={onRetryBroken}
-            disabled={busy}
-            className="rounded-lg border border-amber-700 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+            icon={<ArrowsClockwise aria-hidden className="size-3.5" />}
           >
-            ↻ Reintentar {broken} rotas
-          </button>
+            Reintentar <span className="tnum">{broken}</span> rotas
+          </Button>
         )}
       </div>
     );
   }
   return (
-    <div className="space-y-3 rounded-xl border border-slate-800 bg-panel p-8 text-center">
-      <p className="text-sm text-slate-300">No hay imágenes esperando revisión.</p>
-      <Link
-        href={backHref}
-        className="inline-block rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white"
-      >
-        Ir al tablero →
-      </Link>
-    </div>
+    <EmptyState
+      icon={<ImageSquare aria-hidden className="size-6" />}
+      title="No hay imágenes esperando revisión"
+      body="Ninguna imagen del lote está pidiendo tu decisión ahora mismo. Si todavía no arrancaste la generación, se larga desde el tablero."
+      action={{ label: "Ir al tablero", onClick: onIrAlTablero }}
+    />
   );
 }
 
@@ -476,6 +706,7 @@ function EmptyState({
 
 function ReviewCard({
   item,
+  pedidas,
   selectedIndex,
   onSelectIndex,
   tab,
@@ -488,6 +719,8 @@ function ReviewCard({
   onRegenerated,
 }: {
   item: BatchReviewItem;
+  /** Variantes que PIDIO el proyecto, para poder decir "1 de 2". */
+  pedidas: number;
   selectedIndex: number | null;
   onSelectIndex: (i: number) => void;
   tab: "guion" | "editar";
@@ -499,144 +732,273 @@ function ReviewCard({
   onSaved: () => void;
   onRegenerated: (jobId: string) => void;
 }) {
-  const multi = item.variants.length > 1;
+  const salieron = item.variants.length;
+  const multi = salieron > 1;
+  /*
+    El estado sale de `estadoDeJob` y de ningun switch local (§6.1). Es siempre
+    `awaiting_approval` porque `batch.ts` filtra la cola de revision por ese estado, y
+    de ahi se sigue lo mas importante de esta pantalla: LA TARJETA NUNCA ESTA FALLADA.
+    Menos variantes de las pedidas es estado LEGITIMO (la cuota rechazo una), se
+    muestra el conteo real y la nota queda en tono informativo (§3 y §4 del plan).
+  */
+  const estado = estadoDeJob("awaiting_approval");
+  const mostrarConteo = pedidas > 1 && salieron > 0;
+  const faltanVariantes = mostrarConteo && salieron < pedidas;
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-      {/* ---------------------------- imagenes ---------------------------- */}
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      {/* ---------------------------- lo generado ---------------------------- */}
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="rounded bg-slate-800 px-2 py-1 text-slate-300">
+        {/* Identidad: de que proyecto es, que imagen es y como se genero. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <p className="truncate text-body font-medium text-fg" title={item.projectName}>
             {item.projectName}
-          </span>
-          <code className="text-slate-400">{item.imageId}</code>
-          <span
-            className={`rounded px-2 py-0.5 ${
-              item.modo === "image2image"
-                ? "bg-sky-500/20 text-sky-300"
-                : "bg-slate-700 text-slate-300"
-            }`}
-          >
+          </p>
+          <code className="code truncate text-label text-fg-dim" title={item.imageId}>
+            {item.imageId}
+          </code>
+          <Badge tone={estado.tone} punto animado={estado.animado}>
+            {estado.label}
+          </Badge>
+          <Badge tone={item.modo === "image2image" ? "info" : "neutral"}>
             {item.modo}
-          </span>
-          <span className="rounded bg-slate-800 px-2 py-0.5 text-slate-400">
-            {item.assetTipo}
-          </span>
+          </Badge>
+          <Badge tone="neutral">{item.assetTipo}</Badge>
+          {mostrarConteo && (
+            <Badge tone={faltanVariantes ? "attention" : "neutral"} className="tnum">
+              {salieron} de {pedidas} variantes
+            </Badge>
+          )}
           {item.attempts > 1 && (
-            <span className="text-amber-300">intento {item.attempts}</span>
+            <Badge tone="neutral" className="tnum">
+              <ArrowsClockwise aria-hidden className="size-3 shrink-0" />
+              intento {item.attempts}
+            </Badge>
+          )}
+          {item.model && (
+            <code
+              className="code max-w-[14rem] truncate text-label text-fg-dim"
+              title={`Modelo: ${item.model}`}
+            >
+              {item.model}
+            </code>
           )}
         </div>
 
-        {/* Referencias: para image2image mostramos de donde sale la identidad. */}
+        {/* Referencias: para image2image, de donde sale la identidad de la cara. */}
         {item.refs.length > 0 && (
-          <div className="space-y-1.5 rounded-lg border border-slate-800 bg-panel p-3">
-            <p className="text-[11px] text-slate-500">
-              Viene de {item.refs.length === 1 ? "esta referencia" : "estas referencias"}{" "}
-              (tiene que ser la misma cara):
-            </p>
-            <div className="flex flex-wrap gap-2">
+          <section className="rounded-lg bg-surface p-3">
+            <h2 className="text-label font-medium text-fg-dim">
+              {item.refs.length === 1
+                ? "Viene de esta referencia"
+                : `Viene de estas ${item.refs.length} referencias`}
+              : tiene que ser la misma cara
+            </h2>
+            <ul className="mt-2 flex flex-wrap gap-2">
               {item.refs.map((r) => (
-                <div key={r.id} className="w-24 shrink-0 space-y-1">
+                <li key={r.id} className="w-24 shrink-0">
                   {r.url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       key={r.url}
                       src={r.url}
-                      alt={r.label}
-                      className="aspect-[9/16] w-full rounded border border-slate-700 object-cover"
+                      alt={`Referencia: ${r.label}`}
+                      decoding="async"
+                      className="aspect-[9/16] w-full rounded-sm bg-bg object-cover"
                     />
                   ) : (
-                    <div className="flex aspect-[9/16] w-full items-center justify-center rounded border border-dashed border-slate-700 text-[10px] text-slate-500">
+                    <div className="flex aspect-[9/16] w-full items-center justify-center rounded-sm border border-dashed border-divider px-1 text-center text-label text-fg-dim">
                       sin archivo
                     </div>
                   )}
-                  <p className="truncate text-[10px] text-slate-500" title={r.label}>
-                    {r.kind === "reference" ? "📷 " : "🖼 "}
-                    {r.label}
+                  <p
+                    className="mt-1 flex items-center gap-1 text-label text-fg-dim"
+                    title={r.label}
+                  >
+                    {r.kind === "reference" ? (
+                      <Camera aria-hidden className="size-3.5 shrink-0" />
+                    ) : (
+                      <ImageSquare aria-hidden className="size-3.5 shrink-0" />
+                    )}
+                    <span className="truncate">{r.label}</span>
                   </p>
-                </div>
+                  {/*
+                    Una referencia que es otra imagen del proyecto y todavia no esta
+                    aprobada: el dato ya venia en el snapshot y no se mostraba en
+                    ninguna parte. Importa, porque significa que estas comparando
+                    contra algo que todavia puede cambiar.
+                  */}
+                  {r.pending && <Badge tone="attention">sin aprobar</Badge>}
+                </li>
               ))}
-            </div>
-          </div>
+            </ul>
+          </section>
         )}
 
-        {/* Variantes generadas. Con 1 sola ocupa todo el ancho. */}
-        <div
-          className={`grid gap-3 ${multi ? "grid-cols-2" : "grid-cols-1 sm:max-w-sm"}`}
-        >
-          {item.variants.map((v) => {
-            const active = selectedIndex === v.index;
-            return (
-              <button
-                key={v.url}
-                onClick={() => onSelectIndex(v.index)}
-                className={`relative overflow-hidden rounded-lg border-2 transition ${
-                  active
-                    ? "border-emerald-500 ring-2 ring-emerald-500/30"
-                    : "border-slate-800 hover:border-slate-600"
-                }`}
-                title={multi ? `Elegir variante ${v.index} (tecla ${v.index})` : ""}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
+        {/*
+          Las variantes. Es EL contenido de la pantalla, asi que ocupa el espacio:
+          ~22rem de ancho por variante, que en 9:16 son ~39rem de alto y entra en una
+          pantalla sin scroll. Con una sola variante queda una columna; con 2 a 4, dos.
+        */}
+        {salieron > 0 ? (
+          <div
+            role="group"
+            aria-label={`Variantes de ${item.imageId}`}
+            className={cn(
+              "grid gap-2",
+              multi ? "max-w-[46rem] grid-cols-2" : "max-w-[23rem] grid-cols-1"
+            )}
+          >
+            {item.variants.map((v) => {
+              const active = selectedIndex === v.index;
+              return (
+                <button
                   key={v.url}
-                  src={v.url}
-                  alt={`variante ${v.index}`}
-                  className="aspect-[9/16] w-full bg-ink object-cover"
-                />
-                {multi && (
-                  <span
-                    className={`absolute left-2 top-2 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                      active
-                        ? "bg-emerald-500 text-white"
-                        : "bg-black/60 text-slate-200"
-                    }`}
-                  >
-                    v{v.index} {active ? "· elegida" : ""}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-          {item.variants.length === 0 && (
-            <p className="rounded bg-amber-500/10 p-3 text-xs text-amber-300">
-              No hay archivo generado para mostrar. Rechazá para volver a generarla.
-            </p>
-          )}
-        </div>
+                  type="button"
+                  onClick={() => onSelectIndex(v.index)}
+                  aria-pressed={active}
+                  aria-label={`Elegir la variante ${v.index}`}
+                  title={
+                    multi
+                      ? `Elegir la variante ${v.index} · tecla ${v.index}`
+                      : "La única variante que salió"
+                  }
+                  className={cn(
+                    // `border-2` en los dos estados: si solo la elegida tuviera
+                    // borde, la imagen cambiaria de tamaño al elegirla y saltaria la
+                    // fila entera.
+                    "relative overflow-hidden rounded-lg border-2 transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                    active ? "border-accent" : "border-divider hover:border-border"
+                  )}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    key={v.url}
+                    src={v.url}
+                    alt={`Variante ${v.index} de ${item.imageId}`}
+                    decoding="async"
+                    className="aspect-[9/16] w-full bg-bg object-cover"
+                  />
+                  {multi && (
+                    <span
+                      className={cn(
+                        "absolute left-2 top-2 inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5",
+                        "code tnum text-label font-semibold",
+                        active ? "bg-accent text-on-accent" : "bg-bg/80 text-fg"
+                      )}
+                    >
+                      {active && <Check aria-hidden className="size-3" />}v{v.index}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          /*
+            `awaiting_approval` sin ningun archivo. No es un fallo del job (el estado
+            sigue siendo "elegí variante") pero no hay nada que aprobar, asi que el
+            boton de aprobar queda deshabilitado y el camino es regenerar.
+          */
+          <p
+            className={cn(
+              "flex max-w-prose items-start gap-2 rounded-lg p-3 text-body",
+              AVISO.attention
+            )}
+          >
+            <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+            No hay ningún archivo generado para mostrar. Rechazá para volver a
+            generarla.
+          </p>
+        )}
 
+        {/*
+          `item.error` en ESTA pantalla es siempre una nota, no un fallo: la cola de
+          revision son jobs `awaiting_approval` y el pipeline usa el campo para dejar
+          avisos del tipo "salieron 1/2 variantes". Por eso va en tono neutro con
+          icono de info. Pintarlo de rojo era el bug de percepcion de la pantalla
+          vieja: una tanda perfectamente aprobable parecia rota.
+        */}
         {item.error && (
-          <p className="rounded bg-amber-500/10 p-2 text-xs text-amber-300">
-            {item.error}
+          <p className="flex max-w-prose items-start gap-2 rounded-sm bg-surface-hi p-2 text-label text-fg-dim">
+            <Info aria-hidden className="mt-px size-3.5 shrink-0" />
+            <span>{item.error}</span>
           </p>
         )}
 
         {/* --------------------------- botonera --------------------------- */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={onReject}
+        {/*
+          Rechazar a la IZQUIERDA y aprobar a la DERECHA, igual que las flechas que
+          hacen lo mismo: el orden es la mitad del atajo. La jerarquia la da la
+          variante y no la posicion — aprobar es `primary` y regenerar `secondary`,
+          porque regenerar gasta cuota (§3 de la task).
+        */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <Button
+            variant="secondary"
             disabled={busy}
-            className="rounded-lg bg-red-600/90 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-50"
-            title="Rechaza (todas las variantes) y vuelve a generar la imagen · ←"
+            onClick={onReject}
+            icon={<ArrowsClockwise aria-hidden className="size-4" />}
+            title="Rechaza TODAS las variantes y vuelve a generar la imagen. Gasta cuota · ←"
           >
-            ✕ Rechazar y regenerar
-          </button>
-          <button
+            Rechazar y regenerar
+          </Button>
+          <Button
+            variant="primary"
+            disabled={busy || salieron === 0}
             onClick={onApprove}
-            disabled={busy || item.variants.length === 0}
-            className="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+            icon={<Check aria-hidden className="size-4" />}
             title="Aprueba la variante elegida y sigue con la próxima · →"
           >
-            ✓ Aprobar{multi && selectedIndex ? ` v${selectedIndex}` : ""}
-          </button>
-          <button
-            onClick={onSkip}
+            Aprobar
+            {multi && selectedIndex ? (
+              <span className="code tnum">v{selectedIndex}</span>
+            ) : null}
+          </Button>
+          <Button
+            variant="ghost"
             disabled={busy}
-            className="rounded-lg border border-slate-600 px-3 py-2.5 text-sm hover:bg-slate-800 disabled:opacity-50"
-            title="Dejarla para el final · S"
+            onClick={onSkip}
+            icon={<SkipForward aria-hidden className="size-4" />}
+            title="La deja para el final de la cola · S"
           >
-            ⏭ Saltar
-          </button>
+            Saltar
+          </Button>
         </div>
+
+        {/*
+          Los atajos, al lado de los botones que hacen lo mismo y no arriba en el
+          encabezado: es una pantalla que se usa con una mano en el teclado, y la
+          leyenda solo sirve si esta donde estas mirando.
+        */}
+        <ul className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-label text-fg-dim">
+          <li className="flex items-center gap-1.5">
+            <Tecla>
+              <ArrowRight aria-hidden className="size-3" />
+            </Tecla>
+            aprobar
+          </li>
+          <li className="flex items-center gap-1.5">
+            <Tecla>
+              <ArrowLeft aria-hidden className="size-3" />
+            </Tecla>
+            rechazar
+          </li>
+          <li className="flex items-center gap-1.5">
+            <Tecla>S</Tecla> saltar
+          </li>
+          <li className="flex items-center gap-1.5">
+            <Tecla>Z</Tecla> deshacer
+          </li>
+          {multi && (
+            <li className="flex items-center gap-1.5">
+              <Tecla>1</Tecla>
+              <span aria-hidden>–</span>
+              <Tecla>{salieron}</Tecla> elegir variante
+            </li>
+          )}
+        </ul>
       </div>
 
       {/* ----------------------------- guion ----------------------------- */}
@@ -649,6 +1011,15 @@ function ReviewCard({
         onRegenerated={onRegenerated}
       />
     </div>
+  );
+}
+
+/** Una tecla del atajo. `h-5` con `text-label`: nada por debajo de 12px (§4). */
+function Tecla({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-sm bg-surface-hi px-1 font-mono text-label font-medium text-fg">
+      {children}
+    </kbd>
   );
 }
 
@@ -743,127 +1114,182 @@ function ScriptPanel({
   }
 
   return (
-    <aside className="flex h-fit flex-col gap-3 rounded-xl border border-slate-800 bg-panel p-3">
-      <div className="flex gap-1 rounded-lg border border-slate-800 bg-ink p-1 text-xs">
-        <button
-          onClick={() => onTab("guion")}
-          className={`flex-1 rounded-md px-3 py-1.5 ${
-            tab === "guion" ? "bg-accent text-white" : "text-slate-300 hover:bg-slate-800"
-          }`}
-        >
-          Guión ({item.clips.length})
-        </button>
-        <button
-          onClick={() => onTab("editar")}
-          className={`flex-1 rounded-md px-3 py-1.5 ${
-            tab === "editar"
-              ? "bg-accent text-white"
-              : "text-slate-300 hover:bg-slate-800"
-          }`}
-        >
-          ✎ Editar{dirty ? " ·" : ""}
-        </button>
-      </div>
+    <aside className="flex h-fit flex-col rounded-lg bg-surface p-3">
+      {/*
+        Controlado por el state del deck y no por `defaultValue`: la pestaña vuelve a
+        "guion" sola cuando cambia la imagen, y eso lo decide el deck.
+      */}
+      <Tabs
+        value={tab}
+        onValueChange={(v) => onTab(v as "guion" | "editar")}
+        className="flex min-w-0 flex-col"
+      >
+        <TabsList>
+          <TabsTrigger value="guion">
+            Guión <span className="code tnum">({item.clips.length})</span>
+          </TabsTrigger>
+          <TabsTrigger value="editar" className="inline-flex items-center gap-1.5">
+            Editar
+            {dirty && (
+              <>
+                <span aria-hidden className="size-1.5 rounded-full bg-accent" />
+                <span className="sr-only">con cambios sin guardar</span>
+              </>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-      {tab === "guion" ? (
-        <div className="space-y-2">
+        {/* ─────────────────────────── leer ─────────────────────────── */}
+        <TabsContent value="guion" className="pt-3">
           {item.clips.length === 0 ? (
-            <p className="text-xs text-slate-500">
+            <p className="text-body text-fg-dim">
               Ningún clip usa esta imagen todavía.
             </p>
           ) : (
-            item.clips.map((c) => (
-              <div
-                key={c.clipId}
-                className="space-y-1 rounded-lg border border-slate-800 bg-ink p-2.5"
-              >
-                <div className="flex items-center justify-between text-[10px] text-slate-500">
-                  <span>
-                    #{c.orden} · {c.clipId}
-                  </span>
-                  <span>
-                    {c.duracionSeg}s
-                    {c.etiqueta === "FILMAR_REAL" ? " · a filmar" : ""}
-                  </span>
-                </div>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
-                  {c.dialogo ? `“${c.dialogo}”` : (
-                    <span className="text-slate-500">(sin diálogo · b-roll mudo)</span>
-                  )}
-                </p>
-              </div>
-            ))
+            /*
+              Con altura acotada: hay imagenes que aparecen en 8 clips y la lista
+              estiraba la pagina, que es justo lo que no queres cuando la referencia
+              visual esta al costado y tenes que ir y venir.
+            */
+            <ul className="max-h-[26rem] space-y-2 overflow-y-auto">
+              {item.clips.map((c) => (
+                <li key={c.clipId} className="rounded-sm bg-bg p-2.5">
+                  <div className="flex items-center justify-between gap-2 text-label text-fg-dim">
+                    <span className="code tnum truncate" title={c.clipId}>
+                      #{c.orden} · {c.clipId}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <span className="code tnum">{c.duracionSeg}s</span>
+                      {c.etiqueta === "FILMAR_REAL" && (
+                        <Badge tone="attention">
+                          <Camera aria-hidden className="size-3 shrink-0" />
+                          a filmar
+                        </Badge>
+                      )}
+                    </span>
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-body leading-relaxed text-fg">
+                    {c.dialogo ? (
+                      `“${c.dialogo}”`
+                    ) : (
+                      <span className="text-fg-dim">(sin diálogo · b-roll mudo)</span>
+                    )}
+                  </p>
+                </li>
+              ))}
+            </ul>
           )}
-          <details className="rounded-lg border border-slate-800 bg-ink p-2.5">
-            <summary className="cursor-pointer text-[11px] text-slate-500">
+          {/*
+            El prompt visual va COLAPSADO (§3 de la task): es un bloque en ingles de
+            varias lineas que no se lee, compite con el guion, y lo que estas
+            comparando contra la imagen es el guion. Sin `open` controlado a
+            proposito: React no toca el atributo si no se lo pasamos, asi que el poll
+            de 2s no le cierra el bloque al usuario.
+          */}
+          <details className="mt-2 rounded-sm bg-bg">
+            <summary
+              className={cn(
+                "cursor-pointer select-none rounded-sm px-2 py-1.5 text-label text-fg-dim",
+                "transition-colors hover:text-fg",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              )}
+            >
               Prompt visual de la imagen
             </summary>
-            <p className="code mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-slate-400">
+            <p className="code whitespace-pre-wrap px-2 pb-2 text-label leading-relaxed text-fg-dim">
               {item.prompt}
             </p>
           </details>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <label className="block text-[11px] text-slate-500">
-            Prompt visual (inglés)
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              spellCheck={false}
-              className="code mt-1 h-28 w-full resize-y rounded border border-slate-700 bg-ink p-2 text-[11px] leading-relaxed text-slate-200 focus:border-accent focus:outline-none"
-            />
-          </label>
+        </TabsContent>
+
+        {/* ────────────────────────── editar ────────────────────────── */}
+        <TabsContent value="editar" className="space-y-3 pt-3">
+          <Textarea
+            label="Prompt visual (inglés)"
+            hint="Afecta la imagen: para que se aplique hay que regenerar."
+            mono
+            rows={5}
+            spellCheck={false}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
 
           {item.clips.map((c) => (
-            <label key={c.clipId} className="block text-[11px] text-slate-500">
-              Diálogo #{c.orden} · {c.clipId} ({c.duracionSeg}s)
-              {!c.hasJob && (
-                <span className="ml-1 text-fuchsia-300">
-                  · clip a filmar, no editable acá
-                </span>
-              )}
-              <textarea
-                value={dialogueOf(c.clipId, c.dialogo)}
-                onChange={(e) =>
-                  setDialogues((prev) => ({ ...prev, [c.clipId]: e.target.value }))
-                }
-                readOnly={!c.hasJob}
-                className="mt-1 h-20 w-full resize-y rounded border border-slate-700 bg-ink p-2 text-xs leading-relaxed text-slate-200 focus:border-accent focus:outline-none read-only:opacity-60"
-              />
-            </label>
+            <Textarea
+              key={c.clipId}
+              label={`Diálogo #${c.orden} · ${c.clipId} (${c.duracionSeg}s)`}
+              hint={
+                c.hasJob
+                  ? undefined
+                  : "Clip a filmar: no tiene job de video, así que no se edita desde acá."
+              }
+              rows={3}
+              readOnly={!c.hasJob}
+              className="read-only:opacity-60"
+              value={dialogueOf(c.clipId, c.dialogo)}
+              onChange={(e) =>
+                setDialogues((prev) => ({ ...prev, [c.clipId]: e.target.value }))
+              }
+            />
           ))}
 
-          {saveError && (
-            <p className="rounded bg-red-500/10 p-2 text-[11px] text-red-300">
-              {saveError}
-            </p>
-          )}
+          <div aria-live="polite">
+            {saveError && (
+              <p
+                role="alert"
+                className={cn(
+                  "flex items-start gap-2 rounded-sm p-2 text-label",
+                  AVISO.danger
+                )}
+              >
+                <WarningCircle aria-hidden className="mt-px size-3.5 shrink-0" />
+                {saveError}
+              </p>
+            )}
+          </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              loading={saving}
+              disabled={busy || !dirty}
               onClick={() => void save(false)}
-              disabled={saving || busy || !dirty}
-              className="rounded-lg bg-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
+              icon={<FloppyDisk aria-hidden className="size-3.5" />}
               title="Guarda en el plan sin volver a generar (el export de ffmpeg lee del plan)"
             >
-              {saving ? "Guardando…" : saved ? "✓ Guardado" : "💾 Guardar"}
-            </button>
-            <button
+              Guardar
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={saving}
+              disabled={busy}
               onClick={() => void save(true)}
-              disabled={saving || busy}
-              className="rounded-lg border border-slate-600 px-3 py-2 text-xs hover:bg-slate-800 disabled:opacity-50"
-              title="Guarda y vuelve a generar la imagen con el prompt nuevo"
+              icon={<ArrowsClockwise aria-hidden className="size-3.5" />}
+              title="Guarda y vuelve a generar la imagen con el prompt nuevo. Gasta cuota."
             >
-              ↻ Guardar y regenerar
-            </button>
+              Guardar y regenerar
+            </Button>
           </div>
-          <p className="text-[10px] text-slate-500">
-            Los diálogos se guardan en el plan (no regeneran nada: los videos todavía
-            no se generaron). El prompt visual sí afecta la imagen.
+          {/*
+            El "✓ Guardado" va AFUERA del boton: el texto de un boton no cambia
+            (§5.1), porque cambiarlo le mueve el ancho y salta la fila.
+          */}
+          <div aria-live="polite" className="min-h-4">
+            {saved && (
+              <p className="flex items-center gap-1.5 text-label text-ok">
+                <Check aria-hidden className="size-3.5 shrink-0" />
+                Guardado en el plan
+              </p>
+            )}
+          </div>
+          <p className="text-label text-fg-dim">
+            Los diálogos se guardan en el plan y no regeneran nada: los videos todavía
+            no se generaron. El prompt visual sí afecta la imagen.
           </p>
-        </div>
-      )}
+        </TabsContent>
+      </Tabs>
     </aside>
   );
 }
