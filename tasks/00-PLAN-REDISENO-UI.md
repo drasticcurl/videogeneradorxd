@@ -1,0 +1,539 @@
+# REDISEÑO UI — sistema de diseño propio y las 8 pantallas reescritas
+
+**Documento maestro del módulo. Todo agente lee este archivo completo antes de abrir su task.**
+
+La app funciona y factura, pero la UI creció sin sistema: 24 archivos `.tsx`, 6.545 líneas, **91
+`<button>` escritos a mano**, la misma cadena de clases de borde copiada 15 veces, y ninguna fuente
+configurada (usa la del navegador, así que se ve distinto en cada máquina). El problema no es fealdad,
+es ausencia de primitivas: cada pantalla reinventó el mismo control con medio pixel de diferencia.
+
+Este módulo agrega una capa de primitivas propias (`src/components/ui/`), una paleta y una escala
+tipográfica verificadas, e itera las 8 pantallas encima de eso. **No cambia una sola línea de lógica
+de negocio.** La cola, el pipeline, los providers de Vertex, el auth y el schema quedan intactos: son
+los caminos que gastan plata y que ya están probados en producción.
+
+**La app está EN PRODUCCIÓN en https://generador.hilvanapp.online y genera contra Vertex AI, que
+cobra por uso. Una pantalla que pierde un `fetch` deja un botón que no hace nada y no tira ningún
+error.** Todo lo que sigue está diseñado alrededor de esa frase: por eso hay una verificación de
+regresión de endpoints, por eso los tokens viejos sobreviven la migración, y por eso ninguna task
+puede tocar `src/lib/`.
+
+---
+
+## 0. Qué se construye y qué no
+
+### Se construye
+
+1. **`src/lib/cn.ts`** — el helper de merge de clases. Una función, sin dependencias de UI.
+2. **`src/lib/ui-tokens.ts`** — la fuente de verdad de los estados: el mapa
+   `status -> {label, color, icono}`. Hoy ese mapeo está duplicado en al menos 4 pantallas con
+   colores distintos para el mismo estado.
+3. **`src/components/ui/`** — 10 primitivas: `Button`, `Input`, `Textarea`, `Select`, `Badge`,
+   `Card`, `Tabs`, `Dialog`, `Skeleton`, `EmptyState`.
+4. **Paleta y tipografía** en `tailwind.config.ts` + `globals.css` + `layout.tsx`: base zinc, un solo
+   acento ámbar, Geist y Geist Mono vía `next/font`.
+5. **Iconografía**: Phosphor. Hoy no hay ni un ícono, todo es texto.
+6. **Las 8 pantallas** reescritas visualmente sobre esas primitivas.
+7. **Estados vacío, de carga y de error** en cada pantalla. Hoy casi ninguna los tiene.
+
+### No se construye
+
+- **Ningún cambio funcional.** Ni un endpoint nuevo, ni un campo nuevo, ni una regla de negocio
+  distinta. Si una pantalla necesita un dato que la API no da, va a §10, no se agrega el endpoint.
+- **Librería de animación.** Ver D11: es una herramienta densa que renderiza hasta 95 tarjetas de
+  video; `transition` de CSS alcanza y no suma bundle.
+- **Modo claro.** La app es oscura y se usa de noche. Un solo tema, bloqueado (D12).
+- **Rutas nuevas ni renombradas.** El middleware y el auth dependen de `/login` y `/api/login`
+  literales. Cambiar un slug rompe el guard (D9).
+- **El CLI de shadcn.** Verificado que rompe esta app. Ver D1, que es la decisión más importante del
+  documento.
+- **Refactor de lógica de cliente.** El polling, el manejo de estado y los handlers se mueven de
+  lugar si hace falta, pero no se "mejoran". Un rediseño que además refactorea no se puede revisar.
+
+---
+
+## 1. Decisiones cerradas
+
+El usuario dijo "hacelo como a vos te parezca", así que **estas decisiones las tomé yo y quedan acá
+escritas con su justificación**, que es lo que corresponde cuando se decide por el usuario. Si aparece
+algo que este documento no resuelve, se anota en §10 y **no se decide en el código**.
+
+**D1 — Nada de CLI de shadcn. Las primitivas se escriben a mano.** No es preferencia, está
+verificado contra este proyecto:
+
+- `shadcn@4.19.0` (la última) **se cuelga esperando input** en un proyecto Tailwind v3 existente, con
+  `-y` incluido. 10 minutos, cero archivos creados.
+- `shadcn@2.1.8` (la última de la era Tailwind v3) **sí corre**, y es prolijo con `globals.css` y con
+  `tailwind.config.ts`: respeta lo que había y conserva `ink` y `panel`. **Pero pisa `accent`**: lo
+  convierte de `#6366f1` a `hsl(var(--accent))`, y escribe la variable en `oklch()`. El CSS que sale
+  es `background-color: hsl(var(--accent))` con `--accent: oklch(0.967 ...)`, o sea
+  `hsl(oklch(...))`, que es **CSS inválido**: el browser descarta la declaración. **Los 25 usos de
+  `bg-accent` de la app se quedarían sin fondo**, con los botones invisibles y sin ningún error.
+
+Los componentes de shadcn son código que vive en tu repo de todos modos; el CLI es una comodidad que
+en este proyecto es activamente dañina. Se escriben a mano con CVA + Radix + `cn()`, que es
+exactamente lo que el CLI deja, sin tocar la config.
+
+**D2 — Paleta zinc + un solo acento ámbar, con el contraste verificado.** El acento actual
+(`indigo-500`) **no pasa WCAG AA**: 4.45:1 como texto y 4.28:1 con texto claro encima, contra un
+mínimo de 4.5. Además es el "AI purple/blue" que es el tell visual más reconocible. La paleta nueva
+pasa los 15 pares que la UI usa de verdad, con 0 fallos, y está en
+`_verificacion-contraste.mjs`. La base pasa de navy (`#0b1020`) a zinc neutro: los grises fríos y el
+azul del acento se peleaban.
+
+**D3 — Dos tokens de borde, no uno.** Salió de la verificación, no de la intuición: WCAG 1.4.11 pide
+3:1 para el borde de un componente **interactivo**, y `zinc-600`, `zinc-700` y `zinc-800` no llegan
+(2.57, 1.91 y 1.34). El mínimo es `zinc-500`. Pero un separador decorativo no es un componente y no
+tiene que pasar nada. Entonces: `border` = `zinc-500` para inputs y controles enfocables, `divider` =
+`zinc-800` para separar bloques. Usar uno solo obliga a elegir entre inputs ilegales o divisores que
+gritan.
+
+**D4 — Geist + Geist Mono vía `next/font`.** El mono no es decorativo: la app muestra IDs de job,
+timestamps, contadores de variantes y montos en dólares en cada pantalla, y hoy salen en proporcional
+y **bailan de ancho al actualizarse el polling**. Todo dato numérico va en mono con
+`font-variant-numeric: tabular-nums`. `next/font` y no `<link>` porque evita el flash de fuente y el
+request a Google en runtime.
+
+**D5 — Iconos de Phosphor, no de Lucide.** Hoy no hay ninguno: los estados se comunican solo con
+color, que es inaccesible para daltonismo. Phosphor porque Lucide es el default reconocible de UI
+generada. Un solo `weight` en toda la app (`regular`), declarado en §4.
+
+**D6 — Los colores de estado son una escala funcional aparte del acento, y el ámbar significa "te
+toca a vos".** Cinco estados con semántica clara: `emerald` terminado, `rose` falló, `sky` la máquina
+está trabajando, `zinc` en espera, `amber` requiere tu decisión. Que el ámbar sea a la vez el acento
+es a propósito y es lo que hace coherente el sistema: lo que está resaltado es siempre lo que espera
+algo de vos. El mapeo vive en **un solo archivo** (`ui-tokens.ts`) porque hoy está duplicado en 4
+pantallas y `awaiting_approval` sale de distinto color según dónde lo mires.
+
+**D7 — Los tokens viejos sobreviven la migración y se borran al final.** `ink`, `panel` y `accent`
+quedan en `tailwind.config.ts` como alias de los nuevos hasta T12. Sin esto, el momento en que T01
+termina y las pantallas todavía no migraron deja la app **entera** sin estilos, y es una app en
+producción que se usa mientras esto se hace. `accent` apunta a `amber-400`, así que las pantallas sin
+migrar mejoran gratis. T12 los borra y verifica que no quedó ninguna referencia.
+
+**D8 — Una pantalla por task, y los componentes compartidos primero.** El criterio de corte es el
+ownership de archivos: cada pantalla es un conjunto de archivos que nadie más toca. Los compartidos
+(`JobCard`, `StatusBadge`, etc.) van en su propia ola porque 5 pantallas los importan.
+
+**D9 — Ni una ruta cambia de nombre.** `src/middleware.ts` matchea `/login` y `/api/login` como
+strings literales, y `NEXT_PUBLIC_SITE_URL` arma el redirect contra `/login`. Renombrar una ruta deja
+a los dos usuarios afuera de la app. Los `id` de sección y los nombres de los campos de formulario
+tampoco cambian.
+
+**D10 — Las tasks SÍ corren `typecheck` y `build`, contra lo que dice el steering.**
+`.kiro/steering/project-context.md` dice "NUNCA correr typecheck ni build". Eso se escribió para un
+sandbox lento; en esta máquina el build tarda ~70s y se corrió muchas veces sin problema. Un rediseño
+de 6.545 líneas de JSX **no se puede verificar sin compilar**: los errores de tipos en props son
+justamente el modo de falla más común acá. Queda como override explícito de esa regla, para este
+módulo.
+
+**D11 — Sin librería de animación. `MOTION_INTENSITY` bajo, 2 de 10.** Es una herramienta interna y
+densa, no una landing. Lo único que se anima es feedback: `:hover`, `:active` con
+`translate-y-[1px]`, transiciones de 150ms, y el pulso del estado "generando". Agregar Motion a una
+pantalla que monta 95 tarjetas de video con `<video>` adentro cuesta frames reales. Todo va con
+`transform` y `opacity`, y respeta `prefers-reduced-motion`.
+
+**D12 — Un solo tema, oscuro, bloqueado.** No hay toggle ni `prefers-color-scheme`. Dos usuarios, uso
+nocturno, contenido que son imágenes y videos a color que se ven mejor sobre fondo oscuro. Ninguna
+sección invierte a claro.
+
+**D13 — La densidad se mantiene alta, pero con jerarquía.** `VISUAL_DENSITY` 7 de 10: es un cockpit,
+no una galería. El problema hoy no es que sea denso, es que **todo es igual de chico**: 194 usos de
+`text-xs` o menor. La escala nueva tiene 3 niveles reales de tamaño y usa peso y color para separar,
+no solo tamaño.
+
+---
+
+## 2. Arquitectura
+
+```
+                     ┌──────────────────────────────┐
+                     │  tailwind.config.ts          │  paleta, tipografia, radios
+                     │  src/app/globals.css         │  variables CSS, reset
+                     │  src/app/layout.tsx          │  fuentes, nav, tema
+                     └──────────────┬───────────────┘
+                                    │  T01
+                     ┌──────────────▼───────────────┐
+                     │  src/lib/cn.ts               │  merge de clases
+                     │  src/lib/ui-tokens.ts        │  ESTADO -> color + icono + label
+                     │  src/components/ui/*         │  10 primitivas
+                     └──────────────┬───────────────┘
+                                    │  (contratos congelados, §4-6)
+              ┌─────────────────────┼─────────────────────┐
+              │                     │                     │
+        ┌─────▼─────┐         ┌─────▼─────┐         ┌─────▼─────┐
+        │    T02    │         │    T03    │         │  T04-T11  │
+        │compartidos│         │  JobCard  │         │ pantallas │
+        └───────────┘         └───────────┘         └───────────┘
+                                    │
+                     ┌──────────────▼───────────────┐
+                     │  NADIE TOCA:                 │
+                     │  src/lib/jobs/*              │  la cola y el pipeline
+                     │  src/lib/providers/*         │  Vertex
+                     │  src/lib/{config,schema,     │
+                     │    storage,db,auth}.ts       │
+                     │  src/middleware.ts           │
+                     └──────────────────────────────┘
+```
+
+La decisión estructural que hace revisable el módulo: **las primitivas no conocen el dominio y el
+dominio no conoce Tailwind.** `Button` no sabe qué es un job; `ui-tokens.ts` no sabe qué es una clase
+CSS (devuelve nombres de token, no strings de clases). Así se puede cambiar la paleta sin abrir 8
+pantallas, y se puede cambiar el mapeo de estados sin abrir las primitivas.
+
+---
+
+## 3. Datos — no se toca nada
+
+**Este módulo no tiene esquema.** No hay migración, no hay tabla nueva, no hay campo nuevo. El estado
+sigue en `data/db.json` vía `src/lib/db.ts`, y ese archivo está en la lista de intocables.
+
+Lo único que las pantallas consumen son los tipos que ya existen en `src/lib/types.ts`
+(`JobRecord`, `ProjectRecord`, `Candidate`) y las respuestas de los endpoints que ya existen. **Los
+tipos de `types.ts` no se modifican**: si una pantalla cree que necesita un campo nuevo, va a §10.
+
+Los tres detalles del modelo de datos que hay que entender antes de escribir UI contra él:
+
+| Cosa | Detalle que importa |
+|---|---|
+| `job.candidates[]` | Son las variantes. `job.selectedIndex` dice cuál está elegida, y puede ser `null`. Que haya menos candidatas que `job.variants` es un estado **legítimo** (la cuota rechazó algunas) y la UI tiene que mostrarlo, no tratarlo como error. |
+| `job.error` | Puede estar poblado en un job que **no** falló. Se usa como nota informativa ("salieron 1/2 variantes"). Nunca deducir el estado del job a partir de `error`: el estado es `job.status`. |
+| `job.status` | Seis valores: `pending`, `generating`, `awaiting_approval`, `done`, `failed`, y `waiting` como razón derivada. El mapeo a color y label es de `ui-tokens.ts` y de nadie más. |
+
+---
+
+## 4. Contrato 1 — tokens de diseño. CONGELADO
+
+**Lo declara T01 en `tailwind.config.ts`. Lo consumen todas las demás. Nadie más lo modifica.**
+
+Verificado en `_verificacion-contraste.mjs`, 0 fallos. Si una task necesita un par de colores que no
+está acá, **agrega el par a ese archivo primero, lo corre, y si falla elige otro tono**.
+
+| Token | Valor | Para qué | Contraste verificado |
+|---|---|---|---|
+| `bg` | `zinc-950` `#09090b` | fondo de la app | base |
+| `surface` | `zinc-900` `#18181b` | tarjetas, paneles | base |
+| `surface-hi` | `zinc-800` `#27272a` | hover de superficie, inputs | base |
+| `divider` | `zinc-800` | separadores decorativos | no aplica (D3) |
+| `border` | `zinc-500` `#71717a` | borde de input y control enfocable | 4.12:1 sobre bg, 3.67:1 sobre surface |
+| `fg` | `zinc-50` `#fafafa` | texto principal | 19.06:1 |
+| `fg-dim` | `zinc-400` `#a1a1aa` | texto secundario. **Es el piso**, no bajar | 7.76:1 / 6.91:1 |
+| `accent` | `amber-400` `#fbbf24` | foco, activo, "te toca a vos" | 11.92:1 |
+| `on-accent` | `zinc-950` | texto sobre el acento | 11.92:1 |
+
+Radios (D: uno solo, `SHAPE CONSISTENCY`): `sm` 4px inputs y badges, `md` 6px botones, `lg` 10px
+tarjetas y paneles. **Nada de `rounded-full` salvo el punto de estado.**
+
+Tipografía: `font-sans` Geist, `font-mono` Geist Mono. Escala: `display` 24px/600, `title` 16px/600,
+`body` 14px/400, `label` 12px/500 con `tracking-wide`. **Todo dato numérico en `font-mono` con
+`tabular-nums`.** No hay nada por debajo de 12px.
+
+### Reglas que no se negocian
+
+1. **Ninguna task escribe un color literal.** Ni `#`, ni `zinc-700`, ni `bg-slate-800`. Solo tokens.
+   Sin esto vuelve el problema actual: 5 pantallas con 5 grises distintos y ningún lugar donde
+   cambiarlos.
+2. **`fg-dim` es el texto más apagado que existe.** `zinc-500` da 4.12:1 y no pasa AA. Verificado.
+3. **`border` para lo que se puede enfocar, `divider` para lo que solo separa.** Ver D3.
+4. **El anillo de foco es visible siempre**: `focus-visible:ring-2 ring-accent`. Nunca
+   `outline-none` sin reemplazo. Hoy hay controles sin foco visible y son dos usuarios que trabajan
+   con teclado.
+
+---
+
+## 5. Contrato 2 — primitivas de `src/components/ui/`. CONGELADO
+
+**Las declara e implementa T01. Las consumen T02 a T11. Nadie más las modifica.**
+
+Firmas, no implementaciones. T01 las escribe completas antes de que arranque la ola 2, porque las
+otras tasks se escriben contra estos tipos al mismo tiempo.
+
+```ts
+// Button — reemplaza los 91 <button> a mano
+type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+type ButtonSize = "sm" | "md";
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: ButtonVariant;   // default "secondary"
+  size?: ButtonSize;         // default "md"
+  loading?: boolean;         // deshabilita y muestra spinner; el texto NO cambia
+  icon?: React.ReactNode;    // Phosphor, va antes del texto
+}
+
+// Input / Textarea — label ARRIBA, error ABAJO, nunca placeholder-como-label
+interface FieldProps {
+  label: string;             // obligatorio: no hay campos sin etiqueta
+  hint?: string;
+  error?: string;            // si viene, pinta el borde y se anuncia con aria
+}
+
+// Select — envuelve @radix-ui/react-select, no el <select> nativo
+interface SelectProps<T extends string> {
+  label: string;
+  value: T;
+  onValueChange: (v: T) => void;
+  options: ReadonlyArray<{ value: T; label: string; hint?: string }>;
+}
+
+// Badge — para estados. El color NO se pasa: sale de ui-tokens
+interface BadgeProps { tone: Tone; children: React.ReactNode; icon?: boolean }
+
+// Card, Tabs, Dialog, Skeleton, EmptyState
+interface EmptyStateProps {
+  title: string;
+  body: string;
+  action?: { label: string; onClick: () => void };
+  icon?: React.ReactNode;
+}
+```
+
+### Reglas que no se negocian
+
+1. **`loading` no cambia el texto del botón.** Un botón que pasa de "Generar" a "Generando…" cambia
+   de ancho y salta el layout. Se deshabilita y se le agrega un spinner, el ancho queda.
+2. **`label` es obligatorio en todo campo.** No hay `placeholder` haciendo de etiqueta: cuando el
+   usuario escribe, se pierde el contexto.
+3. **`Badge` no recibe color, recibe `tone`.** El color sale de `ui-tokens.ts`. Es lo que evita que
+   `awaiting_approval` sea ámbar en una pantalla y gris en otra, que es lo que pasa hoy.
+4. **Ninguna primitiva hace `fetch` ni conoce un endpoint.** Son tontas a propósito.
+
+---
+
+## 6. Contrato 3 — `ui-tokens.ts`, el mapeo de estados. CONGELADO
+
+**Lo declara T01. Lo consumen T02, T03 y todas las pantallas. Es la fuente de verdad única.**
+
+```ts
+export type Tone = "neutral" | "info" | "attention" | "ok" | "danger";
+
+/** Un estado de job -> como se ve. NO devuelve clases CSS: devuelve tokens. */
+export interface EstadoVisual {
+  tone: Tone;
+  label: string;         // en castellano, para el usuario
+  animado: boolean;      // true solo para "generating"
+}
+
+export function estadoDeJob(status: JobRecord["status"]): EstadoVisual;
+```
+
+Mapeo congelado:
+
+| `status` | `tone` | label | animado | por qué |
+|---|---|---|---|---|
+| `pending` | `neutral` | En cola | no | no pasa nada todavía |
+| `generating` | `info` | Generando | **sí** | la máquina trabaja: es lo único que se anima |
+| `awaiting_approval` | `attention` | Elegí variante | no | **requiere al usuario**: ámbar (D6) |
+| `done` | `ok` | Listo | no | |
+| `failed` | `danger` | Falló | no | |
+
+### Reglas que no se negocian
+
+1. **Ninguna pantalla escribe su propio `switch` de estados.** Si una necesita un label distinto por
+   contexto, se agrega un parámetro a esta función, no un `switch` local. Hoy hay 4 copias
+   divergentes y es la causa de que el mismo estado se vea distinto según la pantalla.
+2. **El label va en castellano y el `status` crudo NO se muestra.** Hoy la UI imprime
+   `awaiting_approval` tal cual, que es una cadena interna.
+3. **`animado` respeta `prefers-reduced-motion`.** Lo maneja `Badge`, no cada pantalla.
+
+---
+
+## 7. Dependencias y olas de paralelismo
+
+```
+  Ola 1        T01  fundacion                        1 agente, SOLO
+                │
+                ├──────────────┬──────────────┐
+  Ola 2        T02            T03                    2 agentes
+             compartidos    JobCard
+                │              │
+                └──────┬───────┘
+                       │
+       ┌───────────┬───┴───────┬───────────┐
+  Ola 3  T04         T05         T06                 3 agentes
+        login       home       imagenes
+                       │
+       ┌───────────┬───┴───────┐
+  Ola 4  T07         T08                             2 agentes
+        batch      result
+                       │
+       ┌───────────┬───┴───────┬───────────┐
+  Ola 5  T09         T10         T11                 3 agentes
+        review     videos     pipeline
+                       │
+  Ola 6        T12  limpieza y QA final              1 agente, SOLO
+```
+
+| Task | Depende de | Se puede correr junto con |
+|---|---|---|
+| T01 fundación | nada | **nada, va sola** |
+| T02 compartidos | T01 (primitivas + tokens) | T03 |
+| T03 JobCard | T01 | T02 |
+| T04 login | T01 | T05, T06 |
+| T05 home | T01, T02 (ModelSelectorBar, CostEstimatePanel) | T04, T06 |
+| T06 imágenes | T01, T02 | T04, T05 |
+| T07 batch | T01, T02, T03 | T08 |
+| T08 result | T01, T02 | T07 |
+| T09 review | T01, T02, T03 | T10, T11 |
+| T10 videos | T01, T02, T03 | T09, T11 |
+| T11 pipeline | T01, T02, T03 | T09, T10 |
+| T12 limpieza | todas | **nada, va sola** |
+
+**Las 6 olas de arriba son MÁS CONSERVADORAS que el grafo de dependencias, a propósito.** Si se
+mira solo lo que cada task declara, el mínimo real son 3 olas y la tercera tendría 7 tasks en
+paralelo (T05 a T11). Se agrupó en 6 por dos razones: 7 agentes a la vez es imposible de revisar, y
+el orden elegido pone las pantallas baratas antes que las caras para que un problema del sistema de
+diseño aparezca en un login de 156 líneas y no en el pipeline de 1187. La compuerta que **sí** es
+técnica es una sola: nadie arranca antes de que T01 verifique.
+
+Lo que no es obvio y conviene explicar:
+
+- **T04, T05 y T06 podrían técnicamente correr en la ola 2**, porque el ownership de archivos ya las
+  aísla. Van después a propósito: son las pantallas más chicas y más usadas, y si el sistema de
+  primitivas de T01 tiene un problema de ergonomía, es mejor descubrirlo en un formulario de login de
+  156 líneas que en el pipeline de 1187.
+- **T09, T10 y T11 van al final porque son las de mayor riesgo**, no porque dependan de más cosas.
+  Concentran la lógica de aprobar, regenerar y elegir variantes, que es la que mueve plata. Cuando
+  les toca, el sistema ya está probado en 5 pantallas.
+- **El límite son las dependencias, no la cantidad de agentes.** Meter un cuarto agente en la ola 3
+  no acelera nada: no hay una cuarta pantalla que no dependa de T02.
+- **Si preferís ir de a uno**, el orden serial es exactamente el de la tabla, T01 a T12. Dejá T09,
+  T10 y T11 para cuando no estés generando nada.
+
+**Una task bloqueante no está terminada hasta que su verificación pasa**, y la ola siguiente no
+arranca antes. En particular: **si T01 falla, se para el proyecto**. Todo lo demás importa sus tipos.
+
+---
+
+## 8. Ownership de archivos — regla anti-colisión
+
+**Cada task solo escribe los archivos de su fila.** Si necesita algo de un archivo ajeno, lo lee pero
+no lo escribe; si cree que necesita escribirlo, va a §10.
+
+| Task | Archivos que puede crear o modificar |
+|---|---|
+| **T01** | `package.json`, `tailwind.config.ts`, `src/app/globals.css`, `src/app/layout.tsx`, `src/lib/cn.ts`, `src/lib/ui-tokens.ts`, `src/components/ui/**` |
+| **T02** | `src/components/StatusBadge.tsx`, `ProjectTabs.tsx`, `ModelSelectorBar.tsx`, `CostEstimatePanel.tsx`, `LogPanel.tsx`, `JsonEditor.tsx`, `FlowGraph.tsx`, `src/app/SessionBar.tsx` |
+| **T03** | `src/components/JobCard.tsx` |
+| **T04** | `src/app/login/page.tsx`, `src/app/login/LoginForm.tsx` |
+| **T05** | `src/app/page.tsx` |
+| **T06** | `src/app/imagenes/page.tsx`, `src/app/imagenes/ImagenesBoard.tsx` |
+| **T07** | `src/app/batch/page.tsx`, `src/app/batch/BatchBoard.tsx`, `src/app/batch/ClipTimeline.tsx` |
+| **T08** | `src/app/project/[id]/result/page.tsx` |
+| **T09** | `src/app/batch/review/page.tsx`, `src/app/batch/review/ReviewDeck.tsx` |
+| **T10** | `src/app/batch/videos/page.tsx`, `src/app/batch/videos/VideoDeck.tsx` |
+| **T11** | `src/app/project/[id]/pipeline/page.tsx` |
+| **T12** | `tailwind.config.ts` (solo para borrar los alias viejos), `tasks/_verificacion-*.{sh,mjs}` |
+
+**Excepción documentada:** `tailwind.config.ts` lo escriben T01 y T12. No es colisión porque están en
+olas distintas y separadas por 10 tasks: T01 agrega los tokens nuevos **y deja los viejos como
+alias**, T12 borra los viejos cuando ya nadie los usa. T12 no puede arrancar hasta que T11 termine.
+
+Para que la excepción sea visible en el archivo y no solo en este documento, **T01 escribe este
+comentario literal encima de las tres líneas de alias**, y T12 lo borra junto con ellas:
+
+```ts
+// ─── ALIAS DE TRANSICION — LOS BORRA T12, NO VOS ───────────────────────────
+// Unico lugar del modulo con dos dueños (T01 los crea, T12 los borra). Ver §8 del
+// plan. Mientras las 8 pantallas se migran de a una, las que faltan siguen usando
+// bg-panel / bg-ink / bg-accent: si desaparecen antes de que termine T11, la app
+// ENTERA queda sin estilos, y se esta usando en produccion mientras esto se hace.
+```
+
+**Archivos que NADIE toca.** Romper esto rompe producción, y estos son los caminos que gastan plata o
+que dejan a los usuarios afuera:
+
+```
+src/lib/jobs/queue.ts              la cola, el backoff de 429, el gate por lotes
+src/lib/jobs/pipeline.ts           buildJobs, generacion, approve, changePrompt
+src/lib/config.ts                  MODEL_CATALOG, defaults, env del pipeline
+src/lib/schema.ts                  el Zod del PlanJSON
+src/lib/storage.ts                 naming de archivos y manifest
+src/lib/db.ts                      el estado
+src/lib/auth.ts                    login, HMAC, rate limit
+src/middleware.ts                  el guard. Depende de "/login" literal
+src/lib/providers/**               Vertex: imagen, video, llm, auth
+src/app/api/**                     TODOS los endpoints
+src/store/useProjectStore.ts       el estado del cliente y su polling
+deploy/**                          deploy.sh, ecosystem, Caddyfile
+```
+
+`useProjectStore.ts` está en la lista y merece la aclaración: es tentador "mejorarlo" al rediseñar la
+home, pero tiene el polling y la forma de los datos que consumen 4 pantallas. Un cambio ahí rompe
+tasks de otra ola. Si una pantalla necesita algo del store, va a §10.
+
+**Lo que parece colisión y no lo es:** T09 y T10 escriben `page.tsx` los dos, pero son
+`batch/review/page.tsx` y `batch/videos/page.tsx`. Archivos distintos en directorios distintos.
+
+---
+
+## 9. Criterios de aceptación globales
+
+1. `npx tsc --noEmit` sin errores. **Antes, `rm -rf .next`**: si no, reporta errores de tipos
+   generados de rutas que ya no existen y parece que rompiste algo.
+2. `npm run build` termina OK y **la ruta sigue en la lista de rutas compiladas**. Una pantalla que
+   desaparece del output del build es un archivo mal renombrado.
+3. `bash tasks/_verificacion-inventario.sh` → `INVENTARIO COMPLETO`.
+4. `node tasks/_verificacion-contraste.mjs` → `FALLOS: 0`.
+5. `bash tasks/_verificacion-endpoints.sh` → `SIN REGRESIONES`. **Es el más importante**: prueba que
+   ninguna pantalla perdió una llamada a la API.
+6. **Nada de lo que ya funcionaba cambió.** Con la app corriendo: login de los dos usuarios da 200,
+   `/api/config` sin cookie da 401, y el circuito de generar una imagen con 2 variantes termina en
+   `2/2`.
+7. Cero colores literales fuera de `tailwind.config.ts`: `grep -rE "#[0-9a-fA-F]{3,6}" src/ --include=*.tsx` no devuelve nada.
+8. Cero `text-[10px]` y `text-[11px]`: no hay nada por debajo de 12px.
+9. Todo control interactivo tiene foco visible con teclado. Se prueba a mano, con Tab.
+10. `prefers-reduced-motion` apaga el pulso de "generando".
+
+---
+
+## 10. Preguntas abiertas
+
+Si aparece una decisión que este documento no resuelve, **se anota acá en lugar de decidirla en el
+código**. Si bloquea, la task se detiene y no sigue con suposiciones.
+
+### P-01 — El gate de aprobación por lotes confunde en la pantalla de imágenes
+- **Task:** T06
+- **Sección del plan:** §0 (no se construye: cambios funcionales)
+- **Archivo:** `src/app/imagenes/ImagenesBoard.tsx`
+- **Qué falta:** `PIPELINE_APPROVAL_BATCH=5` frena la cola cuando hay 5 jobs sin aprobar, así que una
+  tanda de más de 5 prompts se detiene esperando que el usuario apruebe. Es el comportamiento
+  existente y correcto para el flujo de brief, pero en la pantalla de imágenes se lee como que se
+  colgó. ¿Se muestra un aviso explicando que hay que aprobar para seguir, o se cambia el default?
+- **Bloquea:** no
+- **Mientras tanto:** T06 muestra un aviso con el conteo (`5 de 12 listas, aprobá para seguir`) y un
+  botón que aprueba todas las visibles. **No toca la config**, que es de otro dominio.
+- **Resolución:** _pendiente_
+
+### P-02 — La estimación de costo quedó desactualizada
+- **Task:** T02 (`CostEstimatePanel`)
+- **Sección del plan:** §0
+- **Archivo:** `src/components/CostEstimatePanel.tsx`
+- **Qué falta:** `PRICE_VIDEO_PER_SEC_USD` sigue en 0.50, que era el precio de Veo 3.1 normal. Ahora
+  el default es Veo 3.1 Lite, más barato, así que el panel sobreestima. Corregirlo es un cambio de
+  config, no de UI.
+- **Bloquea:** no
+- **Mientras tanto:** T02 rediseña el panel mostrando el número que da la API tal cual, y agrega la
+  palabra "estimado". No cambia la aritmética.
+- **Resolución:** _pendiente_
+
+### P-03 — `FlowGraph` puede no valer la pena
+- **Task:** T02
+- **Sección del plan:** §8
+- **Archivo:** `src/components/FlowGraph.tsx`
+- **Qué falta:** son 86 líneas que dibujan un grafo de dependencias entre jobs. Con 95 clips es
+  ilegible. ¿Se rediseña, o se reemplaza por una barra de progreso por etapa?
+- **Bloquea:** no
+- **Mientras tanto:** T02 lo migra a los tokens nuevos sin cambiar la estructura, y **anota cuántos
+  nodos muestra con el VSL real de 95 clips** para poder decidir con un dato.
+- **Resolución:** _pendiente_
+
+### P-04 — Decidido por el usuario: no confirmó paleta ni fundación
+- **Task:** todas
+- **Sección del plan:** §1, D1 a D13
+- **Qué falta:** el usuario dijo "hacelo como a vos te parezca". Las 13 decisiones de §1 las tomé yo.
+  Las dos que más conviene que confirme, porque son las más difíciles de revertir después: **D2** (el
+  acento ámbar sobre zinc) y **D1** (primitivas a mano en vez de shadcn CLI).
+- **Bloquea:** no
+- **Mientras tanto:** se avanza con lo decidido. D2 es reversible barato porque todo sale de tokens en
+  un solo archivo: cambiar el acento es una línea. D1 no es reversible barato, pero está verificado
+  con evidencia concreta de por qué el CLI rompe la app.
+- **Resolución:** _pendiente_
