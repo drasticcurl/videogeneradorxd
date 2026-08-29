@@ -277,6 +277,12 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     [config]
   );
   const projectImageModel = project?.models.image ?? "";
+  /*
+    Formato del proyecto, para que las tarjetas no recorten lo que no sea vertical.
+    Sale del plan (que es lo que se guardo al crearlo) y cae a 9:16, que es lo que
+    estaba fijo antes y sigue siendo lo correcto para un VSL.
+  */
+  const formato = project?.plan.global.formato || "9:16";
   const projectVideoModel = project?.models.video ?? "";
 
   const resByClip = useMemo(() => {
@@ -368,6 +374,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
       finalPromptByRef,
       modelOptions: imageModels,
       projectModel: projectImageModel,
+      formato,
     }),
     [
       promptByRef,
@@ -376,6 +383,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
       finalPromptByRef,
       imageModels,
       projectImageModel,
+      formato,
     ]
   );
   const videoMeta = useMemo<JobMeta>(
@@ -387,6 +395,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
       assetTypeByRef,
       modelOptions: videoModels,
       projectModel: projectVideoModel,
+      formato,
     }),
     [
       promptByRef,
@@ -396,6 +405,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
       assetTypeByRef,
       videoModels,
       projectVideoModel,
+      formato,
     ]
   );
 
@@ -747,6 +757,8 @@ interface JobMeta {
   assetTypeByRef?: Map<string, "avatar" | "broll">;
   modelOptions: { id: string; label: string }[];
   projectModel: string;
+  /** Formato del proyecto, para que la tarjeta no recorte lo que no sea 9:16. */
+  formato: string;
 }
 
 interface VideoExtra {
@@ -907,6 +919,7 @@ function Group({
               assetType={meta.assetTypeByRef?.get(j.refId)}
               modelOptions={meta.modelOptions}
               projectModel={meta.projectModel}
+              formato={meta.formato}
               {...handlers}
               resolution={videoExtra?.resByClip.get(j.refId)}
               resolutionOptions={videoExtra?.resolutionOptions}
@@ -969,6 +982,7 @@ function Filmstrip({
                 assetType={meta.assetTypeByRef?.get(j.refId)}
                 modelOptions={meta.modelOptions}
                 projectModel={meta.projectModel}
+                formato={meta.formato}
                 {...handlers}
                 resolution={videoExtra?.resByClip.get(j.refId)}
                 resolutionOptions={videoExtra?.resolutionOptions}

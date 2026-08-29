@@ -59,6 +59,7 @@ import {
   Textarea,
   type SelectOption,
 } from "@/components/ui";
+import { Visor } from "@/components/Visor";
 import { cn } from "@/lib/cn";
 import type { ModelOption } from "@/lib/config";
 /*
@@ -804,76 +805,10 @@ export default function ImagenesBoard({
         <Visor
           url={ampliada.url}
           titulo={ampliada.titulo}
+          tipo="image"
           onCerrar={() => setAmpliada(null)}
         />
       )}
-    </div>
-  );
-}
-
-/**
- * Visor a pantalla completa. La miniatura de la grilla es chica por definicion, y para
- * decidir entre dos variantes hay que ver la imagen entera y grande.
- *
- * `object-contain` con el alto y el ancho acotados al viewport: la imagen se ve COMPLETA
- * en cualquier formato, de 21:9 a 9:16, sin recortes y sin desbordar la pantalla.
- */
-function Visor({
-  url,
-  titulo,
-  onCerrar,
-}: {
-  url: string;
-  titulo: string;
-  onCerrar: () => void;
-}) {
-  // Escape para cerrar: es lo que uno aprieta sin pensar cuando algo se abre encima.
-  useEffect(() => {
-    const alTeclear = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCerrar();
-    };
-    window.addEventListener("keydown", alTeclear);
-    return () => window.removeEventListener("keydown", alTeclear);
-  }, [onCerrar]);
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Vista ampliada de ${titulo}`}
-      onClick={onCerrar}
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-bg/95 p-4"
-    >
-      <div className="flex w-full max-w-5xl items-center justify-between gap-3">
-        <span className="code truncate text-label text-fg-dim">{titulo}</span>
-        <span className="flex shrink-0 gap-2">
-          <a
-            href={`${url}&dl=1`}
-            download
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1.5 text-label text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <DownloadSimple aria-hidden className="size-3.5" />
-            Descargar
-          </a>
-          <button
-            type="button"
-            onClick={onCerrar}
-            aria-label="Cerrar la vista ampliada"
-            className="inline-flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1.5 text-label text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <X aria-hidden className="size-3.5" />
-            Cerrar (Esc)
-          </button>
-        </span>
-      </div>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={url}
-        alt={titulo}
-        onClick={(e) => e.stopPropagation()}
-        className="max-h-[85vh] max-w-full rounded-lg object-contain"
-      />
     </div>
   );
 }

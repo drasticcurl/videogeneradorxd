@@ -55,6 +55,7 @@
 import {
   ArrowCounterClockwise,
   ArrowsClockwise,
+  ArrowsOut,
   Check,
   CheckCircle,
   Clock,
@@ -83,6 +84,7 @@ import {
   Textarea,
   type SelectOption,
 } from "@/components/ui";
+import { Visor } from "@/components/Visor";
 import { cn } from "@/lib/cn";
 import { DEFAULT_VEO_PROMPT_TEMPLATE } from "@/lib/promptTemplate";
 import { buildVeoVideoPrompt } from "@/lib/prompts";
@@ -131,6 +133,17 @@ interface Props {
   resolution?: string;
   resolutionOptions?: string[];
   onChangeResolution?: (jobRefId: string, resolution: string) => void;
+  /**
+   * Formato del proyecto ("16:9", "4:5", ...). Define la proporcion del medio.
+   *
+   * OPCIONAL y con default "9:16", que es exactamente lo que estaba hardcodeado antes:
+   * ningun caller existente cambia de comportamiento si no la pasa. Se agrega igual a
+   * pesar de la nota de arriba sobre no tocar `Props`, porque el formato dejo de ser
+   * fijo cuando se pudo elegir en /imagenes y sin esto la tarjeta RECORTA todo lo que
+   * no sea vertical. La regla estaba para que un rediseño en paralelo no rompiera las
+   * cuatro pantallas; una prop opcional con default identico no rompe ninguna.
+   */
+  formato?: string;
 }
 
 function fileUrl(projectId: string, rel: string) {
@@ -214,9 +227,14 @@ export const JobCard = memo(function JobCard({
   resolution,
   resolutionOptions,
   onChangeResolution,
+  formato = "9:16",
 }: Props) {
   const [selected, setSelected] = useState<number | null>(job.selectedIndex);
   const [editing, setEditing] = useState(false);
+  /** Medio abierto en el visor a pantalla completa, o null. */
+  const [ampliado, setAmpliado] = useState<string | null>(null);
+  /** "16:9" -> "16 / 9", que es lo que entiende la propiedad CSS aspect-ratio. */
+  const proporcionCss = formato.replace(":", " / ");
   const [promptText, setPromptText] = useState("");
   const [dialogueText, setDialogueText] = useState("");
   const [durationChoice, setDurationChoice] = useState<number>(8);
@@ -385,6 +403,13 @@ export const JobCard = memo(function JobCard({
                       : "ring-1 ring-inset ring-divider hover:ring-border",
                   )}
                 >
+                  {/*
+                    `object-contain` con la proporcion del PROYECTO, no un 9/16 fijo con
+                    object-cover: desde que el formato se elige, una imagen 16:9 o 21:9
+                    entraba a la fuerza en un rectangulo vertical y se veia cortada.
+                    Va por `style` porque el valor es dinamico y una clase
+                    `aspect-[${x}]` armada en runtime no existe en el CSS compilado.
+                  */}
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     key={url}
@@ -392,7 +417,8 @@ export const JobCard = memo(function JobCard({
                     alt={`Variante ${c.index} de ${job.label}`}
                     loading="lazy"
                     decoding="async"
-                    className="aspect-[9/16] w-full object-cover"
+                    style={{ aspectRatio: proporcionCss }}
+                    className="w-full bg-bg object-contain"
                   />
                   {/* string plano, no cn(): mezcla tamaño con color. Ver cabecera. */}
                   <span
@@ -409,34 +435,60 @@ export const JobCard = memo(function JobCard({
             })}
           </div>
         ) : (
-          <div className="flex aspect-[9/16] max-h-56 items-center justify-center">
+          /*
+            `max-h-[28rem]` (448px) y no `max-h-56` (224px). Medido: con 224px de tope y
+            proporcion vertical, un clip quedaba de 126x224, del tamaño de un sello, y
+            esta tarjeta es donde se decide si el clip sirve o se regenera (que cuesta
+            plata). El doble sigue entrando bien en la grilla, y para verlo de verdad
+            esta el boton de ampliar.
+          */
+          <div
+            style={{ aspectRatio: proporcionCss }}
+            className="relative flex max-h-[28rem] items-center justify-center"
+          >
             {approvedUrl ? (
-              isImage ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={approvedUrl}
-                  src={approvedUrl}
-                  alt={job.label}
-                  loading="lazy"
-                  decoding="async"
-                  className="h-full w-full object-contain"
-                />
-              ) : (
-                /*
-                  preload="none" y sin autoplay, a proposito: la pantalla del VSL monta
-                  hasta 95 clips y con preload="metadata" el browser dispara 95 requests
-                  de rango al abrir la pagina. El video se baja cuando el usuario le da
-                  play, no antes.
-                */
-                <video
-                  key={approvedUrl}
-                  src={approvedUrl}
-                  controls
-                  preload="none"
-                  playsInline
-                  className="h-full w-full object-contain"
-                />
-              )
+              <>
+                {/*
+                  Ampliar. La tarjeta es una miniatura por necesidad (el pipeline monta
+                  hasta 95), pero decidir si un clip sirve o se regenera no se puede
+                  hacer en 126 pixeles de ancho. Un boton, sin tocar el resto.
+                */}
+                <button
+                  type="button"
+                  onClick={() => setAmpliado(approvedUrl)}
+                  aria-label={`Ver ${tipoLabel} ${job.label} en grande`}
+                  title="Ver en grande"
+                  className="absolute right-1 top-1 z-10 inline-flex size-7 items-center justify-center rounded-sm bg-bg/85 text-fg-dim transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <ArrowsOut aria-hidden className="size-4" />
+                </button>
+                {isImage ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={approvedUrl}
+                    src={approvedUrl}
+                    alt={job.label}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-contain"
+                  />
+                ) : (
+                  /*
+                    preload="none" y sin autoplay, a proposito: la pantalla del VSL monta
+                    hasta 95 clips y con preload="metadata" el browser dispara 95 requests
+                    de rango al abrir la pagina. El video se baja cuando el usuario le da
+                    play, no antes.
+                  */
+                  <video
+                    key={approvedUrl}
+                    src={approvedUrl}
+                    controls
+                    preload="none"
+                    playsInline
+                    className="h-full w-full object-contain"
+                  />
+                )}
+              </>
             ) : (
               <span
                 className={
@@ -836,6 +888,16 @@ export const JobCard = memo(function JobCard({
             </div>
           </DialogContent>
         </Dialog>
+      )}
+
+      {/* Visor a pantalla completa del medio aprobado. */}
+      {ampliado && (
+        <Visor
+          url={ampliado}
+          titulo={job.label}
+          tipo={isImage ? "image" : "video"}
+          onCerrar={() => setAmpliado(null)}
+        />
       )}
     </Card>
   );
