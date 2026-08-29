@@ -179,6 +179,38 @@ function probeHasAudio(absFile: string): boolean {
   }
 }
 
+/**
+ * Frames por segundo del archivo, o null si no se puede leer.
+ *
+ * `r_frame_rate` viene como fraccion ("24/1", "30000/1001"), asi que se divide.
+ */
+function probeFps(absFile: string): number | null {
+  try {
+    const res = spawnSync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=r_frame_rate",
+        "-of",
+        "csv=p=0",
+        absFile,
+      ],
+      { encoding: "utf8" }
+    );
+    const crudo = (res.stdout ?? "").trim();
+    const [num, den] = crudo.split("/").map(Number);
+    if (!Number.isFinite(num)) return null;
+    const fps = den && Number.isFinite(den) ? num / den : num;
+    return fps > 0 && fps <= 120 ? fps : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Duracion del archivo en segundos (fallback a 8s si falla). */
 function probeDuration(absFile: string, fallback = 8): number {
   try {
@@ -234,6 +266,26 @@ export function stitchProject(projectId: string): StitchResult {
   const { w, h } = canvasForResolution(anyHd ? "1080p" : "720p");
   const ffprobeOk = hasFfprobe();
 
+  /**
+   * FPS de salida: el MAS ALTO de los clips, no un 30 fijo.
+   *
+   * Los clips de Veo vienen a 24. Forzar 30 duplicaba 1 de cada 4 frames (24 -> 30 es
+   * 1.25x) y eso cuesta sin devolver nada: medido sobre un proyecto real de 6 clips,
+   * 12% mas de tiempo de encodeo (6.9s de 58s) y 1203 frames en vez de 962, para un
+   * archivo del MISMO peso. Los frames repetidos ademas pueden meter judder en el
+   * movimiento, porque la duplicacion es despareja.
+   *
+   * Se toma el maximo y no el minimo para no tirar frames si algun dia se mezclan
+   * clips de distinto framerate. Si ffprobe no esta, queda el 30 de antes.
+   */
+  const fpsDetectados = ffprobeOk
+    ? ordered
+        .map((c) => probeFps(absPathFor(projectId, c.file!)))
+        .filter((f): f is number => f !== null)
+    : [];
+  const fpsSalida =
+    fpsDetectados.length > 0 ? Math.round(Math.max(...fpsDetectados)) : 30;
+
   // Inputs reales (uno por clip). Detectamos audio/duracion por clip.
   const inputs: string[] = [];
   const clipMeta = ordered.map((clip, i) => {
@@ -269,7 +321,7 @@ export function stitchProject(projectId: string): StitchResult {
   clipMeta.forEach((m, i) => {
     filters.push(
       `[${m.videoIndex}:v]scale=${w}:${h}:force_original_aspect_ratio=decrease:flags=lanczos,` +
-        `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v${i}]`
+        `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fpsSalida},format=yuv420p[v${i}]`
     );
     const aSrc = m.hasAudio ? `${m.videoIndex}:a` : `${m.silenceIndex}:a`;
     filters.push(
