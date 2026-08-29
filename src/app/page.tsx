@@ -90,6 +90,8 @@ interface ProjectSummary {
   createdAt: string;
   clipCount: number;
   imageCount: number;
+  /** true = proyecto de la pantalla de solo imagenes; no va en esta lista. */
+  soloImagenes?: boolean;
 }
 
 type Mode = "ia" | "json";
@@ -201,7 +203,13 @@ export default function HomePage() {
     try {
       const res = await fetch("/api/projects");
       const data = await res.json();
-      setProjects(data.projects ?? []);
+      /*
+        Se filtran los proyectos de SOLO IMAGENES: viven en /imagenes y tienen su
+        propia lista. Antes caian todos juntos acá y quedaban mezclados los VSL con
+        las tandas de imagenes, que no comparten ni pantalla ni acciones.
+      */
+      const todos = (data.projects ?? []) as ProjectSummary[];
+      setProjects(todos.filter((p) => !p.soloImagenes));
       setCargaLista("listo");
     } catch {
       // Antes esto se tragaba en silencio y la lista quedaba vacia, que era
@@ -992,7 +1000,7 @@ export default function HomePage() {
       {/* ──────────────────── 5: proyectos recientes ──────────────────── */}
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-title font-semibold text-fg">Proyectos recientes</h2>
+          <h2 className="text-title font-semibold text-fg">Proyectos de video</h2>
           {cargaLista === "listo" && projects.length > 0 && (
             <p className="text-label text-fg-dim">
               <span className="code tnum text-fg">{projects.length}</span> en total
@@ -1037,8 +1045,8 @@ export default function HomePage() {
         ) : projects.length === 0 ? (
           <EmptyState
             icon={<FilmSlate className="size-6" aria-hidden />}
-            title="Todavía no hay ningún proyecto"
-            body="Pegá un brief arriba y dale a Interpretar con IA, o pegá un PlanJSON si ya lo tenés armado. El proyecto se crea recién cuando apretás Generar todo."
+            title="Todavía no hay ningún proyecto de video"
+            body="Pegá un brief arriba y dale a Interpretar con IA, o pegá un PlanJSON si ya lo tenés armado. El proyecto se crea recién cuando apretás Generar todo. Las tandas de imágenes sueltas viven en la pantalla Imágenes, no acá."
             action={{
               label: "Cargar un brief de ejemplo",
               onClick: () => {

@@ -43,7 +43,8 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Badge,
@@ -67,12 +68,7 @@ import type { ModelOption } from "@/lib/config";
   AUTH_SECRET y PASSWORD_*, asi que no puede entrar al bundle del cliente. `ModelOption`
   sigue viniendo de config porque es solo un tipo y se borra al compilar.
 */
-import {
-  IMAGE_ASPECT_RATIOS,
-  IMAGE_SIZES,
-  imageSizesFor,
-  type Orientacion,
-} from "@/lib/formatos";
+import { IMAGE_ASPECT_RATIOS, IMAGE_SIZES, imageSizesFor } from "@/lib/formatos";
 import { estadoDeJob } from "@/lib/ui-tokens";
 
 interface Candidate {
@@ -105,6 +101,16 @@ interface Job {
 interface ManifestImage {
   id: string;
   prompt: string;
+}
+
+/** Un proyecto de solo imagenes, para la lista. */
+interface ProyectoImagenes {
+  id: string;
+  name: string;
+  status: string;
+  createdAt: string;
+  imageCount: number;
+  soloImagenes?: boolean;
 }
 
 const EN_CURSO = new Set(["pending", "queued", "generating", "waiting"]);
@@ -155,52 +161,62 @@ function SelectorFormato({
   valor: string;
   onChange: (v: string) => void;
 }) {
-  const grupos: ReadonlyArray<[Orientacion, string]> = [
-    ["vertical", "Vertical"],
-    ["cuadrado", "Cuadrado"],
-    ["horizontal", "Horizontal"],
-  ];
+  // Para qué sirve el formato elegido, al lado del label: reemplaza los tres titulos
+  // de grupo que se sacaron y ocupa cero espacio vertical.
+  const elegido = IMAGE_ASPECT_RATIOS.find((f) => f.id === valor);
   return (
     <div>
-      <span className="mb-1 block text-label font-medium text-fg-dim">Formato</span>
-      <div className="space-y-2">
-        {grupos.map(([orientacion, titulo]) => (
-          <div key={orientacion}>
-            <p className="mb-1 text-label text-fg-dim">{titulo}</p>
-            <div className="flex flex-wrap gap-1.5">
-              {IMAGE_ASPECT_RATIOS.filter((f) => f.orientacion === orientacion).map(
-                (f) => (
-                  <label
-                    key={f.id}
-                    className="cursor-pointer"
-                    title={f.uso ? `${f.id} · ${f.uso}` : f.id}
-                  >
-                    <input
-                      type="radio"
-                      name="formato-imagen"
-                      value={f.id}
-                      checked={valor === f.id}
-                      onChange={() => onChange(f.id)}
-                      className="peer sr-only"
-                    />
-                    <span
-                      className={cn(
-                        "flex h-16 w-[4.5rem] flex-col items-center justify-center gap-1 rounded-md",
-                        "border border-divider bg-surface text-fg-dim transition-colors",
-                        "hover:text-fg",
-                        "peer-checked:border-accent peer-checked:bg-accent peer-checked:text-on-accent",
-                        "peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-accent",
-                      )}
-                    >
-                      <Forma w={f.w} h={f.h} />
-                      <span className="code text-label">{f.id}</span>
-                    </span>
-                  </label>
-                ),
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3">
+        <span className="text-label font-medium text-fg-dim">Formato</span>
+        <span className="text-label text-fg-dim">{elegido?.uso}</span>
+      </div>
+      {/*
+        UNA fila que envuelve, no tres bloques con titulo "Vertical / Cuadrado /
+        Horizontal" como estaba. Los titulos eran redundantes: la forma dibujada YA dice
+        la orientacion, que es justo el motivo por el que se dibuja. Sacarlos bajo el
+        selector de tres bloques verticales a uno.
+
+        El orden del catalogo va de vertical a horizontal, asi que la fila queda
+        ordenada por proporcion sola y se lee como una escala. El separador marca donde
+        cambia la orientacion sin gastar una linea de texto.
+      */}
+      <div role="radiogroup" aria-label="Formato de la imagen" className="flex flex-wrap items-center gap-1.5">
+        {IMAGE_ASPECT_RATIOS.map((f, i) => {
+          const anterior = IMAGE_ASPECT_RATIOS[i - 1];
+          const cambiaOrientacion = anterior && anterior.orientacion !== f.orientacion;
+          return (
+            <Fragment key={f.id}>
+              {cambiaOrientacion && (
+                <span aria-hidden className="h-8 w-px shrink-0 bg-divider" />
               )}
-            </div>
-          </div>
-        ))}
+              <label
+                className="cursor-pointer"
+                title={f.uso ? `${f.id} · ${f.uso}` : f.id}
+              >
+                <input
+                  type="radio"
+                  name="formato-imagen"
+                  value={f.id}
+                  checked={valor === f.id}
+                  onChange={() => onChange(f.id)}
+                  className="peer sr-only"
+                />
+                <span
+                  className={cn(
+                    "flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-md",
+                    "border border-divider bg-surface text-fg-dim transition-colors",
+                    "hover:text-fg",
+                    "peer-checked:border-accent peer-checked:bg-accent peer-checked:text-on-accent",
+                    "peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-accent",
+                  )}
+                >
+                  <Forma w={f.w} h={f.h} />
+                  <span className="code text-label">{f.id}</span>
+                </span>
+              </label>
+            </Fragment>
+          );
+        })}
       </div>
     </div>
   );
@@ -315,7 +331,37 @@ export default function ImagenesBoard({
     }
   }, [calidadesPermitidas, calidad]);
 
-  const [projectId, setProjectId] = useState<string | null>(null);
+  /*
+    ─── EL PROYECTO ABIERTO VIVE EN LA URL ─────────────────────────────────────
+
+    Antes era `useState(null)` y eso causaba dos bugs que parecian perdida de datos:
+
+      1. refrescar la pagina mostraba "todavia no generaste nada", porque el id solo
+         estaba en memoria de React. El proyecto seguia entero en el disco.
+      2. apretar Generar de nuevo hacia setProjectId(nuevo) + setJobs([]) y las
+         imagenes anteriores desaparecian de la vista. Tampoco se borraban, pero no
+         habia forma de volver a ellas.
+
+    Con el id en `?id=` el refresh lo conserva, el link se puede compartir y el boton
+    de atras del browser funciona. Y como abajo hay una lista de los proyectos de
+    imagenes, generar uno nuevo ya no tapa nada: los anteriores siguen a un click.
+  */
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const projectId = searchParams.get("id");
+
+  const abrirProyecto = useCallback(
+    (id: string | null) => {
+      router.replace(id ? `/imagenes?id=${encodeURIComponent(id)}` : "/imagenes", {
+        scroll: false,
+      });
+    },
+    [router],
+  );
+
+  /** Los proyectos de SOLO IMAGENES, para la lista de abajo. */
+  const [lista, setLista] = useState<ProyectoImagenes[]>([]);
+  const [cargandoLista, setCargandoLista] = useState(true);
   /** Formato con el que se genero lo que se esta viendo (sale del manifest). */
   const [formatoGenerado, setFormatoGenerado] = useState<string | null>(null);
   /** Imagen abierta en el visor grande, o null. */
@@ -361,6 +407,29 @@ export default function ImagenesBoard({
   // render (si no, cada cambio de estado reinicia el intervalo y el polling se
   // dispara mucho mas seguido de lo que dice el numero).
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /**
+   * Trae los proyectos de solo imagenes. Filtra por `soloImagenes`, que el server
+   * deriva de que el plan no tenga clips: asi esta pantalla nunca muestra un VSL y la
+   * home nunca muestra una tanda de imagenes.
+   */
+  const cargarLista = useCallback(async () => {
+    setCargandoLista(true);
+    try {
+      const res = await fetch("/api/projects", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { projects?: ProyectoImagenes[] };
+      setLista((data.projects ?? []).filter((p) => p.soloImagenes));
+    } catch {
+      // Un fallo de red no tiene que romper la pantalla; el proximo render reintenta.
+    } finally {
+      setCargandoLista(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargarLista();
+  }, [cargarLista]);
 
   const traerEstado = useCallback(async (id: string) => {
     try {
@@ -445,8 +514,11 @@ export default function ImagenesBoard({
         setError(data.error ?? `Error ${res.status}`);
         return;
       }
-      setProjectId(data.project.id);
       setJobs([]);
+      // El nuevo pasa a ser el abierto, pero los anteriores NO se pierden: quedan en
+      // la lista de abajo, que se recarga acá mismo.
+      abrirProyecto(data.project.id);
+      void cargarLista();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error de red");
     } finally {
@@ -713,8 +785,8 @@ export default function ImagenesBoard({
                 </span>
               </CardTitle>
               <CardDescription>
-                Tocá una miniatura para que quede esa variante. Pasá el mouse por
-                encima para verla en grande o bajarla sola.
+                Tocá una miniatura para que quede esa variante. Los botones de arriba de
+                cada una la abren en grande o la bajan sola.
               </CardDescription>
             </div>
             {/*
@@ -800,6 +872,85 @@ export default function ImagenesBoard({
           )}
         </section>
       )}
+
+      {/* ─── Las tandas anteriores ────────────────────────────────────────── */}
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-divider pt-5">
+          <h2 className="text-title font-semibold text-fg">
+            Tandas de imágenes{" "}
+            {lista.length > 0 && (
+              <span className="font-mono text-label tnum font-normal text-fg-dim">
+                {lista.length}
+              </span>
+            )}
+          </h2>
+          <Button size="sm" onClick={() => void cargarLista()}>
+            Actualizar
+          </Button>
+        </div>
+
+        {cargandoLista && lista.length === 0 ? (
+          <SkeletonGrid items={3} />
+        ) : lista.length === 0 ? (
+          <p className="text-body text-fg-dim">
+            Todavía no generaste ninguna. Las que generes van a quedar acá, no se
+            borran al generar otra.
+          </p>
+        ) : (
+          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {lista.map((p) => {
+              const abierto = p.id === projectId;
+              return (
+                <li key={p.id}>
+                  {/*
+                    Un boton y no un <Link>: no hay navegacion real, se cambia el
+                    parametro de la URL de la misma pantalla. `aria-current` es lo que
+                    le dice al lector de pantalla cual esta abierto, porque el borde de
+                    acento solo lo comunica por color.
+                  */}
+                  <button
+                    type="button"
+                    onClick={() => abrirProyecto(p.id)}
+                    aria-current={abierto ? "true" : undefined}
+                    className={cn(
+                      "w-full rounded-lg border p-2.5 text-left transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                      abierto
+                        ? "border-accent bg-accent/10"
+                        : "border-divider bg-surface hover:border-border",
+                    )}
+                  >
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-body font-medium text-fg">
+                        {p.name}
+                      </span>
+                      {abierto && (
+                        <span className="shrink-0 text-label font-medium text-accent">
+                          abierta
+                        </span>
+                      )}
+                    </span>
+                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-label text-fg-dim">
+                      <span className="font-mono tnum">
+                        {p.imageCount} {p.imageCount === 1 ? "imagen" : "imágenes"}
+                      </span>
+                      <span aria-hidden>·</span>
+                      <span>{estadoDeJob(p.status).label}</span>
+                      <span aria-hidden>·</span>
+                      <span className="font-mono tnum">
+                        {new Date(p.createdAt).toLocaleDateString("es-AR", {
+                          day: "2-digit",
+                          month: "2-digit",
+                        })}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       {ampliada && (
         <Visor
@@ -896,7 +1047,8 @@ function TarjetaImagen({
                   className={cn(
                     // `border-2` en los dos estados: si solo la elegida tuviera borde,
                     // la miniatura cambiaria de tamaño al elegirla y saltaria la fila.
-                    // `group` para que los botones de ver/bajar aparezcan al pasar el mouse.
+                    // Los botones de ver/bajar van SIEMPRE visibles, no en hover: ver
+                    // el comentario en el <span> que los agrupa, mas abajo.
                     "group relative overflow-hidden rounded-sm border-2 transition-colors",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
                     "disabled:cursor-not-allowed disabled:opacity-60",
@@ -941,7 +1093,14 @@ function TarjetaImagen({
                     desanida y el layout se rompe). Con role + onKeyDown quedan igual de
                     accesibles por teclado.
                   */}
-                  <span className="absolute right-1 top-1 flex gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                  {/*
+                    SIEMPRE visibles. Estaban en `opacity-0` hasta pasar el mouse y el
+                    usuario reporto que no habia forma de bajar una imagen sola: los
+                    botones existian pero eran invisibles, o sea que no existian. Un
+                    control que hay que descubrir pasando el mouse por encima no es un
+                    control. En touch, ademas, no hay hover.
+                  */}
+                  <span className="absolute right-1 top-1 flex gap-1">
                     <span
                       role="button"
                       tabIndex={0}

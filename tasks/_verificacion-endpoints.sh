@@ -36,7 +36,7 @@ src/app/SessionBar.tsx|/api/login
 src/app/batch/BatchBoard.tsx|/api/batch /api/projects
 src/app/batch/review/ReviewDeck.tsx|/api/batch /api/jobs/
 src/app/batch/videos/VideoDeck.tsx|/api/batch /api/jobs/
-src/app/imagenes/ImagenesBoard.tsx|/api/files/ /api/imagenes /api/jobs/ /api/projects/
+src/app/imagenes/ImagenesBoard.tsx|/api/files/ /api/imagenes /api/jobs/ /api/projects /api/projects/
 src/app/imagenes/page.tsx|/api/config
 src/app/login/LoginForm.tsx|/api/login
 src/app/page.tsx|/api/projects /api/projects/

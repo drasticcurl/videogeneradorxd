@@ -22,6 +22,17 @@ export async function GET() {
     updatedAt: p.updatedAt,
     clipCount: p.plan.clips.length,
     imageCount: p.plan.assets.reduce((a, asset) => a + asset.images.length, 0),
+    /**
+     * True si el proyecto es de la pantalla de solo imagenes.
+     *
+     * Se DERIVA de que no tenga clips, no de un campo guardado: es la misma condicion
+     * que hace que el proyecto no genere video (ver /api/imagenes y buildJobs), y asi
+     * los proyectos que ya existian quedan clasificados sin migrar nada.
+     *
+     * Cada pantalla filtra por esto y deja de mostrar lo de la otra: antes los
+     * proyectos de imagenes aparecian en "Proyectos recientes" mezclados con los VSL.
+     */
+    soloImagenes: p.plan.clips.length === 0,
   }));
   return ok({ projects });
 }
