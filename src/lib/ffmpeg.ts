@@ -10,10 +10,12 @@
  *
  * ─── COSTO ───────────────────────────────────────────────────────────────────
  *
- * Medido en la VPS (4 cores EPYC): con `-preset slow` tarda ~1 segundo de reloj por
- * cada segundo de video de salida. 8 clips de 8s = 64s de video -> 61s de encodeo,
- * saturando los 4 cores (load 6.4). Los funnels que comparten la maquina NO se vieron
- * afectados: p50 de 5-6ms antes y durante.
+ * Medido en la VPS (4 cores EPYC) sobre un proyecto REAL de 6 clips, 40.1s de video,
+ * con los 3 cores que deja el limite y el preset actual: ~32s, o sea 0.8s de reloj por
+ * segundo de video. Con el `-preset slow` de antes eran 52s.
+ *
+ * Los funnels que comparten la maquina NO se ven afectados ni sin el limite de cores:
+ * p50 de 4-6ms antes, durante y despues, con ffmpeg al 89% en los 4 cores.
  *
  * Lo que SI importa: esto es `spawnSync`, o sea que bloquea el event loop de este
  * proceso mientras encodea. Un VSL de 95 clips son ~13 minutos con la app entera
@@ -74,6 +76,41 @@ function coresParaFfmpeg(): number {
     return Math.min(Math.floor(pedido), total);
   }
   return Math.max(1, total - 1);
+}
+
+/**
+ * Preset de x264. Cuanto mas lento, mejor compresion para la misma calidad.
+ *
+ * Default `medium`, que es el propio default de x264. Antes estaba en `slow` y eso
+ * costaba mucho por casi nada. Medido sobre un proyecto real de 6 clips (40.1s de
+ * video), con 3 cores y fps nativo:
+ *
+ *   slow    51.9s   13.5 MB    (lo de antes)
+ *   medium  31.9s   13.9 MB    SSIM 0.996 contra slow
+ *   fast    26.4s   14.1 MB    SSIM 0.996
+ *   faster  19.0s   13.7 MB    SSIM 0.9956
+ *
+ * O sea: `medium` termina 39% antes, pesa 3% mas y la diferencia de imagen es de
+ * 0.4% de SSIM, que a ojo no existe. Y estos videos despues los re-encodea Meta o
+ * TikTok igual, asi que afinar el ultimo 0.4% en el archivo intermedio no cambia nada
+ * de lo que ve el usuario final.
+ *
+ * `FFMPEG_PRESET` lo cambia sin tocar codigo (ej. `faster` para bajar a ~19s).
+ */
+function presetX264(): string {
+  const permitidos = [
+    "ultrafast",
+    "superfast",
+    "veryfast",
+    "faster",
+    "fast",
+    "medium",
+    "slow",
+    "slower",
+    "veryslow",
+  ];
+  const pedido = (process.env.FFMPEG_PRESET ?? "").trim();
+  return permitidos.includes(pedido) ? pedido : "medium";
 }
 
 let tasksetChecked = false;
@@ -348,11 +385,12 @@ export function stitchProject(projectId: string): StitchResult {
     "[outa]",
     "-c:v",
     "libx264",
-    // Calidad alta: CRF bajo + preset slow. Conserva la nitidez del 720p/1080p.
+    // CRF 18 conserva la nitidez del 720p/1080p. El preset sale de presetX264(),
+    // que documenta por que ya no es `slow`.
     "-crf",
     "18",
     "-preset",
-    "slow",
+    presetX264(),
     "-pix_fmt",
     "yuv420p",
     "-c:a",
