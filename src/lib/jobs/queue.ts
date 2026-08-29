@@ -117,6 +117,86 @@ function isProjectAutoApprove(projectId: string): boolean {
   return config.pipeline.autoApprove;
 }
 
+/* ──────────────── recuperacion despues de un reinicio ──────────────── */
+
+/**
+ * La cola vive en MEMORIA (`globalThis.__augcQueue`), asi que un reinicio del proceso
+ * —un deploy, un `pm2 restart`, un crash— la borra entera. Los jobs siguen en la DB
+ * como "pending" o "generating", pero `activeProjects` arranca vacio y nadie los vuelve
+ * a bombear: quedan huerfanos para siempre.
+ *
+ * Medido: 40 imagenes encoladas, se mata el proceso a mitad, se levanta de nuevo, y 15
+ * segundos despues seguian 28 en "pending" y 4 colgadas en "generating". No retoma.
+ *
+ * Peor todavia, el boton de "reintentar" NO alcanza para arreglarlo: `retryBrokenJobs`
+ * solo agarra jobs `failed` o colgados en `generating`, asi que si un proyecto quedo con
+ * jobs meramente `pending` (el caso comun cuando el reinicio lo pesco esperando turno)
+ * el boton no reencola nada y el proyecto no revive.
+ *
+ * Esto lo arregla: al primer contacto con la cola despues de arrancar, se releen los
+ * proyectos de la DB y se reactivan los que tenian trabajo a medias.
+ *
+ * ─── POR QUE ESTA PRENDIDO POR DEFECTO ──────────────────────────────────────
+ *
+ * Reanudar GASTA: son llamadas a Vertex que se facturan. Pero el usuario ya habia
+ * apretado Generar; el trabajo estaba pedido y pago a medias. Dejarlo tirado no ahorra
+ * nada, solo pierde lo ya gastado en las imagenes de las que dependian esos clips.
+ * `PIPELINE_RESUME_ON_BOOT=false` lo apaga para quien prefiera reanudar a mano.
+ */
+let recuperacionHecha = false;
+
+export function recuperarTrasReinicio(): void {
+  if (recuperacionHecha) return;
+  recuperacionHecha = true;
+  // Se lee directo del environment: `env()` de config.ts no se exporta, y agregarlo
+  // solo para esto obligaria a tocar un archivo que media app importa.
+  if ((process.env.PIPELINE_RESUME_ON_BOOT ?? "").toLowerCase() === "false") return;
+
+  const revividos: string[] = [];
+  for (const project of projectsDb.list()) {
+    // Pausado a mano = el usuario lo freno a proposito. No se toca.
+    if (project.status === "paused") continue;
+
+    const jobs = jobsDb.byProject(project.id);
+    const aMedias = jobs.filter(
+      (j) =>
+        j.status === "generating" || // quedo colgado: el proceso murio mientras corria
+        (j.status === "pending" && !isStageBlocked(j)) // esperaba turno y nadie lo llamo
+    );
+    if (aMedias.length === 0) continue;
+
+    /*
+      Los "generating" se bajan a "pending" ACA y no via reconcileStuckJobs: ese corre
+      sobre `activeProjects`, que en este momento todavia esta vacio, asi que no los
+      veria. Es exactamente el agujero que dejaba los 4 colgados del test.
+    */
+    for (const j of aMedias) {
+      if (j.status === "generating") {
+        jobsDb.update(j.id, {
+          status: "pending",
+          error: "El server se reinicio mientras se generaba; vuelve a la cola.",
+        });
+      }
+    }
+
+    state.activeProjects.add(project.id);
+    projectsDb.update(project.id, { status: "running" });
+    revividos.push(project.id);
+    logEvent(
+      project.id,
+      "warn",
+      `El server se reinicio con ${aMedias.length} job(s) a medias. Se retoman.`
+    );
+  }
+
+  if (revividos.length > 0) {
+    console.log(
+      `[cola] recuperados tras reinicio: ${revividos.length} proyecto(s) con trabajo a medias`
+    );
+    pump();
+  }
+}
+
 /** Marca el proyecto para procesar y arranca el bombeo. */
 export function enqueueProject(projectId: string): void {
   state.pausedProjects.delete(projectId);
@@ -595,6 +675,16 @@ function finalizeProjects(): void {
 }
 
 export function queueSnapshot() {
+  /*
+    Punto de entrada de la recuperacion. Va acá porque `queueSnapshot()` lo llama
+    `buildBatchSnapshot`, o sea el GET de /api/batch, que es lo que poll-ean el tablero y
+    las pantallas de revision: en cuanto alguien abre la app despues de un deploy, el
+    trabajo a medias se retoma. Corre una sola vez por proceso (tiene su propio guard).
+
+    No se puso a nivel de modulo a proposito: en Next los modulos se evaluan tambien
+    durante el build, y no queremos que un `next build` toque la base de produccion.
+  */
+  recuperarTrasReinicio();
   return {
     activeProjects: Array.from(state.activeProjects),
     pausedProjects: Array.from(state.pausedProjects),
