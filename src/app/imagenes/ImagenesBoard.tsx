@@ -350,14 +350,32 @@ export default function ImagenesBoard({
   const searchParams = useSearchParams();
   const projectId = searchParams.get("id");
 
+  /** Ancla de los resultados, para poder traerlos a la vista al cambiar de tanda. */
+  const resultadosRef = useRef<HTMLElement | null>(null);
+
   const abrirProyecto = useCallback(
     (id: string | null) => {
       router.replace(id ? `/imagenes?id=${encodeURIComponent(id)}` : "/imagenes", {
         scroll: false,
       });
+      /*
+        `scroll: false` evita el salto brusco al tope que hace el router por defecto,
+        pero entonces hay que mover la vista a mano: si no, se elige una tanda y el
+        cambio ocurre en una parte de la pagina que no se esta mirando. Eso fue
+        exactamente lo que se reporto como "no me deja elegir".
+
+        Se marca la intencion y el scroll lo hace un efecto, DESPUES del commit de
+        React. Con un `requestAnimationFrame` acá no alcanzaba: la primera tanda que se
+        abre monta la seccion de resultados en este mismo render, asi que el nodo
+        todavia no existe y el scroll se perdia en silencio.
+      */
+      pedirScroll.current = true;
     },
     [router],
   );
+
+  /** Se pidio traer los resultados a la vista al elegir una tanda. */
+  const pedirScroll = useRef(false);
 
   /** Los proyectos de SOLO IMAGENES, para la lista de abajo. */
   const [lista, setLista] = useState<ProyectoImagenes[]>([]);
@@ -380,6 +398,21 @@ export default function ImagenesBoard({
 
   // Para que el boton del estado vacio lleve al campo que hay que llenar.
   const promptsRef = useRef<HTMLTextAreaElement | null>(null);
+
+  /*
+    Trae los resultados a la vista cuando se elige una tanda de la lista.
+    Corre DESPUES del commit de React, y depende tambien de `jobs.length` para cubrir el
+    caso de la primera tanda que se abre: en ese render la seccion de resultados todavia
+    no existe, asi que el efecto sale sin hacer nada y reintenta cuando ya monto.
+  */
+  useEffect(() => {
+    if (!pedirScroll.current) return;
+    if (!resultadosRef.current) return;
+    pedirScroll.current = false;
+    // `smooth`: un salto instantaneo no deja ver que la pagina se movio, y ahi no se
+    // entiende de donde salio el contenido nuevo.
+    resultadosRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [projectId, jobs.length]);
 
   /*
     Hay UN prompt por proyecto, asi que los saltos de linea son parte del prompt y no
@@ -758,7 +791,91 @@ export default function ImagenesBoard({
         </Card>
       </form>
 
-      {/* ─── 2. Los resultados ────────────────────────────────────────────── */}
+      {/* ─── 1. Elegir que tanda mirar ───
+           Va ARRIBA de los resultados, no al final: es NAVEGACION, y tiene que
+           estar antes de lo que controla. Estaba abajo de todo y el usuario
+           reportaba que "no deja elegir": el click funcionaba, pero las imagenes
+           se pintaban ~500px mas arriba, fuera de la pantalla, asi que desde donde
+           estaba mirando no pasaba nada. ─── */}
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-divider pt-5">
+          <h2 className="text-title font-semibold text-fg">
+            Tandas de imágenes{" "}
+            {lista.length > 0 && (
+              <span className="font-mono text-label tnum font-normal text-fg-dim">
+                {lista.length}
+              </span>
+            )}
+          </h2>
+          <Button size="sm" onClick={() => void cargarLista()}>
+            Actualizar
+          </Button>
+        </div>
+
+        {cargandoLista && lista.length === 0 ? (
+          <SkeletonGrid items={3} />
+        ) : lista.length === 0 ? (
+          <p className="text-body text-fg-dim">
+            Todavía no generaste ninguna. Las que generes van a quedar acá, no se
+            borran al generar otra.
+          </p>
+        ) : (
+          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {lista.map((p) => {
+              const abierto = p.id === projectId;
+              return (
+                <li key={p.id}>
+                  {/*
+                    Un boton y no un <Link>: no hay navegacion real, se cambia el
+                    parametro de la URL de la misma pantalla. `aria-current` es lo que
+                    le dice al lector de pantalla cual esta abierto, porque el borde de
+                    acento solo lo comunica por color.
+                  */}
+                  <button
+                    type="button"
+                    onClick={() => abrirProyecto(p.id)}
+                    aria-current={abierto ? "true" : undefined}
+                    className={cn(
+                      "w-full rounded-lg border p-2.5 text-left transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                      abierto
+                        ? "border-accent bg-accent/10"
+                        : "border-divider bg-surface hover:border-border",
+                    )}
+                  >
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-body font-medium text-fg">
+                        {p.name}
+                      </span>
+                      {abierto && (
+                        <span className="shrink-0 text-label font-medium text-accent">
+                          abierta
+                        </span>
+                      )}
+                    </span>
+                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-label text-fg-dim">
+                      <span className="font-mono tnum">
+                        {p.imageCount} {p.imageCount === 1 ? "imagen" : "imágenes"}
+                      </span>
+                      <span aria-hidden>·</span>
+                      <span>{estadoDeJob(p.status).label}</span>
+                      <span aria-hidden>·</span>
+                      <span className="font-mono tnum">
+                        {new Date(p.createdAt).toLocaleDateString("es-AR", {
+                          day: "2-digit",
+                          month: "2-digit",
+                        })}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {/* ─── 2. Los resultados de la tanda abierta ─────────────────────────── */}
       {!projectId ? (
         <EmptyState
           icon={<ImageSquare aria-hidden className="size-6" />}
@@ -775,7 +892,7 @@ export default function ImagenesBoard({
           `surface` sobre `surface` no se distingue. La separación la da el cambio de
           superficie contra el `bg` de la pagina, que sobre oscuro alcanza y sobra.
         */
-        <section className="flex flex-col gap-4">
+        <section ref={resultadosRef} className="flex flex-col gap-4">
           <CardHeader className="mb-0 items-baseline">
             <div>
               <CardTitle className="flex flex-wrap items-baseline gap-2">
@@ -872,85 +989,6 @@ export default function ImagenesBoard({
           )}
         </section>
       )}
-
-      {/* ─── Las tandas anteriores ────────────────────────────────────────── */}
-      <section className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-divider pt-5">
-          <h2 className="text-title font-semibold text-fg">
-            Tandas de imágenes{" "}
-            {lista.length > 0 && (
-              <span className="font-mono text-label tnum font-normal text-fg-dim">
-                {lista.length}
-              </span>
-            )}
-          </h2>
-          <Button size="sm" onClick={() => void cargarLista()}>
-            Actualizar
-          </Button>
-        </div>
-
-        {cargandoLista && lista.length === 0 ? (
-          <SkeletonGrid items={3} />
-        ) : lista.length === 0 ? (
-          <p className="text-body text-fg-dim">
-            Todavía no generaste ninguna. Las que generes van a quedar acá, no se
-            borran al generar otra.
-          </p>
-        ) : (
-          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {lista.map((p) => {
-              const abierto = p.id === projectId;
-              return (
-                <li key={p.id}>
-                  {/*
-                    Un boton y no un <Link>: no hay navegacion real, se cambia el
-                    parametro de la URL de la misma pantalla. `aria-current` es lo que
-                    le dice al lector de pantalla cual esta abierto, porque el borde de
-                    acento solo lo comunica por color.
-                  */}
-                  <button
-                    type="button"
-                    onClick={() => abrirProyecto(p.id)}
-                    aria-current={abierto ? "true" : undefined}
-                    className={cn(
-                      "w-full rounded-lg border p-2.5 text-left transition-colors",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                      abierto
-                        ? "border-accent bg-accent/10"
-                        : "border-divider bg-surface hover:border-border",
-                    )}
-                  >
-                    <span className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-body font-medium text-fg">
-                        {p.name}
-                      </span>
-                      {abierto && (
-                        <span className="shrink-0 text-label font-medium text-accent">
-                          abierta
-                        </span>
-                      )}
-                    </span>
-                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-label text-fg-dim">
-                      <span className="font-mono tnum">
-                        {p.imageCount} {p.imageCount === 1 ? "imagen" : "imágenes"}
-                      </span>
-                      <span aria-hidden>·</span>
-                      <span>{estadoDeJob(p.status).label}</span>
-                      <span aria-hidden>·</span>
-                      <span className="font-mono tnum">
-                        {new Date(p.createdAt).toLocaleDateString("es-AR", {
-                          day: "2-digit",
-                          month: "2-digit",
-                        })}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
 
       {ampliada && (
         <Visor
