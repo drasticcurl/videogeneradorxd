@@ -592,35 +592,31 @@ código**. Si bloquea, la task se detiene y no sigue con suposiciones.
 - **Task:** T08
 - **Sección del plan:** §3
 - **Archivo:** `scripts/migrar-owner.mjs`
-- **Qué falta:** confirmar que los cuatro nombres coinciden **carácter por carácter** con los de
-  `db.json` en producción. En este checkout no existe `./data` ni `./output`, y no se lee producción.
-- **Bloquea:** no, pero **puede detener el paso 3 del runbook**.
-- **Qué se implementa mientras tanto:** el script aborta sin escribir e imprime todos los nombres de
-  la DB al lado, para comparar a ojo (garantía 6, verificada). El operador confirma en el `--dry-run`.
+- **Qué falta:** ~~confirmar que los cuatro nombres coinciden carácter por carácter con los de
+  `db.json` en producción~~
+- **Bloquea:** no
+- **Resolución (2026-09-08):** verificado en producción. Los 4 nombres coinciden **exacto**, sin
+  typos y sin duplicados. La DB real tenía **29 proyectos**, no ~12 como se estimó al escribir el
+  plan — el `--dry-run` lo mostró antes de escribir nada, y no cambió el procedimiento.
 
 ### P-02 — Quién ejecuta el deploy, y desde dónde
 - **Task:** T08
 - **Sección del plan:** §9
-- **Qué falta:** el usuario pidió que el deploy lo corra el asistente al final. Pero `deploy.sh` corre
-  **en el server** como usuario `deploy` y hace `git reset --hard origin/main`, así que hacen falta
-  dos cosas que este plan no puede resolver solo: **(a)** que los cambios estén commiteados y
-  pusheados a `main`, y **(b)** acceso al server (host de ssh) — que no está verificado desde esta
-  máquina.
-- **Bloquea:** sí, el paso 4 del runbook.
-- **Qué se implementa mientras tanto:** T08 deja todo listo y **para** antes del paso 4, con los
-  comandos escritos, para que el usuario confirme el push a `main` y cómo se llega al server.
+- **Qué falta:** ~~acceso al server (host de ssh) y confirmar push a `main`~~
+- **Bloquea:** no
+- **Resolución (2026-09-08):** commiteado como `e66bd83` y pusheado a `origin/main`. El deploy se
+  corrió con el alias SSH `funnel-vps` (usuario `deploy`, definido en `~/.ssh/config` local, no en
+  el repo). `deploy.sh` corrió sin intervención manual: guards, build, health check y poda de
+  releases, todo OK.
 
 ### P-03 — Si alguno de los 4 proyectos de Ivan resulta ser de "solo imágenes"
 - **Task:** T08
 - **Sección del plan:** §3
-- **Qué falta:** el usuario dijo dos cosas que pueden chocar: *"las imágenes, todas a lucho"* y
-  *"esos 4 son de Ivan"*. Si alguno de los 4 tiene `plan.clips.length === 0`, las dos reglas se
-  contradicen. Por los nombres (`rendicion`, `alquiler`, `multivoz`) parecen de video, pero no se
-  verificó.
-- **Bloquea:** no.
-- **Qué se implementa mientras tanto:** **gana la lista explícita** (es más específica), y el script
-  imprime un `AVISO:` fuerte con los nombres si detecta el caso. Está implementado y es visible en el
-  `--dry-run`, así que el operador lo ve antes de escribir.
+- **Qué falta:** ~~verificar si "las imágenes todas a lucho" contradice alguno de los 4 nombres de
+  Ivan~~
+- **Bloquea:** no
+- **Resolución (2026-09-08):** no contradice. Los 4 proyectos de Ivan son de tipo `video` (tienen
+  clips), ninguno es de solo imágenes. El script no imprimió ningún `AVISO:`.
 
 ### P-04 — Un usuario borrado del `.env` deja proyectos inaccesibles
 - **Task:** ninguna

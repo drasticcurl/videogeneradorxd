@@ -6,7 +6,40 @@ entender el estado sin leer 70 commits.
 
 ---
 
-## 2026-09-08 — Documentación puesta al día + plan de aislamiento por usuario
+## 2026-09-08 — Aislamiento por usuario: implementado, migrado y deployado
+
+**Qué pasó:** las 8 tasks del plan se ejecutaron completas. `owner?: string` en
+`ProjectRecord`, el helper `src/lib/ownership.ts` (5 funciones: `sessionUser`,
+`ownerOf`, `requireProjectOwner`, `requireJobOwner`, `filterOwnedIds`), guard de
+dueño en las 21 rutas que recibían un projectId o jobId, y el cartel de `/batch`
+dejó de decir "los borraste" (ahora es neutro: mezcla ajenos con inexistentes a
+propósito, para no confirmar qué proyecto existe).
+
+**La migración corrigió el supuesto inicial del plan.** Se creía que había ~12
+proyectos; en producción había **29** (119 jobs, 22 logs). Los 4 nombres de Ivan
+(`AA_rendicion_meresigne_duena52_v01/v02`, `AA_alquiler_marcodepuerta_duena31_v01`,
+`AA_manerastontas_multivoz_v01`) coincidieron **exacto** contra la DB real — la
+pregunta abierta P-01 del plan queda resuelta: sin typos, sin duplicados, los 4 son
+de tipo `video` (no colisiona con "las imágenes van todas a Lucho", P-03 resuelta).
+Migración: **4 a `ivan`, 25 a `lucho`**, 0 pérdidas (29→29 proyectos, 119→119 jobs,
+22→22 logs, 29→29 carpetas en `output/`), idempotente (segunda corrida: "0
+asignados, 29 ya tenían dueño"), con backup propio
+(`db.json.bak-2026-09-08T20-53-24-950Z`) más uno manual.
+
+**Deploy**: commit `e66bd83` en `main`, corrido con `deploy/deploy.sh` en el
+server. `typecheck ok`, `build ok`, health check `/login → 200`, `api/config`
+responde 401 (guard de auth activo). P-02 del plan queda resuelta: el deploy se
+corrió vía el alias SSH `funnel-vps` (usuario `deploy`, sin sudo).
+
+**Verificado en producción** (no solo local): sin cookie, `/api/files/<cualquier
+id>/manifest.json` da 401 (el middleware ya bloquea antes de llegar al guard de
+dueño). **Pendiente**: el QA completo de las 9 filas con las dos cuentas reales
+(`ivan`/`lucho`) — no se corrió porque este proceso no tiene las passwords; queda
+para confirmar a mano que cada uno ve solo lo suyo.
+
+---
+
+
 
 **Qué pasó:** el `README.md` y `.kiro/steering/project-context.md` describían un estado de junio
 (app local, sin auth, sin deploy, modelos `gemini-2.5-*`). El código real ya tenía login por usuario,
