@@ -7,6 +7,7 @@ import { projectsDb } from "@/lib/db";
 import { validatePlan } from "@/lib/schema";
 import { resolveModel, resolveResolution, config } from "@/lib/config";
 import { ensureProjectDirs, projectDir, writeManifest } from "@/lib/storage";
+import { sessionUser } from "@/lib/ownership";
 import { badRequest, ok, serverError } from "@/lib/http";
 import type { ProjectRecord } from "@/lib/types";
 
@@ -14,31 +15,44 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const projects = projectsDb.list().map((p) => ({
-    id: p.id,
-    name: p.name,
-    status: p.status,
-    createdAt: p.createdAt,
-    updatedAt: p.updatedAt,
-    clipCount: p.plan.clips.length,
-    imageCount: p.plan.assets.reduce((a, asset) => a + asset.images.length, 0),
-    /**
-     * True si el proyecto es de la pantalla de solo imagenes.
-     *
-     * Se DERIVA de que no tenga clips, no de un campo guardado: es la misma condicion
-     * que hace que el proyecto no genere video (ver /api/imagenes y buildJobs), y asi
-     * los proyectos que ya existian quedan clasificados sin migrar nada.
-     *
-     * Cada pantalla filtra por esto y deja de mostrar lo de la otra: antes los
-     * proyectos de imagenes aparecian en "Proyectos recientes" mezclados con los VSL.
-     */
-    soloImagenes: p.plan.clips.length === 0,
-  }));
+  const user = sessionUser();
+  if (!user) {
+    return ok({ error: "No autenticado. Volvé a entrar." }, { status: 401 });
+  }
+
+  const projects = projectsDb
+    .list()
+    .filter((p) => p.owner === user)
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      status: p.status,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      clipCount: p.plan.clips.length,
+      imageCount: p.plan.assets.reduce((a, asset) => a + asset.images.length, 0),
+      /**
+       * True si el proyecto es de la pantalla de solo imagenes.
+       *
+       * Se DERIVA de que no tenga clips, no de un campo guardado: es la misma condicion
+       * que hace que el proyecto no genere video (ver /api/imagenes y buildJobs), y asi
+       * los proyectos que ya existian quedan clasificados sin migrar nada.
+       *
+       * Cada pantalla filtra por esto y deja de mostrar lo de la otra: antes los
+       * proyectos de imagenes aparecian en "Proyectos recientes" mezclados con los VSL.
+       */
+      soloImagenes: p.plan.clips.length === 0,
+    }));
   return ok({ projects });
 }
 
 export async function POST(req: Request) {
   try {
+    const user = sessionUser();
+    if (!user) {
+      return ok({ error: "No autenticado. Volvé a entrar." }, { status: 401 });
+    }
+
     const body = (await req.json()) as {
       name?: string;
       brief?: string;
@@ -66,6 +80,10 @@ export async function POST(req: Request) {
       brief: body.brief ?? "",
       plan: validation.plan,
       status: "draft",
+      // El dueño sale SOLO de la sesion, nunca del body: si `body` trajera `owner`,
+      // se ignora en silencio. Aceptarlo del cliente permitiria crear proyectos a
+      // nombre de otro usuario (D3 del plan de aislamiento).
+      owner: user,
       models: {
         llm: resolveModel("llm", body.models?.llm),
         image: resolveModel("image", body.models?.image),

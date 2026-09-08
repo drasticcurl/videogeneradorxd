@@ -595,7 +595,15 @@ export function BatchBoard() {
 
       {snap && snap.missingIds.length > 0 && (
         <Aviso tone="attention" icon={<Warning className="size-4" aria-hidden />}>
-          Estos proyectos ya no existen (los borraste):{" "}
+          {/*
+            Texto NEUTRO a proposito. Esta lista mezcla proyectos borrados con
+            proyectos de otro usuario (D6/D7 del plan de aislamiento-por-usuario): un
+            id ajeno y uno inexistente devuelven la misma respuesta del server, y el
+            cartel no puede decir mas que eso sin filtrar cual es cual. "Los borraste"
+            era falso para el segundo caso; "no son tuyos" confirmaria que el proyecto
+            existe (rompe D4). No le agregues el motivo.
+          */}
+          Estos proyectos no están disponibles en este tablero:{" "}
           <code className="code">{snap.missingIds.join(", ")}</code>{" "}
           <button
             type="button"

@@ -6,6 +6,7 @@
  */
 import { jobsDb, projectsDb } from "@/lib/db";
 import { clipRelPath, saveBytes, writeManifest } from "@/lib/storage";
+import { requireProjectOwner } from "@/lib/ownership";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -16,6 +17,9 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
+    const guard = requireProjectOwner(params.id);
+    if (!guard.ok) return guard.response;
+
     const project = projectsDb.get(params.id);
     if (!project) return notFound("Proyecto no encontrado");
 

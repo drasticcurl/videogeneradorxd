@@ -1,293 +1,276 @@
-# AUGC / VSL Pipeline
+# Generador — UGC, VSLs e imágenes con Vertex AI
 
-Aplicación web **local** para producir anuncios **UGC** y **VSLs largos** (Video Sales Letters
-tipo *talking-head*) de punta a punta. Pegás un brief o un PlanJSON, opcionalmente subís las
-fotos de los avatares, y la app genera **imágenes + videos** manteniendo la **misma cara** en
-cada plano, con auto-aprobación y manejo robusto de cuota/red para dejarlo corriendo solo.
+Herramienta interna para producir **anuncios UGC**, **VSLs largos** (talking-head) e **imágenes
+sueltas** de punta a punta. Pegás un brief o un PlanJSON, opcionalmente subís las fotos de los
+avatares, y la app genera **imágenes + videos** manteniendo la **misma cara** en cada plano, con
+manejo de cuota, rate limit y reintentos para poder dejarla corriendo sola.
 
-> Pensada para correr **localmente en tu PC**. No usa Supabase ni storage externo: el estado
-> vive en `./data/db.json` y los archivos generados en `./output/`.
+Corre en un **subdominio público con login por usuario**. Todo el estado vive en el filesystem:
+`db.json` para proyectos/jobs/logs y una carpeta por proyecto para los archivos generados. No usa
+base de datos ni storage externo.
 
----
-
-## Estado del proyecto (al día de hoy)
-
-Lo que YA está mergeado en `main` (PRs #1–#16):
-
-| Área | Qué hay | PR |
-|---|---|---|
-| Núcleo | selectores de modelo, aprobación por ítem, variantes de imagen, prompt copiable, mini-log, pausa/reanuda/cancela, storyboard + flujo agéntico | #1 |
-| Modelos | catálogo verificado de Gemini/Nano Banana/Veo, selector de **resolución por video** | #2 |
-| Voz/estilo | builder de prompt **UGC/selfie + acento rioplatense argentino** forzado en Veo | #3 |
-| Edición | precarga del prompt actual + selector de modelo por ítem | #4 |
-| Stitch | `final.mp4` **conserva audio y NO pierde calidad** (720p/1080p reales, CRF 18) + modal grande para editar prompt | #5 |
-| Edición pro | editar campo por campo (prompt/diálogo/duración 4-6-8/resolución/modelo) + **Extender +7s** | #6 |
-| Docs | README completo | #7 |
-| Edición | botón "Editar" con **Guardar sin regenerar** y **Guardar y regenerar** | #8 |
-| **VSL** | **avatares de referencia subidos** como fuente de identidad (image2image contra tu foto) | **#9** |
-| **VSL** | PlanJSON completo del VSL "Agua de Arroz TURBO" + generador validado contra Zod + generación por lotes anti rate-limit + UI panel de avatares en ambos modos + Romina como `text2image` | **#10** |
-| Resiliencia | manejo robusto de **429 / rate limit** y **errores de red** ("fetch failed", timeouts), variantes con **éxito parcial** | #11 |
-| Pipeline | **auto-aprobación** (sin tener que aprobar nada) + **ventana de 3** rolling + reintento 429 a 45s | #12 |
-| Fix | jobs colgados en "generando" se **autodestraban**, cache-busting para que el video se actualice tras regenerar | #13 |
-| **Revisión** | nueva vista **🔧 Revisar / Arreglar** (liviana, no lagea) + **regenerar por lote** + fix definitivo del video stale al regenerar | **#14** |
-| Revisión | "🔍 Revisar seleccionados" → storyboard con **prompt exacto + imagen input + JSON** | #15 |
-| Revisión | **prompts editables** en revisión (Guardar / Guardar y regenerar) — los cambios quedan en el plan, así el export a ffmpeg los usa | #16 |
-
-Todo verificado con `typecheck` y `build` (los testeás vos al usar la app).
+> **Genera gasto real.** Veo y Nano Banana son de pago. Por eso la app está cerrada con
+> password-gate y por eso el pipeline tiene topes de concurrencia y de arranques por minuto.
 
 ---
 
-## Quickstart
+## Limitación conocida: los proyectos no están aislados por usuario
+
+Hoy hay varios usuarios (`PASSWORD_IVAN`, `PASSWORD_LUCHO`) y **todos ven los proyectos de todos**.
+`ProjectRecord` no tiene campo de dueño y ninguna route handler compara la sesión contra el
+proyecto: el middleware sólo verifica que quien pide sea *alguien* válido.
+
+Hay cuatro caminos por los que se ve lo ajeno, no uno:
+
+| Camino | Por qué |
+|---|---|
+| `GET /api/projects` | devuelve **todos** los proyectos sin filtrar (`src/app/api/projects/route.ts:16`) |
+| `/batch?ids=a,b,c` | los ids del lote viajan en la URL; `/api/batch` los arma sin chequear nada |
+| `GET /api/files/<projectId>/<path>` | sirve cualquier archivo de cualquier proyecto y **ni consulta la DB** (`src/app/api/files/[...path]/route.ts:47`) |
+| `POST /api/jobs/<jobId>/*` | los ids de job son derivados: `<projectId>:img:<imageId>` y `<projectId>:vid:<clipId>` (`src/lib/jobs/pipeline.ts:43-48`), así que un projectId habilita aprobar, regenerar y editar prompts ajenos |
+
+El aislamiento por usuario está planificado en `tasks/aislamiento-por-usuario/`. Ver `CHANGELOG.md`.
+
+---
+
+## Quickstart local
 
 ```bash
-# 1. Instalar
 npm install
 
-# 2. Config
 cp .env.example .env.local
-# Por defecto PROVIDER_MODE=mock (placeholders, sin credenciales).
-# Para usar Vertex AI real:
+# Por defecto PROVIDER_MODE=mock: placeholders, sin credenciales ni cuota.
+# Para Vertex AI real:
 #   PROVIDER_MODE=vertex
 #   GOOGLE_CLOUD_PROJECT=tu-project-id
-#   GOOGLE_CLOUD_LOCATION=us-central1
+#   GOOGLE_CLOUD_LOCATION=global      # global, NO una región (ver abajo)
 #   gcloud auth application-default login
 
-# 3. Levantar
 npm run dev   # http://localhost:3000
 ```
 
-Scripts (`package.json`):
+En local podés dejar `AUTH_SECRET` y los `PASSWORD_*` vacíos: la app queda cerrada (el login
+rechaza todo, a propósito), así que si querés entrar poné al menos uno.
 
-| Script              | Qué hace                              |
-| ------------------- | ------------------------------------- |
-| `npm run dev`       | Servidor Next.js en :3000             |
-| `npm run build`     | Build de producción                   |
-| `npm run start`     | Sirve el build de producción          |
-| `npm run lint`      | ESLint                                |
-| `npm run typecheck` | `tsc --noEmit`                        |
+| Script | Qué hace |
+|---|---|
+| `npm run dev` | Servidor Next.js en :3000 |
+| `npm run build` | Build de producción (`output: 'standalone'`) |
+| `npm run start` | Sirve el build |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | `tsc --noEmit` |
+
+Stack: Next.js 14.2 (App Router) · React 18.3 · TypeScript 5.6 · Tailwind 3.4 · Zustand 4.5 ·
+Zod 3.23 · google-auth-library (ADC) · ffmpeg/ffprobe/zip por `spawn`.
 
 ---
 
-## Cómo se usa para un VSL largo (caso real "Agua de Arroz TURBO")
+## Login y usuarios
 
-El ejemplo real ya viene en el repo (95 clips: 91 Natalia + 4 testimonio Romina).
+No hay tabla de usuarios ni registro: **cada usuario es una variable de entorno**.
 
-### 1. Pegar el PlanJSON (recomendado para >20 clips)
-
-Existe `vsl-natalia-plan.json` ya validado y `scripts/generate-vsl-plan.ts` para regenerarlo.
-
-```bash
-# (opcional) regenerar el plan validándolo contra el schema
-npx tsx scripts/generate-vsl-plan.ts
-# OK: plan valido. 95 clips, 24 imagenes, 1 avatares de referencia.
+```env
+AUTH_SECRET=<openssl rand -hex 32>
+PASSWORD_IVAN=<40 chars>
+PASSWORD_LUCHO=<40 chars>
+AUTH_SESSION_HOURS=72
+NEXT_PUBLIC_SITE_URL=https://generador.hilvanapp.online
 ```
 
-En la UI:
-1. **Nuevo proyecto** → modo **"Pegar PlanJSON"** y pegás el contenido de `vsl-natalia-plan.json`.
-2. En **"Avatares de referencia (VSL)"** subís **la foto real de Natalia** (la única
-   referencia: Romina se genera de cero con `text2image`).
-3. **Importante**: editá el `id` de la foto a **`natalia`** para que coincida con el plan.
-   Vas a ver un indicador verde ✓ cuando el id matchee.
-4. **Generar todo**.
+`authUsers()` (`src/lib/config.ts`) recorre `process.env`, toma toda clave que empiece con
+`PASSWORD_` y usa el resto del nombre en minúsculas como usuario. Agregar o sacar gente es tocar el
+`.env` y reiniciar, sin recompilar. **Sacar la var revoca el acceso al instante**, aunque la cookie
+siga firmada y sin vencer.
 
-### 2. Interpretar brief con IA (para briefs cortos / pruebas)
+Cómo funciona la sesión:
 
-1. **Nuevo proyecto** → modo **"Interpretar brief con IA"**.
-2. Subís 1+ fotos en **"Avatares de referencia (VSL)"** y a cada una le ponés un id (ej `natalia`).
-3. Pegás el brief mencionando a cada persona por nombre.
-4. **Interpretar con IA** → la IA arma el plan: cada persona es un `avatar` cuya **imagen base
-   es `image2image` contra tu foto** y todos los planos siguientes mantienen identidad
-   (`keep identity 100% consistent...`).
-5. Revisás el PlanJSON → **Generar todo**.
+- Cookie `gen_session` = `<usuario>.<timestamp>.<hmac>`, HMAC-SHA256 con `AUTH_SECRET`. No contiene
+  la password y no se puede forjar sin el secret.
+- El secret es una var **aparte** de las passwords: firmando con la password propia, rotar una
+  obligaría a probar N claves para verificar una cookie.
+- Comparación timing-safe del HMAC y de la password. Si el usuario no existe se compara contra un
+  dummy del mismo largo, así el tiempo de respuesta no delata qué usuarios existen.
+- Rate limit por IP: 5 intentos cada 15 min, in-memory (válido porque corre **una sola** instancia).
+- **Falla cerrado**: sin `AUTH_SECRET` o sin ninguna `PASSWORD_*`, no entra nadie. Nunca "se abre
+  porque faltó config".
 
-> Para el VSL de 95 clips conviene pegar el JSON: la IA puede recortar cosas por límite de tokens.
+Tres archivos, y la separación entre ellos importa:
 
-### 3. Dejarlo generar toda la noche
+| Archivo | Rol |
+|---|---|
+| `src/lib/auth.ts` | la implementación real (`node:crypto`). Server-only |
+| `src/middleware.ts` | el guard. Corre en **Edge**, así que reimplementa el verify con Web Crypto: `node:crypto` y `node:path` no existen ahí. Mismo formato de token y mismo TTL |
+| `src/app/api/login/route.ts` | `POST` valida y setea la cookie; `DELETE` cierra sesión |
 
-Con la config default ya está optimizado para VSLs largos:
+El middleware protege todo con `matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"]`. Las
+únicas rutas abiertas son `/login` y `/api/login` — si estuvieran detrás del guard no se podría
+entrar nunca. A las rutas `/api/*` les contesta **401**, no un redirect: un 307 haría que el `fetch`
+de la UI parsee el HTML del login como JSON y el error real quedaría tapado por un
+"Unexpected token <".
 
-- **Auto-aprobación**: cada imagen/video se aprueba sola al terminar y desbloquea lo que depende.
-  Ya no hay que ir aprobando uno por uno.
-- **Ventana rolling de 3** (`PIPELINE_CONCURRENCY=3`): genera 3 a la vez; cuando uno termina,
-  arranca el siguiente, sin esperar a aprobar el anterior.
-- **429 / cuota**: backoff 45s y hasta 10 reintentos aparte (no quema los reintentos normales).
-- **Errores de red** (`fetch failed`, timeouts): backoff exponencial + timeout 120s por request.
-- **Auto-recuperación**: si un job queda colgado en "generando" (p.ej. reiniciaste el server),
-  la cola lo resetea sola al volver a moverse.
+Lo que el middleware **no** puede chequear es que el usuario siga existiendo en el `.env`: eso
+necesita enumerar `process.env`, que no es confiable en Edge. Lo verifica `src/lib/auth.ts` en el
+server, que es donde la revocación tiene que valer.
 
-A la mañana tenés todo listo (los que fallaron de forma persistente quedan marcados para regenerar).
+---
 
-### 4. Revisar y arreglar los que salieron mal
+## Las tres superficies de trabajo
 
-Con muchos clips la pipeline arranca directo en **🔧 Revisar / Arreglar** (no monta los 95
-`<video>` → no lagea):
+### `/` — Nuevo proyecto (video)
 
-1. Pegás los números de los clips malos (ej `12, 45, 78`) → **Marcar**, o tildás a mano /
-   **Marcar fallidos**.
-2. **🔍 Revisar / editar seleccionados** → abre un **storyboard SOLO con esos** mostrando:
-   - **Imagen de entrada** (frame inicial / referencias).
-   - **Prompt visual editable** (textarea).
-   - **Diálogo editable** (es-AR).
-   - **Selector de duración** (4/6/8s).
-   - **Prompt FINAL** que se ejecuta (recalculado al guardar) en un `<details>`.
-   - **JSON entero** del clip / imagen en un `<details>`.
-   - **Resultado actual** on-demand (▶ Ver).
-3. Para cada uno:
-   - **💾 Guardar** → persiste cambios en el plan **sin regenerar** (útil para ajustar texto/tiempo
-     a mano y que se reflejen en el export a ffmpeg).
-   - **↻ Guardar y regenerar** → guarda **y** regenera con lo editado.
-   - **↻ Regenerar todos sin editar** → re-corre el lote tal cual quedó.
-4. Cuando estás listo, **Resultado** → unir clips → `final.mp4` con ffmpeg (usa los valores
-   actualizados del plan).
+Pegás un brief para que lo interprete la IA, o pegás un PlanJSON directo. Elegís modelos, variantes
+por imagen, resolución y si el proyecto auto-aprueba. Abajo lista los **proyectos de video**
+(los que tienen clips).
 
-> El plan es la fuente de verdad del export, así que cualquier edición que hagas ahí impacta
-> al `final.mp4`.
+Para un VSL: subís las fotos de los avatares en **"Avatares de referencia"** y les ponés el `id`
+que el plan espera (hay indicador ✓ cuando matchea). Esas fotos son la fuente de identidad:
+la primera imagen de cada persona es `image2image` contra la foto real, y los planos siguientes
+mantienen la cara.
+
+### `/imagenes` — Imágenes sueltas
+
+Un prompt por proyecto, con formato (aspect ratio) y calidad (1K/2K/4K) elegibles, y las variantes
+como forma de pedir varias. Los proyectos de esta pantalla **no tienen clips**, y de ahí se derivan:
+`GET /api/projects` marca `soloImagenes: p.plan.clips.length === 0`, y cada pantalla filtra por eso
+para no mezclar tandas de imágenes con VSLs.
+
+Antes esta pantalla partía el texto pegado en un prompt **por línea**. Se sacó: un prompt real tiene
+varias líneas (encuadre, luz, estilo, negativos), así que partir por línea convertía un prompt en
+cinco prompts cortados al medio.
+
+### `/batch` — Tablero de varios proyectos a la vez
+
+Es la pantalla para producir en volumen. Los ids del lote viajan en la URL (`/batch?ids=a,b,c`);
+no hay `localStorage` en toda la app. Tres vistas:
+
+| Vista | Para qué |
+|---|---|
+| `/batch` | tablero con el progreso por proyecto: conteos de imágenes y videos, miniatura, jobs colgados |
+| `/batch/review` | revisión tipo tinder de las imágenes que esperan aprobación, en orden FIFO, con las referencias y los clips que las usan |
+| `/batch/videos` | línea de tiempo de clips: ver, aprobar, editar prompt/diálogo/duración, regenerar |
+
+Todo sale de `buildBatchSnapshot()` (`src/lib/batch.ts`), que calcula desde la DB + el plan y no
+toca proveedores.
+
+**Fases (`stage`)**: un proyecto puede estar en `images` o `videos`. En `images` la cola corre
+**sólo** jobs de imagen, aunque su imagen ya esté aprobada — si no, aprobar una imagen disparaba su
+video al toque. Sirve para revisar todo antes de gastar en Veo. `undefined` = sin fase, corre todo.
+
+### `/project/[id]/pipeline` y `/project/[id]/result`
+
+La vista por proyecto individual: storyboard con las tarjetas de cada job, y la pantalla de
+resultado con la línea de tiempo, la subida manual de clips `FILMAR_REAL`, el stitch y la descarga.
 
 ---
 
 ## Modos del proveedor
 
-Controlado por `PROVIDER_MODE`:
+- **`mock`** (default): PNG con gradientes y MP4 placeholder, **sin credenciales ni cuota**. Sirve
+  para probar el pipeline entero (interpretación, aprobaciones, storyboard, revisión, extensión,
+  stitch) sin gastar. Si subís fotos de referencia, el mock LLM arma un demo VSL con esos avatares.
+- **`vertex`**: llamadas reales. La identidad se resuelve por **ADC**, nunca por API key, y toda
+  llamada sale del backend: el navegador nunca ve credenciales.
 
-- **`mock`** (default): genera PNG (gradientes) y MP4 placeholder **sin credenciales ni cuota**.
-  Sirve para probar todo el pipeline (interpretación, aprobaciones, storyboard, revisión,
-  extensión, stitch) sin gastar nada. Si subís fotos de referencia, el mock LLM genera un demo
-  VSL con esos avatares.
-- **`vertex`**: hace llamadas reales a Vertex AI (Gemini, Nano Banana, Veo).
+### `GOOGLE_CLOUD_LOCATION` va en `global`, no en una región
 
-### Autenticación (ADC, sin API keys)
+No es un detalle de performance: es lo que hace que exista la mitad del catálogo. Verificado con
+requests reales el 2026-08-27 — toda la familia **Gemini 3.x** devuelve **404** en `us-central1`,
+`us-east5` y `europe-west4`, y responde OK en `global`. Veo también funciona ahí (ciclo completo del
+LRO verificado). Si alguien lo vuelve a poner en una región, todos los jobs empiezan a fallar con
+404. `vertexBaseUrl()` ya resuelve el host distinto que necesita `global`
+(`aiplatform.googleapis.com`, sin prefijo).
 
-```bash
-# 1. ADC (una sola vez por máquina)
-gcloud auth application-default login
-
-# 2. .env.local
-PROVIDER_MODE=vertex
-GOOGLE_CLOUD_PROJECT=tu-project-id
-GOOGLE_CLOUD_LOCATION=us-central1
-
-# 3. habilitar Vertex AI
-gcloud config set project tu-project-id
-gcloud services enable aiplatform.googleapis.com
-```
-
-Necesitás **facturación habilitada** (Nano Banana y Veo son de pago). Toda llamada a los
-modelos sale del **backend** (route handlers); la identidad nunca se expone al navegador.
+De paso, Google recomienda `global` para reducir los 429: rutea a la región con más capacidad libre.
 
 ---
 
 ## Catálogo de modelos
 
-Centralizado en `src/lib/config.ts` (`MODEL_CATALOG`). Seleccionable en la UI por proyecto.
+En `src/lib/config.ts` (`MODEL_CATALOG`). Todos verificados con request real en `global`
+(2026-08-27). Seleccionables por proyecto en la UI y por ítem.
 
 | Tipo | Opciones | Default |
 |---|---|---|
-| **Chat** | `gemini-3.5-flash`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | `gemini-2.5-flash` |
-| **Imagen** | `gemini-2.5-flash-image` (Nano Banana — **recomendado, +cuota, +barato**), `gemini-3.1-flash-image-preview` (Nano Banana 2 · probar), `gemini-3-pro-image-preview` (Nano Banana Pro 4K · **−cuota, +caro**) | `gemini-2.5-flash-image` |
-| **Video** | `veo-3.1-generate-001`, `veo-3.1-fast-generate-001`, `veo-3.1-lite-generate-001` (probar), `veo-3.1-lite-generate-001-preview` (probar) | `veo-3.1-generate-001` |
+| **Chat** | `gemini-3.6-flash` (⚡), `gemini-3.7-flash` (🧠) | `gemini-3.6-flash` |
+| **Imagen** | `gemini-3.1-flash-image` (⚡ Nano Banana 2, ~1.1 MB), `gemini-3-pro-image` (🧠 Nano Banana Pro, ~1.3 MB), `gemini-3.1-flash-lite-image` (🪙 Lite, ~56 KB) | `gemini-3.1-flash-image` |
+| **Video** | `veo-3.1-lite-generate-001` (🪙), `veo-3.1-fast-generate-001` (⚡), `veo-3.1-generate-001` (🧠) | `veo-3.1-lite-generate-001` |
 
-> ⚠️ Si te tira mucho 429: **NO te pases a Pro** (tiene menos cuota, lo empeora). Bajá
-> `PIPELINE_CONCURRENCY` y `IMAGE_VARIANTS`, o subí el tier de cuota en Google Cloud.
+3.7 Flash es más nuevo pero más lento e irregular (1.6-5.2s contra 1.4-1.7s parejo de 3.6 en el
+mismo prompt trivial), y parseando un brief largo eso se acumula. Por eso 3.6 es el default.
+
+Veo 3.1 es la línea más nueva que existe: `veo-3.2` y `veo-4.0` dan 404.
+
+**Al editar el catálogo**: `resolveModel()` cae al default cuando el id pedido no está en la lista,
+así que sacar un modelo sin mover el default correspondiente deja la app generando con un modelo que
+la UI no muestra.
 
 ---
 
-## Funcionalidades clave
+## Pipeline: cómo se comporta la cola
 
-### VSL / avatares de referencia (#9, #10)
-- `ProjectPlan.references[]` — fotos subidas que actúan como **fuente de identidad** de cada
-  persona. `Image.ref_image_ids[]` permite combinar **2+ personas** en un mismo plano.
-- Panel **"Avatares de referencia (VSL)"** en la home (en ambos modos: IA y Pegar PlanJSON).
-- `id` de cada foto editable + indicador ✓ / • cuando el plan ya cargado pide ese id.
-- El provider Nano Banana inyecta múltiples `inlineData` con instrucción de identidad para 1
-  o N personas (`buildImageInstruction` en `src/lib/prompts.ts`).
-- En el pipeline, si la referencia es una foto subida (no una imagen aprobada del proyecto),
-  no hay dependencia → arranca al toque.
+`src/lib/jobs/queue.ts`. Vive **en memoria del proceso**, y de ahí sale casi todo lo demás.
 
-### Auto-aprobación + ventana rolling (#12)
-- `PIPELINE_AUTO_APPROVE=true` (default): cada imagen/video se aprueba sola al terminar.
-- `PIPELINE_CONCURRENCY=3`: 3 jobs en paralelo; cuando uno termina, arranca el siguiente.
-- Para volver al modo manual: `PIPELINE_AUTO_APPROVE=false` (vuelve el botón "Aprobar lote").
-
-### Resiliencia (#11, #13)
-- **429 / rate limit**: backoff dedicado (respeta `Retry-After`, default 45s) con su propio
-  budget de reintentos (default 10) — no quema los `maxAttempts` normales.
-- **Errores de red** (`fetch failed`, `ECONNRESET`, timeouts): tratados como transitorios,
-  backoff exponencial hasta 30s, también con budget aparte.
-- **Timeout por request de imagen** (default 120s): si la conexión se cuelga, aborta y reintenta
-  en vez de bloquear un slot.
-- **Variantes con éxito parcial**: cada variante es 1 request individual; persiste cada éxito
-  al toque. Si la 2ª falla, no perdés la 1ª (y el "resume" solo regenera las que faltan).
-- **Auto-recuperación**: jobs colgados en "generating" pero que no están realmente corriendo
-  (típico tras reiniciar el server) se resetean solos a `pending` cuando la cola se mueve.
-- **Cache-busting**: las URLs llevan `?v=<updatedAt>` + `key={url}` en `<img>`/`<video>` para
-  que al regenerar veas el nuevo (no el cacheado).
-- Al regenerar, **se limpia `outputPath` también para videos** (antes el viejo quedaba pegado
-  encima del que se generaba).
-
-### Vista "Revisar / Arreglar" (#14, #15, #16)
-- **Lista compacta** de clips (no monta `<video>`s → no lagea con 95 clips).
-- Filtros: pegá números (`12, 45, 78`) → **Marcar**; **Marcar fallidos**; **Limpiar**.
-- **Video on-demand** (botón "Ver" carga solo ese; `preload="none"`).
-- **🔍 Revisar / editar seleccionados** abre el storyboard focalizado con:
-  - imagen de entrada,
-  - **prompt visual editable**,
-  - **diálogo editable** (videos),
-  - **selector de duración** 4/6/8s (videos),
-  - **prompt FINAL ejecutado** (read-only, recalculable),
-  - **JSON del clip/imagen**.
-- Botones por tarjeta: **💾 Guardar** (al plan, sin regenerar) y **↻ Guardar y regenerar**.
-- Botón global: **↻ Regenerar todos sin editar**.
-- Si el proyecto tiene >24 clips, la pipeline **arranca directo en esta vista**.
-
-### Edición campo por campo (#4, #6, #8)
-- En cualquier tarjeta del storyboard: **prompt visual**, **diálogo**, **duración (4/6/8)**,
-  **resolución (720p/1080p)** y **modelo**.
-- "Guardar sin regenerar" / "Guardar y regenerar".
-
-### Extender video +7s (#6)
-- Toma un clip ya generado y le agrega 7s de continuación coherente; los concatena con ffmpeg
-  (audio + alta calidad). Si no hay ffmpeg, queda solo la continuación.
-
-### Stitch sin perder calidad (#5)
-- `final.mp4` conserva **audio** (silencio sintético en clips mudos) y mantiene la **resolución
-  real más alta** entre los clips (720×1280 / 1080×1920), escalado lanczos + CRF 18 + faststart.
-
-### Voz / acento (#3)
-- `buildVeoVideoPrompt` arma un prompt UGC/selfie y un bloque de **voz rioplatense argentina**
-  forzado (voseo, "sh" para "ll"/"y", cadencia porteña). Los diálogos no se traducen.
-
-### Modelos seleccionables (#1, #2, #11)
-- Selectores Chat/Imagen/Video por proyecto + override por ítem.
-- Selector de **resolución de video** por defecto y por clip.
+- **Concurrencia** (`PIPELINE_CONCURRENCY`, default 3 en código, el `.env.example` trae 2): ventana
+  rolling. Cuando uno termina arranca el siguiente, sin esperar a aprobar el anterior.
+- **Auto-aprobación** (`PIPELINE_AUTO_APPROVE=true` por default, y override por proyecto en
+  `ProjectRecord.autoApprove`): cada job se aprueba solo al terminar y desbloquea lo que depende.
+  Con `false` cada job queda en `awaiting_approval`.
+- **Lotes de aprobación** en modo manual, y son **dos números distintos a propósito**:
+  imágenes `0` (sin límite, porque son baratas y el flujo es generar la tanda, revisarla en bloque y
+  aprobarla — con un límite de 5, importar 4 planes generaba 20 de 32 y se frenaba), videos `5`
+  (porque cada clip de Veo son varios USD y un tablero de 95 clips no puede comprometer todo el
+  gasto de una).
+- **Rate limit de video**: ventana deslizante, máximo 4 arranques por minuto
+  (`PIPELINE_VIDEO_RATE_MAX` / `PIPELINE_VIDEO_RATE_WINDOW_MS`). Es aparte de la concurrencia: la
+  concurrencia limita cuántos corren a la vez, esto cuántos se **largan** por minuto, que es lo que
+  mide la cuota.
+- **429 / rate limit**: backoff dedicado de 45s (respeta `Retry-After`) con presupuesto propio de
+  10 reintentos, que no queman los `maxAttempts` normales.
+- **Errores de red** (`fetch failed`, `ECONNRESET`, timeouts): transitorios, backoff exponencial
+  hasta 30s, también con presupuesto aparte. Timeout de 120s por request de imagen.
+- **Pausa entre variantes de una imagen** (`PIPELINE_IMAGE_VARIANT_GAP_MS`, 2500ms): no es
+  cosmética. Verificado el 2026-08-28, `gemini-3.1-flash-image` contesta 429 a los ~200ms si se le
+  manda la segunda variante pegada a la primera; sin la pausa, pedir 2 variantes devolvía 1.
+- **Variantes con éxito parcial**: cada variante es una request, y cada éxito se persiste al toque.
+  Si la segunda falla no perdés la primera, y el reintento genera sólo las que faltan.
+- **Auto-recuperación**: los jobs que quedaron en `generating` pero no están corriendo de verdad
+  (típico tras reiniciar el proceso) se resetean a `pending` cuando la cola se mueve. `batch.ts` los
+  cuenta aparte como `stuck`.
+- **Cache-busting**: las URLs llevan `?v=<updatedAt>` y los `<img>`/`<video>` llevan `key={url}`,
+  para que al regenerar veas el nuevo y no el cacheado.
 
 ---
 
 ## Dónde quedan los archivos
 
 ```
-output/<project_id>/
+<OUTPUT_DIR>/<project_id>/
 ├── images/
-│   ├── _candidates/           # variantes generadas antes de aprobar (avatar1_base__v1.png, ...)
-│   ├── avatar1_base.png       # imagen aprobada (canónica)
-│   └── ...
-├── references/                # fotos de avatares subidas (VSL): natalia.png, romina.png, ...
+│   ├── _candidates/               # variantes antes de aprobar (avatar1_base__v1.png, …)
+│   └── avatar1_base.png           # imagen aprobada (canónica)
+├── references/                    # fotos de avatares subidas (VSL)
 ├── clips/
 │   ├── 01_hook.mp4
-│   ├── 02_reveal.mp4
-│   └── ...
-├── final.mp4                  # opcional, si corrés el stitch con ffmpeg
-├── manifest.json              # plan + estado + rutas + references[]
-└── pipeline.log               # log de eventos
+│   └── …
+├── <nombre-del-proyecto>.mp4      # el video unido, si corriste el stitch
+├── manifest.json                  # plan + estado + rutas + references[]
+└── pipeline.log
 ```
 
-Estado de proyectos/jobs en `./data/db.json`. La UI sirve los archivos vía
-`/api/files/<projectId>/<path>` (con soporte HTTP Range).
+El video unido se llama **como el proyecto**, no `final.mp4`: con `final.mp4` cinco proyectos
+bajaban cinco archivos con el mismo nombre y el browser los guardaba como `final-1.mp4`,
+`final-2.mp4`. Se sigue leyendo `final.mp4` para no perder de vista los que se unieron antes del
+cambio.
+
+Estado de proyectos/jobs/logs en `<DATA_DIR>/db.json`, con escritura atómica (tmp + rename) y
+singleton por `globalThis` para sobrevivir al HMR. La UI sirve los archivos por
+`/api/files/<projectId>/<path>`, con soporte de HTTP Range para el seek de video.
 
 ---
 
 ## El PlanJSON
 
-Definido en `src/lib/schema.ts` (Zod, validación cruzada). Forma resumida:
+Definido en `src/lib/schema.ts` (Zod, con validación cruzada). Forma resumida:
 
 ```jsonc
 {
@@ -298,19 +281,17 @@ Definido en `src/lib/schema.ts` (Zod, validación cruzada). Forma resumida:
     "negative_prompt": "…"
   },
   // VSL: fotos subidas que son fuente de identidad (opcional)
-  "references": [
-    { "id": "natalia", "label": "Lic. Natalia Reyes" }
-  ],
+  "references": [{ "id": "natalia", "label": "Lic. Natalia Reyes" }],
   "assets": [
     {
       "id": "natalia",
-      "tipo": "avatar",          // "avatar" | "broll"
+      "tipo": "avatar",                  // "avatar" | "broll"
       "images": [
         {
           "id": "natalia_medium",
-          "modo": "image2image", // primera imagen puede ser image2image SI usa una reference subida
-          "ref_image_id": "natalia",       // id de imagen previa O id de una reference
-          "ref_image_ids": ["..."],        // OPCIONAL: combinar 2+ personas en un plano
+          "modo": "image2image",         // primera imagen puede serlo SI usa una reference subida
+          "ref_image_id": "natalia",     // id de imagen previa O de una reference
+          "ref_image_ids": ["…"],        // OPCIONAL: combinar 2+ personas en un plano
           "prompt": "…(en inglés)…",
           "negative_prompt": "…"
         }
@@ -324,11 +305,12 @@ Definido en `src/lib/schema.ts` (Zod, validación cruzada). Forma resumida:
       "asset_id": "natalia",
       "image_id": "natalia_medium",
       "video_prompt": "…(en inglés)…",
+      "final_prompt": "",                // override del prompt final a Veo ("" = armado automático)
       "dialogo": "…(es-AR, no se traduce)…",
-      "duracion_seg": 8,           // 4 | 6 | 8
-      "etiqueta": "IA",            // "IA" | "FILMAR_REAL"
+      "duracion_seg": 8,                 // 4 | 6 | 8
+      "etiqueta": "IA",                  // "IA" | "FILMAR_REAL"
       "on_screen_text": "…",
-      "resolucion": "720p"         // opcional: 720p | 1080p
+      "resolucion": "720p"               // opcional: 720p | 1080p
     }
   ],
   "warnings": ["…"]
@@ -336,40 +318,58 @@ Definido en `src/lib/schema.ts` (Zod, validación cruzada). Forma resumida:
 ```
 
 Reglas que valida el schema:
-- Una imagen `image2image` debe tener `ref_image_id` (o `ref_image_ids`) que **exista** (como
-  imagen del proyecto **o** como `reference` subida) y no se referencie a sí misma.
-- La **primera imagen de un avatar** debe ser `text2image` **o** `image2image` cuyas referencias
-  sean **todas** `references` subidas (caso VSL).
-- Cada clip apunta a `asset_id` e `image_id` válidos; `orden` no se repite.
-- `formato` siempre `9:16`; `duracion_seg` solo 4/6/8 (snap automático en backend).
+
+- Una imagen `image2image` necesita `ref_image_id` (o `ref_image_ids`) que **exista** — como imagen
+  del proyecto **o** como `reference` subida — y no puede referenciarse a sí misma.
+- La **primera imagen de un avatar** debe ser `text2image`, **o** `image2image` cuyas referencias
+  sean **todas** `references` subidas (el caso VSL).
+- Cada clip apunta a un `asset_id` e `image_id` válidos, y `orden` no se repite.
+- `formato` siempre `9:16`; `duracion_seg` sólo 4/6/8 (con snap automático en el backend).
+
+**El plan es la fuente de verdad del export.** El stitch a ffmpeg lee del plan, no de los jobs, así
+que cualquier edición de prompt, diálogo o duración tiene que persistir en el plan vía
+`changePrompt` para que impacte en el `.mp4` final.
 
 ---
 
 ## API HTTP
 
+31 handlers en 25 archivos. Todas pasan por el middleware: sin cookie válida devuelven 401
+(`/api/*`) y las páginas redirigen a `/login`.
+
 | Método y ruta | Qué hace |
 |---|---|
-| `GET /api/config` | Config no sensible (modelos, resoluciones, ffmpeg, etc.) |
-| `POST /api/parse` | Brief → PlanJSON (Gemini) + estimación. Acepta `references[]` |
-| `GET /api/projects` | Lista proyectos |
-| `POST /api/projects` | Crea proyecto |
-| `GET /api/projects/:id` | Proyecto + jobs + manifest + estimación |
-| `PUT /api/projects/:id` | Actualiza plan / nombre / modelos / variantes / resolución |
-| `DELETE /api/projects/:id` | Elimina proyecto y sus jobs |
-| `POST /api/projects/:id/generate` | Construye jobs y arranca pipeline |
-| `GET /api/projects/:id/jobs` | Estado en vivo (polling) |
-| `POST /api/projects/:id/control` | `pause` / `resume` / `cancel` |
-| `POST /api/projects/:id/upload` | Sube archivo de un clip `FILMAR_REAL` |
-| `GET/POST /api/projects/:id/references` | Lista / sube **avatares de referencia (VSL)** |
-| `POST /api/projects/:id/approve-batch` | Aprueba todo el lote actual (modo manual) |
-| `POST /api/projects/:id/regenerate-batch` | Regenera **solo los jobs indicados** (`{jobIds}`/`{refIds}`) |
-| `POST /api/projects/:id/stitch` | Une clips en `final.mp4` (ffmpeg) |
-| `POST /api/jobs/:id/retry` | Regenera un job |
-| `POST /api/jobs/:id/approve` | Aprueba un job (índice de variante en imágenes) |
-| `POST /api/jobs/:id/prompt` | Cambia prompt/diálogo/duración/resolución/modelo (`regenerate?`) |
-| `POST /api/jobs/:id/extend` | Extiende un video +7s |
-| `GET /api/jobs/:id/preview` | **Prompt EXACTO** que se ejecuta + imagen input + JSON entero |
-| `GET /api/files/<projectId>/<path>` | Sirve archivo local del proyecto |
+| `POST` `/api/login` | valida usuario + password y setea la cookie |
+| `DELETE` `/api/login` | cierra la sesión |
+| `GET` `/api/config` | config no sensible (modelos, resoluciones, formatos, paths) |
+| `POST` `/api/parse` | brief → PlanJSON (Gemini) + estimación. Acepta `references[]` |
+| `GET` `/api/projects` | lista **todos** los proyectos (resumen + `soloImagenes`) |
+| `POST` `/api/projects` | crea proyecto a partir de `{ name?, brief, plan, models?, … }` |
+| `GET` `/api/projects/:id` | proyecto + jobs + manifest + estimación |
+| `PUT` `/api/projects/:id` | actualiza plan / nombre / modelos / variantes / resolución |
+| `DELETE` `/api/projects/:id` | elimina el proyecto, sus jobs y su carpeta en disco |
+| `GET` `/api/projects/:id/jobs` | estado en vivo (polling) |
+| `POST` `/api/projects/:id/generate` | construye los jobs y arranca la cola |
+| `POST` `/api/projects/:id/control` | `pause` / `resume` / `cancel` |
+| `POST` `/api/projects/:id/stage` | cambia la fase (`images` → `videos`) |
+| `POST` `/api/projects/:id/approve-batch` | aprueba el lote actual (modo manual) |
+| `POST` `/api/projects/:id/regenerate-batch` | regenera sólo los jobs indicados (`{jobIds}`/`{refIds}`) |
+| `POST` `/api/projects/:id/upload` | sube el archivo de un clip `FILMAR_REAL` |
+| `GET` `/api/projects/:id/references` | lista los avatares de referencia |
+| `POST` `/api/projects/:id/references` | sube un avatar de referencia |
+| `POST` `/api/projects/:id/stitch` | une los clips con ffmpeg |
+| `GET` `/api/projects/:id/download` | baja el proyecto (zip, o el archivo suelto) |
+| `GET` `/api/batch?ids=a,b,c` | snapshot del lote |
+| `POST` `/api/batch` | acciones sobre el lote |
+| `POST` `/api/imagenes` | crea un proyecto de sólo imágenes |
+| `POST` `/api/jobs/:id/approve` | aprueba un job (con índice de variante en imágenes) |
+| `POST` `/api/jobs/:id/unapprove` | vuelve un job aprobado a `awaiting_approval` |
+| `POST` `/api/jobs/:id/retry` | regenera un job |
+| `POST` `/api/jobs/:id/prompt` | cambia prompt / diálogo / duración / resolución / modelo (`regenerate?`) |
+| `POST` `/api/jobs/:id/extend` | extiende un video +7s |
+| `GET` `/api/jobs/:id/preview` | el prompt **exacto** que se ejecuta + imagen input + JSON |
+| `GET` `/api/prompt-template` | la plantilla del prompt de video (`?download=1` para bajarla) |
+| `GET` `/api/files/<projectId>/<path>` | sirve un archivo del proyecto (Range, `?dl=1`, `?name=`) |
 
 ---
 
@@ -377,59 +377,55 @@ Reglas que valida el schema:
 
 ```
 src/
+├── middleware.ts                      # guard de auth (Edge) + headers de seguridad
 ├── app/
-│   ├── layout.tsx                     # Layout raíz
-│   ├── globals.css                    # Tailwind + utilidades
-│   ├── page.tsx                       # "Nuevo proyecto" (brief / pegar JSON, modelos, plan,
-│   │                                  #  + panel "Avatares de referencia (VSL)")
-│   ├── project/[id]/
-│   │   ├── pipeline/page.tsx          # Pipeline: storyboard / fix / flow + revisar+editar
-│   │   └── result/page.tsx            # Resultado: timeline, upload manual, stitch
-│   └── api/                           # Route handlers (ver tabla arriba)
+│   ├── layout.tsx                     # Server Component: currentUser(cookies()) + nav
+│   ├── SessionBar.tsx / NavLinks.tsx  # usuario y navegación (Client)
+│   ├── page.tsx                       # "Nuevo proyecto" (video)
+│   ├── login/                         # page.tsx (Server) + LoginForm.tsx (Client)
+│   ├── imagenes/                      # page.tsx + ImagenesBoard.tsx
+│   ├── batch/                         # BatchBoard + review/ReviewDeck + videos/VideoDeck
+│   ├── project/[id]/                  # pipeline/ y result/
+│   └── api/                           # las 25 route handlers
 │
 ├── components/
-│   ├── ModelSelectorBar.tsx           # Barra superior: modelos + variantes + resolución
-│   ├── JobCard.tsx                    # Tarjeta de job (preview, aprobar, regenerar, modal edit, extender)
-│   ├── FlowGraph.tsx                  # Vista "flujo agéntico" por etapas
-│   ├── LogPanel.tsx                   # Mini-log en vivo
-│   ├── JsonEditor.tsx                 # Editor del PlanJSON con validación Zod
-│   ├── CostEstimatePanel.tsx          # Estimación
-│   ├── ProjectTabs.tsx                # Tabs Pipeline / Resultado
-│   └── StatusBadge.tsx                # Badge de estado
+│   ├── ui/                            # las 10 primitivas (Button, Input, Select, Badge, …)
+│   ├── JobCard.tsx                    # tarjeta de job
+│   ├── ModelSelectorBar.tsx           # modelos + variantes + resolución
+│   ├── FlowGraph.tsx / LogPanel.tsx / JsonEditor.tsx / CostEstimatePanel.tsx
+│   └── ProjectTabs.tsx / StatusBadge.tsx / Visor.tsx
 │
-├── store/useProjectStore.ts           # Zustand: config, plan, jobs, logs, references, acciones
+├── store/useProjectStore.ts           # Zustand (sin persist: vive en memoria)
 │
 └── lib/
-    ├── config.ts                      # Config central + MODEL_CATALOG + helpers
-    ├── schema.ts                      # Zod del PlanJSON (con references[] y ref_image_ids[])
-    ├── types.ts                       # JobRecord, ProjectRecord, Manifest, ManifestReference, ...
-    ├── prompts.ts                     # PARSER_SYSTEM_PROMPT + buildVeoVideoPrompt + buildImageInstruction
-    │                                  # (usado por Vertex provider Y por el preview → idéntico)
-    ├── db.ts                          # JSON local (proyectos, jobs, logs)
-    ├── storage.ts                     # FS: rutas, manifest, slugify, anti-traversal, references
-    ├── ffmpeg.ts                      # Stitch (audio + 720/1080p, CRF 18)
-    ├── http.ts                        # Helpers de respuesta
-    ├── sampleBrief.ts                 # Brief de ejemplo
+    ├── config.ts                      # config central + MODEL_CATALOG + authUsers()
+    ├── auth.ts                        # HMAC, timing-safe, rate limit, currentUser()
+    ├── schema.ts                      # Zod del PlanJSON
+    ├── types.ts                       # JobRecord, ProjectRecord, Manifest, …
+    ├── formatos.ts                    # aspect ratios y calidades (módulo puro, va al cliente)
+    ├── prompts.ts                     # PARSER_SYSTEM_PROMPT, buildVeoVideoPrompt, buildImageInstruction
+    ├── promptTemplate{,.server}.ts    # la plantilla de prompts/veo-video-prompt.md
+    ├── db.ts                          # db.json (proyectos, jobs, logs)
+    ├── storage.ts                     # rutas, manifest, slugify, anti-traversal
+    ├── batch.ts                       # buildBatchSnapshot (tablero, review, timeline)
+    ├── imagenes.ts                    # helpers de la pantalla de imágenes
+    ├── ffmpeg.ts                      # stitch (audio + resolución real, CRF 18)
     ├── jobs/
-    │   ├── pipeline.ts                # buildJobs, runJobGeneration, approveJob, changePrompt,
-    │   │                              # extendVideoJob, concatVideos, refreshManifest, estimateCost
-    │   └── queue.ts                   # Cola: concurrencia, dependencias, AUTO-APPROVE, gate por lotes,
-    │                                  # backoff 429 + red, auto-recuperación de jobs colgados
+    │   ├── pipeline.ts                # buildJobs, run*Generation, approve, changePrompt, extend
+    │   └── queue.ts                   # concurrencia, dependencias, auto-approve, backoff, recuperación
     └── providers/
-        ├── types.ts                   # Interfaces + ProviderHttpError + RefImage
-        ├── index.ts                   # Factory mock | vertex
-        ├── mock.ts                    # demoPlan + vslDemoPlan + placeholders
-        ├── placeholder.ts             # PNG/MP4 placeholder
-        └── vertex/
-            ├── auth.ts                # ADC vía google-auth-library
-            ├── llm.ts                 # Gemini parseBrief (acepta references[])
-            ├── image.ts               # Nano Banana (multi-ref + timeout + 429 tipado)
-            └── video.ts               # Veo (LRO + polling + 429 tipado)
+        ├── index.ts                   # factory mock | vertex
+        ├── mock.ts / placeholder.ts   # demo plans y placeholders
+        └── vertex/                    # auth (ADC), llm, image, video
 
-scripts/
-└── generate-vsl-plan.ts               # Genera y valida el PlanJSON del VSL (95 clips)
+deploy/
+├── deploy.sh                          # build + activación de una release
+├── ecosystem.config.js                # PM2 (1 instancia, fork)
+└── Caddyfile.generador                # reverse proxy
 
-vsl-natalia-plan.json                  # Plan completo del VSL "Agua de Arroz TURBO"
+tasks/                                 # planes de implementación (ver "Convención de tasks")
+prompts/veo-video-prompt.md            # plantilla editable en runtime
+scripts/generate-vsl-plan.ts           # genera y valida un PlanJSON de VSL
 ```
 
 ### Flujo de datos
@@ -438,82 +434,175 @@ vsl-natalia-plan.json                  # Plan completo del VSL "Agua de Arroz TU
 Brief / PlanJSON pegado + (opcional) fotos de avatares
         │
         ▼
-/api/parse  ──► PlanJSON validado (Zod)
+/api/parse ──► PlanJSON validado (Zod)
         │
         ▼
-/api/projects (POST)  ──►  db.json  +  output/<id>/
+POST /api/projects ──► db.json + <OUTPUT_DIR>/<id>/
+        │
+        ├─► (VSL) POST /api/projects/:id/references ──► references/<id>.png
         │
         ▼
-(VSL) /api/projects/:id/references  ──► output/<id>/references/<id>.png
+POST /api/projects/:id/generate ──► buildJobs() ──► cola (queue.ts)
+        │
+        ├─► Nano Banana: text2image / image2image (con N referencias)
+        │   images/_candidates/ y al aprobar copia a images/<id>.png
+        │
+        └─► Veo: imagen → video (audio, LRO + polling)
+            clips/NN_<clip>.mp4
         │
         ▼
-/api/projects/:id/generate  ──► buildJobs() ──► cola (queue.ts)
-        │
-        ├─► Nano Banana: text2image / image2image  (con N referencias)
-        │   guarda en images/_candidates/ y al aprobar copia a images/<id>.png
-        │
-        └─► Veo: imagen → video (con audio, LRO + polling)
-            guarda en clips/NN_<clip>.mp4
+aprobación (auto o manual) ─ desbloquea lo que depende
         │
         ▼
-auto-aprobación (si está activada) ─ desbloquea lo que depende
+/batch/review y /batch/videos ──► editar prompts ──► persiste en el PLAN
         │
         ▼
-Revisión: 🔧 Revisar/Arreglar → 🔍 Revisar seleccionados → editar prompts → ↻ Guardar y regenerar
-        │
-        ▼
-Resultado → stitch (ffmpeg) → final.mp4   (usa los textos/tiempos editados, persistidos en el plan)
+POST /api/projects/:id/stitch (ffmpeg) ──► <nombre-del-proyecto>.mp4
 ```
 
 ---
 
 ## Variables de entorno
 
-Ver `.env.example`. Las relevantes:
+Ver `.env.example`. Las que importan:
 
 | Variable | Default | Descripción |
 |---|---|---|
 | `PROVIDER_MODE` | `mock` | `mock` o `vertex` |
-| `GOOGLE_CLOUD_PROJECT` | — | Project ID (Vertex) |
-| `GOOGLE_CLOUD_LOCATION` | `us-central1` | Región Vertex |
-| `LLM_MODEL` | `gemini-2.5-flash` | Chat |
-| `IMAGE_MODEL` | `gemini-2.5-flash-image` | Nano Banana (recomendado) |
-| `VIDEO_MODEL` | `veo-3.1-generate-001` | Veo |
-| `IMAGE_VARIANTS` | `1` | Variantes por imagen (1–4) |
+| `GOOGLE_CLOUD_PROJECT` | — | Project ID (requerido en `vertex`) |
+| `GOOGLE_CLOUD_LOCATION` | `global` | **`global`, no una región** |
+| `LLM_MODEL` | `gemini-3.6-flash` | Chat |
+| `IMAGE_MODEL` | `gemini-3.1-flash-image` | Nano Banana 2 |
+| `VIDEO_MODEL` | `veo-3.1-lite-generate-001` | Veo |
 | `VIDEO_RESOLUTION` | `720p` | Resolución default |
-| `OUTPUT_DIR` / `DATA_DIR` | `./output` / `./data` | Carpetas locales |
-| `PIPELINE_CONCURRENCY` | `3` | Jobs en paralelo (ventana rolling) |
+| `IMAGE_VARIANTS` | `1` | Variantes por imagen (1-4) |
+| `OUTPUT_DIR` / `DATA_DIR` | `./output` / `./data` | **En producción tienen que ser absolutos** |
+| `PIPELINE_CONCURRENCY` | `3` | Jobs en paralelo |
 | `PIPELINE_AUTO_APPROVE` | `true` | Auto-aprueba cada job al terminar |
-| `PIPELINE_APPROVAL_BATCH` | `5` | Lote para modo manual (`autoApprove=false`) |
+| `PIPELINE_APPROVAL_BATCH_IMAGES` | `0` | Lote manual de imágenes (0 = sin límite) |
+| `PIPELINE_APPROVAL_BATCH_VIDEOS` | `5` | Lote manual de videos |
 | `PIPELINE_MAX_ATTEMPTS` | `3` | Reintentos por job (errores reales) |
-| `PIPELINE_BACKOFF_MS` | `1500` | Backoff base (errores reales) |
+| `PIPELINE_BACKOFF_MS` | `1500` | Backoff base |
 | `PIPELINE_RATE_LIMIT_BACKOFF_MS` | `45000` | Backoff específico para 429 |
-| `PIPELINE_RATE_LIMIT_MAX_ATTEMPTS` | `10` | Reintentos extra para 429 + red (no consumen los normales) |
-| `PIPELINE_NETWORK_BACKOFF_MS` | `4000` | Backoff base para errores de red |
+| `PIPELINE_RATE_LIMIT_MAX_ATTEMPTS` | `10` | Reintentos extra para 429 + red |
+| `PIPELINE_NETWORK_BACKOFF_MS` | `4000` | Backoff base de red |
 | `PIPELINE_IMAGE_TIMEOUT_MS` | `120000` | Timeout por request de imagen |
-| `VEO_POLL_INTERVAL_MS` | `10000` | Polling LRO Veo |
-| `VEO_POLL_TIMEOUT_MS` | `600000` | Timeout LRO Veo |
+| `PIPELINE_IMAGE_VARIANT_GAP_MS` | `2500` | Pausa entre variantes (evita 429) |
+| `PIPELINE_VIDEO_RATE_MAX` | `4` | Arranques de video por ventana |
+| `PIPELINE_VIDEO_RATE_WINDOW_MS` | `60000` | La ventana |
+| `PIPELINE_VIDEO_REQUEUE_MAX` | `5` | Reencolados de un video fallido |
+| `VEO_POLL_INTERVAL_MS` | `10000` | Polling del LRO de Veo |
+| `VEO_POLL_TIMEOUT_MS` | `600000` | Timeout del LRO |
+| `PIPELINE_MAX_LOG` | `500` | Entradas de log por proyecto |
+| `AUTH_SECRET` | — | **Obligatorio.** Firma las cookies. Sin esto no entra nadie |
+| `PASSWORD_<NOMBRE>` | — | **Al menos una.** Un usuario por variable |
+| `AUTH_SESSION_HOURS` | `72` | Vida de la sesión |
+| `NEXT_PUBLIC_SITE_URL` | — | URL canónica para el redirect al login |
 
-### Recetas rápidas
+### Recetas
 
 **Para evitar 429 en imagen:**
 ```env
 PIPELINE_CONCURRENCY=1
 IMAGE_VARIANTS=1
+PIPELINE_IMAGE_VARIANT_GAP_MS=4000
 ```
 
-**Para dejarlo toda la noche generando un VSL largo (default actual):**
+**Para dejarlo generando un VSL largo:**
 ```env
 PIPELINE_CONCURRENCY=3
 PIPELINE_AUTO_APPROVE=true
 PIPELINE_RATE_LIMIT_BACKOFF_MS=45000
 ```
 
-**Modo manual (con aprobación humana):**
+**Modo manual, revisando de a poco:**
 ```env
 PIPELINE_AUTO_APPROVE=false
-PIPELINE_APPROVAL_BATCH=5
+PIPELINE_APPROVAL_BATCH_IMAGES=0
+PIPELINE_APPROVAL_BATCH_VIDEOS=5
 ```
+
+---
+
+## Deploy
+
+Vive en `generador.hilvanapp.online`. Caddy (detrás de Cloudflare) → PM2 → Next standalone en
+`127.0.0.1:3006`.
+
+```bash
+sudo -u deploy bash /srv/generador/repo/deploy/deploy.sh
+```
+
+Layout en el server:
+
+```
+/srv/generador/
+├── repo/                       # clon de git (main)
+├── shared/
+│   ├── .env.production         # secretos (chmod 600)
+│   └── adc.json                # credenciales de Vertex (chmod 600)
+├── storage/{data,output}       # ESTADO PERSISTENTE, afuera de las releases
+├── releases/<timestamp>/       # se conservan las últimas 5
+└── current -> <release>/.next/standalone
+```
+
+**`storage/` está afuera del árbol de releases y no es gusto.** `config.ts` resuelve `DATA_DIR` y
+`OUTPUT_DIR` con `resolveFromCwd()`: si son relativos se resuelven contra el cwd, que es
+`/srv/generador/current`, o sea **adentro** de la release. Cada deploy crea una release nueva y la
+poda borra las viejas: los proyectos, imágenes y videos desaparecerían en el deploy siguiente sin
+un solo error. El paso 3c de `deploy.sh` aborta si esos paths no son absolutos o si apuntan adentro
+del árbol de releases.
+
+Lo que el script garantiza:
+
+- **Un deploy a la vez** (`flock`). Dos simultáneos se pisan el `git reset` del repo compartido.
+- **Se re-ejecuta a sí mismo** si el commit cambió `deploy.sh`. Bash lee el script por offset de
+  bytes: si el archivo cambia de tamaño a mitad de ejecución, sigue leyendo desde la posición vieja
+  y ejecuta líneas cortadas. Pasó en el primer deploy.
+- **Guards antes del build**, para no dejar una release a medias: `AUTH_SECRET` presente, al menos
+  una `PASSWORD_*`, `NEXT_PUBLIC_SITE_URL` presente, `DATA_DIR`/`OUTPUT_DIR` absolutos y
+  escribibles, credenciales de Vertex legibles y JSON válido, y `ffmpeg`/`ffprobe` instalados
+  (`zip` es warning: sólo rompe la descarga en zip).
+- **`npm ci --include=dev` es obligatorio**: el guard hace `source` del `.env.production`, que setea
+  `NODE_ENV=production`, y con eso `npm ci` saltea las devDependencies — donde viven `typescript`,
+  `tailwind` y `postcss`. Sin el flag el typecheck muere con `tsc: not found`.
+- **Completa el standalone a mano**: Next no copia `.next/static`, `public/`, `.env.production` ni
+  `prompts/` adentro de `.next/standalone`. Sin eso la app sale sin CSS.
+- **Swap atómico** con `mv -T` (un solo `rename(2)`). `ln -sfn` hace unlink + symlink, y en esa
+  ventana `current` no existe.
+- **Health check + rollback**: si `/login` no devuelve 200 en 40s, vuelve solo a la release anterior.
+  Se chequea `/login` y no `/`, porque `/` redirige con 307 sin cookie.
+
+**Una sola instancia** (`instances: 1`, `exec_mode: 'fork'`), y no es negociable: la cola de jobs
+vive en memoria del proceso, así que con 2+ se rompe el polling de progreso y hay escrituras
+concurrentes sobre `db.json`. El rate limit de login también es in-memory: con N instancias el
+límite efectivo se multiplica por N.
+
+**Un reload reinicia el proceso y los jobs en vuelo se pierden** (los archivos ya escritos quedan;
+el progreso no). No deployees con una generación corriendo.
+
+---
+
+## Convención de tasks
+
+Los cambios grandes se planifican en `tasks/<modulo>/` antes de escribir código, con:
+
+- `00-PLAN-<MODULO>.md` — documento maestro: decisiones cerradas (cada una con el bug que evita),
+  contratos congelados, tabla de ownership de archivos, olas de paralelismo, preguntas abiertas.
+- `TNN-<nombre>.md` — una task por agente, con los archivos que puede tocar y su verificación.
+- `PROMPT-CLAUDE-CODE.md` — los prompts listos para pegar.
+- `_verificacion-*.{sh,mjs}` — afirmaciones ejecutables con la salida esperada al lado.
+
+Los que ya están:
+
+| Carpeta | Qué |
+|---|---|
+| `tasks/` (raíz) | rediseño de UI: `00-PLAN-REDISENO-UI.md` + T01-T12, ya cerrado |
+| `tasks/aislamiento-por-usuario/` | aislar los proyectos por usuario (pendiente) |
+
+`tasks/_verificacion-endpoints.sh` es una **línea base**: verifica que ninguna pantalla haya perdido
+un `fetch` a un endpoint. Si movés un fetch a propósito, actualizá la `LINEA_BASE` en el mismo
+commit y explicá por qué. Nunca la toques "para que pase".
 
 ---
 
@@ -521,40 +610,27 @@ PIPELINE_APPROVAL_BATCH=5
 
 | Síntoma | Causa | Solución |
 |---|---|---|
-| 404 *"Publisher Model … was not found"* | Modelo no habilitado en tu proyecto | Usá uno del catálogo (p. ej. `gemini-2.5-flash`, `veo-3.1-generate-001`) o pisalo por env |
-| Mucho 429 en imagen | Cuota por minuto del modelo | Bajá `PIPELINE_CONCURRENCY` y `IMAGE_VARIANTS`, **NO** te pases a Pro (tiene menos cuota), o subí el tier en Google Cloud |
-| `fetch failed` reiteradas | Red intermitente / timeout | Ya hay reintentos automáticos con backoff. Si persiste, mirá el log; el timeout es 120s por request |
-| Job colgado en `generating` | Tras reiniciar el server | Se autodestraba al moverse la cola; o tocás **Regenerar** (siempre activo) |
-| Video muestra el viejo tras regenerar | Cache del browser | Ya hay cache-busting `?v=<updatedAt>` + `key={url}`. Si pasa, recargá con Ctrl+Shift+R |
-| `final.mp4` sin audio / baja calidad | Falta ffmpeg | Instalá ffmpeg; el stitch ya conserva audio y resolución real |
-| Falla la autenticación | ADC sin loguear | `gcloud auth application-default login` y revisá `GOOGLE_CLOUD_PROJECT` |
-| Romina sale igual que Natalia | El plan tiene a Romina como `image2image` con foto subida | En el plan correcto, Romina es `text2image` (la inventa la IA, distinta de Natalia). Usá `vsl-natalia-plan.json` |
+| 404 *"Publisher Model … was not found"* | `GOOGLE_CLOUD_LOCATION` en una región | Ponelo en `global`. Los modelos 3.x no existen en regiones |
+| No entra nadie, ni con la password bien | falta `AUTH_SECRET` o toda `PASSWORD_*` | Falla cerrado a propósito. `deploy.sh` lo aborta antes del build |
+| El login redirige a `127.0.0.1:3006` | falta `NEXT_PUBLIC_SITE_URL` | Setealo con la URL pública |
+| `Unexpected token <` en un fetch de la UI | sesión vencida | El middleware ya contesta 401 en `/api/*`; volvé a entrar |
+| Mucho 429 en imagen | cuota por minuto del modelo | Bajá `PIPELINE_CONCURRENCY` e `IMAGE_VARIANTS`, subí `PIPELINE_IMAGE_VARIANT_GAP_MS` |
+| Pedí 2 variantes y vino 1 | 429 entre variantes | Subí `PIPELINE_IMAGE_VARIANT_GAP_MS`. Las que faltan se generan al reintentar |
+| Job colgado en `generating` | se reinició el proceso | Se autodestraba al moverse la cola; `/batch` los muestra como `stuck` |
+| Video viejo tras regenerar | cache del browser | Ya hay `?v=<updatedAt>` + `key={url}`. Si pasa, Ctrl+Shift+R |
+| La descarga en zip falla | falta el binario `zip` | `apt-get install -y zip`. `deploy.sh` avisa |
+| `final.mp4` sin audio o de mala calidad | falta ffmpeg | `apt-get install -y ffmpeg`. `deploy.sh` lo aborta |
+| Se perdieron proyectos tras un deploy | `DATA_DIR`/`OUTPUT_DIR` relativos | Tienen que ser absolutos y afuera de `releases/`. El guard 3c lo aborta |
+| Falla la autenticación de Vertex | ADC sin configurar | `gcloud auth application-default login`, o `GOOGLE_APPLICATION_CREDENTIALS` en el server |
 
 ---
 
-## Si abrís un chat nuevo (contexto para retomar)
+## Convenciones
 
-Lo que conviene contarle al asistente:
-
-- **Repo**: `drasticcurl/videogeneradorxd`. Workspace local en `/projects/sandbox/videogeneradorxd`.
-- **Caso real activo**: VSL "Agua de Arroz TURBO", Lic. Natalia Reyes (foto real subida) +
-  Romina (testimonio, generada por IA con `text2image`). Plan completo en
-  `vsl-natalia-plan.json`. Generador en `scripts/generate-vsl-plan.ts`.
-- **Estado**: PRs #1–#16 mergeados. La pipeline está optimizada para dejarla generando toda
-  la noche con auto-aprobación + ventana de 3 + reintentos 429 a 45s + auto-recuperación de
-  jobs colgados.
-- **Vista pensada para iterar**: 🔧 Revisar / Arreglar → 🔍 Revisar / editar seleccionados.
-  Permite editar `video_prompt`, `dialogo` y `duracion_seg`, **guardar al plan**, y regenerar.
-  Lo que se guarda al plan se usa en el export a ffmpeg.
-- **Convenciones**: español rioplatense (voseo) en chat y diálogos del VSL; código en inglés
-  para los `prompt`s visuales. PRs con título corto + body en español. Hacer **un PR por
-  feature/fix**; basarse siempre en `main` actualizado.
-- **Limitación importante**: typecheck/build son lentos en este sandbox; el usuario suele
-  pedir saltearlos y testear localmente.
-
----
-
-## Stack
-
-Next.js 14 (App Router) · TypeScript · Tailwind CSS · Zustand · Zod · google-auth-library
-(ADC) · ffmpeg (opcional). Almacenamiento local en filesystem + JSON.
+- **Idioma**: español rioplatense (voseo) en chat, comentarios, UI y diálogos del VSL. Los
+  **prompts visuales van en inglés**. Los diálogos no se traducen.
+- **Formato**: vertical 9:16 fijo. Duración de clip sólo 4/6/8s.
+- **Comentarios**: explican *por qué*, y cuando documentan una decisión traen el bug que evita.
+  Los comentarios largos de este repo son deliberados: casi todos son un bug que ya pasó.
+- **PRs**: uno por feature/fix, desde `main` actualizado. Título corto, body en español con
+  "Qué hace" / "Cambios" / "Tested" / "Notas".

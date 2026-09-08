@@ -110,6 +110,16 @@ export interface ProjectRecord {
    */
   autoApprove?: boolean;
   /**
+   * Usuario dueño del proyecto (el nombre de `PASSWORD_<NOMBRE>`, en minusculas).
+   *
+   * OPCIONAL a proposito: hace que el cambio sea aditivo y que los proyectos que ya
+   * existian no rompan el tipo. `undefined` NO significa "de todos": el filtro es
+   * `p.owner === usuario`, asi que un proyecto sin dueño queda invisible para todos
+   * hasta que corra `scripts/migrar-owner.mjs`. Ver D2 de
+   * tasks/aislamiento-por-usuario/00-PLAN-AISLAMIENTO-USUARIO.md.
+   */
+  owner?: string;
+  /**
    * Fase actual: "images" frena los jobs de video hasta que el usuario pase a "videos".
    * undefined = sin fase (corre todo, como siempre).
    */

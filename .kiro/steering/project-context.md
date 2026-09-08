@@ -5,97 +5,113 @@ inclusion: always
 # Contexto del proyecto videogeneradorxd
 
 Este steering carga automáticamente: dale al asistente **el estado actual** sin tener que repetirlo.
+Si algo de acá contradice al código, **gana el código** — y actualizá este archivo en el mismo commit.
 
 ## Qué es
 
-App Next.js **local** que genera anuncios UGC y **VSLs largos** (talking-head). Pegás un brief o
-un PlanJSON, opcionalmente subís fotos de avatares (VSL), y la app genera imágenes + videos con
-**Vertex AI** (Gemini, Nano Banana, Veo) manteniendo la **misma cara** en cada plano. Estado en
-`./data/db.json` y archivos en `./output/<project_id>/`.
+App **Next.js 14 desplegada en producción** que genera anuncios UGC, **VSLs largos** (talking-head)
+e **imágenes sueltas**. Pegás un brief o un PlanJSON, opcionalmente subís fotos de avatares (VSL), y
+genera imágenes + videos con **Vertex AI** (Gemini, Nano Banana, Veo) manteniendo la **misma cara**
+en cada plano.
 
-## Caso real activo
+**No es una app local.** Vive en `generador.hilvanapp.online` con **login por usuario**, detrás de
+Caddy → PM2 → Next standalone en `127.0.0.1:3006`. Estado en `<DATA_DIR>/db.json` y archivos en
+`<OUTPUT_DIR>/<project_id>/`. En el server esos paths son `/srv/generador/storage/{data,output}`.
 
-VSL "Agua de Arroz TURBO" — **Lic. Natalia Reyes** (foto real subida, único `reference`) +
-**Romina** (testimonio, generada por IA con `text2image`). 95 clips en total (91 Natalia + 4
-Romina). Plan completo en `vsl-natalia-plan.json` (raíz del repo); generador validado contra
-Zod en `scripts/generate-vsl-plan.ts`.
+**Genera gasto real**: Veo y Nano Banana son de pago. Todo el diseño del pipeline (topes de
+concurrencia, rate limit, backoff) sale de ahí.
 
-## Estado actual (PRs #1–#16 mergeados)
+## Auth — cada usuario es una variable de entorno
 
-- **VSL** (#9, #10): `ProjectPlan.references[]` (fotos subidas), `Image.ref_image_ids[]`
-  (multi-persona), panel "Avatares de referencia" en home en ambos modos (IA y Pegar JSON),
-  `id` de foto editable con indicador ✓/•, parser y provider Nano Banana inyectan multi-ref con
-  instrucción de identidad.
-- **Pipeline** (#12): **auto-aprobación** (default `PIPELINE_AUTO_APPROVE=true`) + **ventana
-  rolling de 3** (`PIPELINE_CONCURRENCY=3`) — pensado para dejarlo toda la noche.
-- **Resiliencia** (#11, #13):
-  - 429 con backoff dedicado **45s** (respeta `Retry-After`) y **10 reintentos aparte** que no
-    queman los `maxAttempts` normales.
-  - Errores de red (`fetch failed`, timeouts) tratados como transitorios con backoff exp.
-  - **Timeout 120s** por request de imagen.
-  - **Variantes con éxito parcial**: 1 request por variante, persiste cada éxito al toque.
-  - **Auto-recuperación**: jobs colgados en `generating` que no están realmente corriendo se
-    resetean a `pending` cuando la cola se mueve.
-  - **Cache-busting** `?v=<updatedAt>` + `key={url}` en `<img>`/`<video>`; al regenerar se
-    limpia `outputPath` también para videos (antes el viejo quedaba pegado).
-- **Vista de iteración** (#14, #15, #16):
-  - Pestaña **🔧 Revisar / Arreglar** (lista compacta, video on-demand, no lagea con 95 clips).
-  - **🔍 Revisar / editar seleccionados** abre un storyboard SOLO con los marcados.
-  - Cada tarjeta muestra: imagen de entrada, **prompt visual editable**, **diálogo editable**,
-    selector **duración 4/6/8**, prompt FINAL ejecutado (read-only, recalculable), JSON entero.
-  - Botones: **💾 Guardar** (al plan, sin regenerar), **↻ Guardar y regenerar**, **↻ Regenerar
-    todos sin editar**.
-  - Si el proyecto tiene >24 clips, el pipeline arranca directo en esta vista.
-  - El plan es la fuente de verdad → lo editado va al **export con ffmpeg**.
+- Un usuario por `PASSWORD_<NOMBRE>`; `authUsers()` (`src/lib/config.ts`) los enumera de
+  `process.env` y normaliza el nombre a minúsculas. Hoy: **`ivan` y `lucho`**.
+- Cookie `gen_session` = `<usuario>.<ts>.<hmac>`, HMAC-SHA256 con `AUTH_SECRET`.
+- `src/lib/auth.ts` es la implementación real (`node:crypto`, server-only).
+  `src/middleware.ts` **reimplementa el verify con Web Crypto** porque corre en Edge, donde no
+  existen `node:crypto` ni `node:path`. Mismo formato de token, mismo TTL.
+- **Falla cerrado**: sin `AUTH_SECRET` o sin ninguna `PASSWORD_*` no entra nadie.
+- El middleware contesta **401 en `/api/*`** (no un redirect: un 307 hace que el `fetch` parsee el
+  HTML del login como JSON y el error real queda tapado por "Unexpected token <").
+
+## Limitación conocida: los proyectos NO están aislados por usuario
+
+`ProjectRecord` no tiene campo de dueño y ninguna route handler compara la sesión contra el
+proyecto. Lucho e Ivan se ven todo. Son **cuatro** caminos, no uno:
+
+1. `GET /api/projects` devuelve todos sin filtrar.
+2. `/batch?ids=a,b,c` — los ids viajan en la URL y `/api/batch` no chequea nada.
+3. `GET /api/files/<projectId>/<path>` sirve cualquier archivo y **ni consulta la DB**.
+4. `/api/jobs/<jobId>/*` — los ids de job son derivados (`<projectId>:img:<imageId>`,
+   `<projectId>:vid:<clipId>`), así que un projectId habilita aprobar/regenerar/editar lo ajeno.
+
+Está planificado en `tasks/aislamiento-por-usuario/`. **Antes de tocar nada de esto, leé ese plan.**
+
+## Modelos — Gemini 3.x, y `GOOGLE_CLOUD_LOCATION=global`
+
+`MODEL_CATALOG` en `src/lib/config.ts`. Defaults: chat `gemini-3.6-flash`, imagen
+`gemini-3.1-flash-image` (Nano Banana 2), video `veo-3.1-lite-generate-001`.
+
+**`global`, NO una región.** Toda la familia Gemini 3.x da **404** en `us-central1`, `us-east5` y
+`europe-west4`. Si alguien lo pone en una región, todos los jobs fallan con 404. Veo 3.1 es la línea
+más nueva: `veo-3.2` y `veo-4.0` dan 404.
+
+Ante 429 en imagen: bajar `PIPELINE_CONCURRENCY` e `IMAGE_VARIANTS` y subir
+`PIPELINE_IMAGE_VARIANT_GAP_MS`. **NO sugerir pasar a Nano Banana Pro: tiene menos cuota.**
 
 ## Convenciones a respetar
 
-- **Idioma**: español rioplatense ("vos") en chat y en los diálogos del VSL. Prompts visuales
-  en inglés. Diálogos NO se traducen.
-- **Modelos default**: chat `gemini-2.5-flash`, imagen `gemini-2.5-flash-image` (Nano Banana —
-  más cuota / más barato; **NO** sugerir cambiar a Pro ante 429: tiene menos cuota), video
-  `veo-3.1-generate-001`.
-- **Formato**: vertical 9:16 fijo. **Duración** solo 4/6/8s (snap automático en backend).
-- **Aprobaciones**: con `PIPELINE_AUTO_APPROVE=true` (default) los jobs se aprueban solos. Para
-  modo manual: `PIPELINE_AUTO_APPROVE=false` + `PIPELINE_APPROVAL_BATCH=5` + botón "Aprobar lote".
-- **PRs**: uno por feature/fix, siempre desde `main` actualizado. Título corto, body en español
-  con secciones "Qué hace" / "Cambios" / "Tested" / "Notas".
-- **Tests/build**: typecheck/build son lentos en este sandbox. El usuario los testea
-  localmente. **NUNCA correr `typecheck` ni `build` salvo que el usuario lo pida
-  explícitamente.** Verificar cambios con `grep` rápido si hace falta, nada más.
-- **Git / PRs**: para hacer commits, push y abrir PRs **SIEMPRE usar `execute_bash`**
-  (no `run_command`, no `control_bash_process`, no subagentes para esto). Ejemplo:
-  ```bash
-  cd /projects/sandbox/videogeneradorxd
-  git checkout -b mi-branch
-  git add archivo
-  git commit -m "mensaje"
-  ```
-  Luego `mcp_sandbox_github_push_to_remote` y `mcp_sandbox_github_create_pull_request`.
-- **Preferencia**: cambios chicos y enfocados, con commits descriptivos en español. Nunca
-  borrar funcionalidad existente sin avisar.
+- **Idioma**: español rioplatense (voseo) en chat, comentarios y UI. **Prompts visuales en inglés.**
+  Diálogos NO se traducen.
+- **Formato**: vertical 9:16 fijo. Duración de clip sólo 4/6/8s (snap automático en backend).
+- **Comentarios**: explican *por qué*. Cuando documentan una decisión, traen **el bug que evita**.
+  Los comentarios largos de este repo son deliberados; no los "limpies".
+- **Tests/build**: typecheck y build son lentos. **NUNCA correr `typecheck` ni `build` salvo que el
+  usuario lo pida explícitamente.** Verificar con `grep`/lectura.
+- **Cambios chicos y enfocados**, commits descriptivos en español. Nunca borrar funcionalidad
+  existente sin avisar.
+- **PRs**: uno por feature/fix, desde `main` actualizado. Título corto, body en español con
+  "Qué hace" / "Cambios" / "Tested" / "Notas".
+- **Registro de cambios**: toda tanda de cambios se anota en `CHANGELOG.md`.
+
+## Planificación: la convención de `tasks/`
+
+Los cambios grandes se planifican antes de escribir código, en `tasks/<modulo>/`:
+`00-PLAN-<MODULO>.md` (decisiones cerradas, contratos congelados, ownership de archivos, olas),
+`TNN-<nombre>.md` (una por agente), `PROMPT-CLAUDE-CODE.md`, y `_verificacion-*.{sh,mjs}`.
+
+`tasks/_verificacion-endpoints.sh` es una **línea base**: verifica que ninguna pantalla perdió un
+`fetch`. Si movés un fetch a propósito, actualizá `LINEA_BASE` en el mismo commit. Nunca la toques
+"para que pase".
 
 ## Archivos importantes para orientarse
 
-- `src/lib/config.ts` — `MODEL_CATALOG`, defaults, env vars de pipeline.
+- `src/lib/config.ts` — `MODEL_CATALOG`, defaults, env vars del pipeline, `authUsers()`.
+- `src/lib/auth.ts` + `src/middleware.ts` — auth (leer los dos juntos: uno es Node, otro Edge).
+- `src/lib/types.ts` — `ProjectRecord`, `JobRecord`, `Manifest`.
+- `src/lib/db.ts` — `db.json` (escritura atómica tmp+rename, singleton por `globalThis`).
 - `src/lib/schema.ts` — Zod del PlanJSON (`references[]`, `ref_image_ids[]`, validación cruzada).
-- `src/lib/prompts.ts` — `PARSER_SYSTEM_PROMPT`, `buildVeoVideoPrompt` (UGC + acento argentino),
-  `buildImageInstruction` (compartida con el provider, así el preview es idéntico a lo ejecutado).
-- `src/lib/jobs/queue.ts` — auto-aprobación, gate por lotes, backoff 429+red, auto-recuperación.
-- `src/lib/jobs/pipeline.ts` — `buildJobs`, `runImageGeneration`/`runVideoGeneration`, approve,
-  changePrompt (guarda al plan), extend, concat.
-- `src/app/project/[id]/pipeline/page.tsx` — pipeline UI con las 3 vistas y el storyboard de
-  revisión editable.
-- `vsl-natalia-plan.json` + `scripts/generate-vsl-plan.ts` — el VSL real listo para pegar.
+- `src/lib/prompts.ts` — `PARSER_SYSTEM_PROMPT`, `buildVeoVideoPrompt`, `buildImageInstruction`
+  (compartida con el provider, así el preview es idéntico a lo ejecutado).
+- `src/lib/jobs/queue.ts` — concurrencia, auto-aprobación, gate por lotes, backoff 429+red,
+  auto-recuperación de jobs colgados.
+- `src/lib/jobs/pipeline.ts` — `buildJobs`, `run*Generation`, `approveJob`, `changePrompt`, `extend`.
+- `src/lib/batch.ts` — `buildBatchSnapshot` (tablero, review FIFO, timeline de clips).
+- `deploy/deploy.sh` — build + activación, con todos los guards. Leerlo antes de tocar deploy.
 
 ## Pistas para no romper nada
 
-- Cualquier cambio en el schema del plan: actualizar `validatePlan`, los tipos de `Manifest`,
-  el parser system prompt, y el `responseSchema` de Vertex.
-- Cualquier cambio en cómo se arma el prompt: hacerlo en `prompts.buildImageInstruction` o
-  `buildVeoVideoPrompt` para que el provider y el endpoint `/api/jobs/:id/preview` queden
-  alineados.
+- **Una sola instancia de PM2**, no negociable: la cola vive en memoria del proceso y `db.json` se
+  escribe sin locks entre procesos. Con 2+ se rompe el polling y hay escrituras concurrentes.
+- **`DATA_DIR`/`OUTPUT_DIR` absolutos y afuera de `releases/`.** Si quedan relativos se resuelven
+  contra el cwd (`/srv/generador/current`, dentro de la release) y el próximo deploy los borra sin
+  un solo error. El guard 3c de `deploy.sh` aborta.
+- **Un reload pierde los jobs en vuelo** (los archivos quedan, el progreso no). No deployar con una
+  generación corriendo.
+- Cambio en el schema del plan → actualizar `validatePlan`, los tipos de `Manifest`, el parser
+  system prompt y el `responseSchema` de Vertex.
+- Cambio en cómo se arma un prompt → hacerlo en `prompts.buildImageInstruction` o
+  `buildVeoVideoPrompt`, así el provider y `/api/jobs/:id/preview` quedan alineados.
 - En la cola, si el job termina OK y `autoApprove` está activo, hay que llamar `approveJob`
-  (no dejar `awaiting_approval`).
-- El export a ffmpeg lee del **plan**, no de los jobs: cualquier edición debe persistir en el
-  plan vía `changePrompt` (eso ya está wireado desde la vista de revisión editable).
+  (no dejarlo en `awaiting_approval`).
+- **El export a ffmpeg lee del PLAN, no de los jobs**: cualquier edición debe persistir en el plan
+  vía `changePrompt`.

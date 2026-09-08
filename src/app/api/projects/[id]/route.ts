@@ -10,6 +10,7 @@ import { resolveModel, resolveResolution } from "@/lib/config";
 import { buildManifest, removeProjectDir, writeManifest } from "@/lib/storage";
 import { purgeProject } from "@/lib/jobs/queue";
 import { buildJobs, estimateCost } from "@/lib/jobs/pipeline";
+import { requireProjectOwner } from "@/lib/ownership";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -19,6 +20,9 @@ export async function GET(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
+  const guard = requireProjectOwner(params.id);
+  if (!guard.ok) return guard.response;
+
   const project = projectsDb.get(params.id);
   if (!project) return notFound("Proyecto no encontrado");
   const jobs = jobsDb.byProject(project.id);
@@ -35,6 +39,9 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   try {
+    const guard = requireProjectOwner(params.id);
+    if (!guard.ok) return guard.response;
+
     const project = projectsDb.get(params.id);
     if (!project) return notFound("Proyecto no encontrado");
 
@@ -103,6 +110,9 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
+    const guard = requireProjectOwner(params.id);
+    if (!guard.ok) return guard.response;
+
     const project = projectsDb.get(params.id);
     if (!project) return notFound("Proyecto no encontrado");
 

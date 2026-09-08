@@ -5,6 +5,7 @@
 import { jobsDb, logsDb, projectsDb } from "@/lib/db";
 import { buildManifest } from "@/lib/storage";
 import { queueSnapshot } from "@/lib/jobs/queue";
+import { requireProjectOwner } from "@/lib/ownership";
 import { notFound, ok } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -14,6 +15,9 @@ export async function GET(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
+  const guard = requireProjectOwner(params.id);
+  if (!guard.ok) return guard.response;
+
   const project = projectsDb.get(params.id);
   if (!project) return notFound("Proyecto no encontrado");
   const jobs = jobsDb.byProject(project.id);

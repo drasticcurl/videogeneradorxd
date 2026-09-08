@@ -4,7 +4,8 @@
  */
 import { jobsDb } from "@/lib/db";
 import { enqueueJob } from "@/lib/jobs/queue";
-import { notFound, ok } from "@/lib/http";
+import { requireJobOwner } from "@/lib/ownership";
+import { ok } from "@/lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,8 +14,9 @@ export async function POST(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
-  const job = jobsDb.get(params.id);
-  if (!job) return notFound("Job no encontrado");
+  const guard = requireJobOwner(params.id);
+  if (!guard.ok) return guard.response;
+  const job = guard.job;
   enqueueJob(job.id);
   return ok({ requeued: true, job: jobsDb.get(job.id) });
 }

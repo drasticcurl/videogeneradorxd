@@ -12,7 +12,8 @@
 import { jobsDb } from "@/lib/db";
 import { changePrompt } from "@/lib/jobs/pipeline";
 import { enqueueJob } from "@/lib/jobs/queue";
-import { badRequest, notFound, ok, serverError } from "@/lib/http";
+import { requireJobOwner } from "@/lib/ownership";
+import { badRequest, ok, serverError } from "@/lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,8 +23,9 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    const job = jobsDb.get(params.id);
-    if (!job) return notFound("Job no encontrado");
+    const guard = requireJobOwner(params.id);
+    if (!guard.ok) return guard.response;
+    const job = guard.job;
 
     const body = (await req.json()) as {
       prompt?: string;

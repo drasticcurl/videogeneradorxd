@@ -12,6 +12,7 @@ import { jobsDb, projectsDb } from "@/lib/db";
 import { ASPECT_RATIO, resolveResolution } from "@/lib/config";
 import { buildVeoVideoPrompt, buildImageInstruction } from "@/lib/prompts";
 import { loadVeoPromptTemplateText } from "@/lib/promptTemplate.server";
+import { requireJobOwner } from "@/lib/ownership";
 import { notFound, ok, serverError } from "@/lib/http";
 import type { Image } from "@/lib/schema";
 
@@ -35,8 +36,9 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const job = jobsDb.get(params.id);
-    if (!job) return notFound("Job no encontrado");
+    const guard = requireJobOwner(params.id);
+    if (!guard.ok) return guard.response;
+    const job = guard.job;
     const project = projectsDb.get(job.projectId);
     if (!project) return notFound("Proyecto no encontrado");
 

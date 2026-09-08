@@ -18,6 +18,7 @@ import {
   retryBrokenJobs,
 } from "@/lib/jobs/queue";
 import { ensureProjectDirs, writeManifest } from "@/lib/storage";
+import { filterOwnedIds } from "@/lib/ownership";
 import { badRequest, ok, serverError } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -40,7 +41,14 @@ function parseIds(raw: string | null): string[] {
 export async function GET(req: Request) {
   try {
     const ids = parseIds(new URL(req.url).searchParams.get("ids"));
-    return ok(buildBatchSnapshot(ids));
+    // Filtra en vez de rechazar (D6 del plan de aislamiento): un tablero son varios
+    // proyectos a la vez, y si un solo id ajeno tirara 404 en todo el request, pegar
+    // una URL vieja con un id de mas romperia el tablero entero en vez de mostrar los
+    // que si son tuyos. Los rechazados (ajenos O inexistentes, mezclados a proposito
+    // para no filtrar cual es cual — D4) se suman a missingIds, que la UI ya renderiza.
+    const { owned, rejected } = filterOwnedIds(ids);
+    const snap = buildBatchSnapshot(owned);
+    return ok({ ...snap, missingIds: [...snap.missingIds, ...rejected] });
   } catch (err) {
     return serverError(err);
   }
@@ -71,9 +79,15 @@ export async function POST(req: Request) {
     if (ids.length === 0) return badRequest("Faltan los ids del lote.");
     if (!action) return badRequest("Falta la accion.");
 
+    // Filtra ANTES de ejecutar nada: si el loop iterara sobre `ids` del body en vez
+    // de `owned`, la accion (aprobar, regenerar, cambiar de fase) se ejecutaria sobre
+    // proyectos ajenos aunque la respuesta despues los filtrara. El daño ya estaria
+    // hecho (D6 del plan de aislamiento).
+    const { owned, rejected } = filterOwnedIds(ids);
+
     const applied: string[] = [];
     const requeued: string[] = [];
-    for (const id of ids) {
+    for (const id of owned) {
       const project = projectsDb.get(id);
       if (!project) continue;
 
@@ -132,11 +146,12 @@ export async function POST(req: Request) {
       applied.push(updated.id);
     }
 
+    const batch = buildBatchSnapshot(owned);
     return ok({
       action,
       applied,
       requeued: requeued.length,
-      batch: buildBatchSnapshot(ids),
+      batch: { ...batch, missingIds: [...batch.missingIds, ...rejected] },
     });
   } catch (err) {
     return serverError(err);

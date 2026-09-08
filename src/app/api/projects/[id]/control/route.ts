@@ -9,6 +9,7 @@ import {
   pauseProject,
   resumeProject,
 } from "@/lib/jobs/queue";
+import { requireProjectOwner } from "@/lib/ownership";
 import { badRequest, notFound, ok } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -18,6 +19,9 @@ export async function POST(
   req: Request,
   { params }: { params: { id: string } }
 ) {
+  const guard = requireProjectOwner(params.id);
+  if (!guard.ok) return guard.response;
+
   const project = projectsDb.get(params.id);
   if (!project) return notFound("Proyecto no encontrado");
 

@@ -16,6 +16,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { safeResolve } from "@/lib/storage";
+import { requireProjectOwner } from "@/lib/ownership";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,6 +42,15 @@ export async function GET(
     return new Response("Path invalido", { status: 400 });
   }
   const [projectId, ...rest] = segments;
+
+  // Autorizacion (D5 del plan de aislamiento): antes esta ruta NI CONSULTABA la DB,
+  // asi que con solo un projectId se veian y se bajaban todas las imagenes, todos
+  // los clips y el manifest.json completo de un proyecto ajeno. `guard.response` es
+  // NextResponse con JSON; se devuelve igual (lo que consume esto son <img>/<video>,
+  // que miran el status, no el body).
+  const guard = requireProjectOwner(projectId);
+  if (!guard.ok) return guard.response;
+
   const relPath = rest.join("/");
   const abs = safeResolve(projectId, relPath);
   if (!abs) {

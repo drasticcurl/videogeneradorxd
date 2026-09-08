@@ -10,6 +10,7 @@
 import { projectsDb } from "@/lib/db";
 import { enqueueProject } from "@/lib/jobs/queue";
 import { logEvent } from "@/lib/jobs/pipeline";
+import { requireProjectOwner } from "@/lib/ownership";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
 import type { ProjectStage } from "@/lib/types";
 
@@ -21,6 +22,9 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
+    const guard = requireProjectOwner(params.id);
+    if (!guard.ok) return guard.response;
+
     const project = projectsDb.get(params.id);
     if (!project) return notFound("Proyecto no encontrado");
 

@@ -18,6 +18,7 @@ import {
   writeManifest,
 } from "@/lib/storage";
 import type { ProjectPlan } from "@/lib/schema";
+import { requireProjectOwner } from "@/lib/ownership";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -49,6 +50,9 @@ export async function GET(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
+  const guard = requireProjectOwner(params.id);
+  if (!guard.ok) return guard.response;
+
   const project = projectsDb.get(params.id);
   if (!project) return notFound("Proyecto no encontrado");
   const manifest = buildManifest(project, jobsDb.byProject(project.id));
@@ -60,6 +64,9 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
+    const guard = requireProjectOwner(params.id);
+    if (!guard.ok) return guard.response;
+
     const project = projectsDb.get(params.id);
     if (!project) return notFound("Proyecto no encontrado");
 

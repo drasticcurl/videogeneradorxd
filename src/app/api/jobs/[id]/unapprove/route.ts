@@ -8,7 +8,8 @@
  */
 import { jobsDb } from "@/lib/db";
 import { logEvent, refreshManifest } from "@/lib/jobs/pipeline";
-import { badRequest, notFound, ok, serverError } from "@/lib/http";
+import { requireJobOwner } from "@/lib/ownership";
+import { badRequest, ok, serverError } from "@/lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,8 +19,9 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    const job = jobsDb.get(params.id);
-    if (!job) return notFound("Job no encontrado");
+    const guard = requireJobOwner(params.id);
+    if (!guard.ok) return guard.response;
+    const job = guard.job;
     if (job.status !== "done") {
       return badRequest("Solo se puede deshacer la aprobacion de un job aprobado.");
     }

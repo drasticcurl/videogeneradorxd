@@ -36,6 +36,7 @@ import { buildJobs } from "@/lib/jobs/pipeline";
 import { enqueueProject } from "@/lib/jobs/queue";
 import { validatePlan } from "@/lib/schema";
 import { ensureProjectDirs, slugify, writeManifest } from "@/lib/storage";
+import { sessionUser } from "@/lib/ownership";
 import type { ProjectRecord } from "@/lib/types";
 import { badRequest, ok, serverError } from "@/lib/http";
 
@@ -44,6 +45,11 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
+    const user = sessionUser();
+    if (!user) {
+      return ok({ error: "No autenticado. Volvé a entrar." }, { status: 401 });
+    }
+
     const body = (await req.json()) as {
       nombre?: string;
       prompt?: string;
@@ -127,6 +133,8 @@ export async function POST(req: Request) {
       brief: `Solo imágenes: 1 prompt, ${variantes} variante(s), ${aspectRatio} en ${imageSize}.`,
       plan: validacion.plan,
       status: "draft",
+      // El dueño sale SOLO de la sesion, nunca del body (D3 del plan de aislamiento).
+      owner: user,
       models: {
         llm: resolveModel("llm"),
         image: model,
