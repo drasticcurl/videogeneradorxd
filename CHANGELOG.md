@@ -6,6 +6,46 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-19 — `/imagenes`: imagen base subida (image2image) y chat iterativo con historial
+
+**Qué pasó:** `/imagenes` sólo podía generar desde cero (text2image) y "Variar" reemplazaba la
+imagen existente sin dejar rastro de los pasos anteriores. Ahora se puede (1) arrancar subiendo una
+foto propia como base, y (2) encadenar modificaciones sucesivas (v1 → v2 → v3...) viendo **todas**
+las imágenes de la cadena, no solo la última.
+
+No se tocó el schema del plan ni el pipeline: las dos piezas que hacían falta ya existían para el
+caso VSL (`references[]` subidas + `image2image` con `ref_image_id` apuntando a otra `Image` del
+proyecto). Este cambio expone ese mismo mecanismo desde la pantalla de imágenes sueltas.
+
+- **`POST /api/imagenes` acepta multipart** (`src/app/api/imagenes/route.ts`). Si el body es
+  `multipart/form-data` con un campo `imagenBase` (File), el archivo se guarda como `reference`
+  (mismo camino que usan los avatares VSL) y la primera `Image` del plan nace `image2image` contra
+  ella en vez de `text2image`. Sin archivo, sigue exactamente igual que antes (JSON). El
+  Content-Type decide qué parser usar *antes* de leer el body (`req.json()` revienta con multipart).
+- **`POST /api/projects/:id/images` (nuevo)** — agrega un turno de chat: crea una `Image` NUEVA
+  (`image2image`, `ref_image_id = fromImageId`) en vez de editar la existente, para que cada paso
+  quede visible y no se pierda al "variar". Exige que `fromImageId` esté aprobada (`status: done` +
+  `outputPath`) antes de aceptar el turno — si no, `runImageGeneration` fallaría con un error menos
+  claro más adelante en la cola. El id nuevo es `<base>_v<n>` (sin anidar sufijos si `fromImageId`
+  ya era un turno). `buildJobs` detecta la dependencia sola (mismo código que ya usan las imágenes
+  VSL encadenadas): no hay lógica de dependencias nueva.
+- **`buildChatHistory` (`src/lib/imagenes.ts`)** — sigue `ref_image_id` hacia atrás desde una imagen
+  hasta la raíz de la cadena, con tope de 200 iteraciones contra un plan con ciclos. La respuesta del
+  endpoint nuevo la incluye (`history`) para que el cliente pueda verificar contra lo que ya armó
+  solo con el manifest.
+- **`ImagenesBoard.tsx`**: input de archivo opcional ("Imagen base") con preview; al enviar con
+  archivo usa `FormData`, sin archivo sigue con JSON. Los resultados se agrupan por **hilo** (cadena
+  completa de una imagen, siguiendo `ref_image_id` del manifest en el cliente) en vez de una grilla
+  plana: cada hilo se ve como una fila v1 → v2 → v3 con un chat debajo, habilitado sólo cuando la
+  última imagen de la cadena está aprobada.
+- **Verificado sin build/typecheck** (prohibido correrlos salvo pedido explícito): lectura completa
+  de los archivos tocados + `tasks/_verificacion-endpoints.sh` → `SIN REGRESIONES` (el fetch nuevo
+  cae bajo el prefijo `/api/projects/` que la línea base ya esperaba) + `tasks/_verificacion-
+  inventario.sh` → sin cambios en los archivos intocables (`pipeline.ts`, `queue.ts`, `schema.ts`,
+  `storage.ts`, `db.ts`, etc.).
+
+---
+
 ## 2026-09-08 — Aislamiento por usuario: implementado, migrado y deployado
 
 **Qué pasó:** las 8 tasks del plan se ejecutaron completas. `owner?: string` en

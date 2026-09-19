@@ -101,6 +101,12 @@ interface Job {
 interface ManifestImage {
   id: string;
   prompt: string;
+  /**
+   * Imagen (u otra referencia) de la que depende. Presente cuando `modo` es
+   * image2image. Se usa para armar el HILO del chat iterativo: seguir este puntero
+   * hacia atras reconstruye v1 -> v2 -> v3 sin pedirle nada nuevo al server.
+   */
+  ref_image_id?: string;
 }
 
 /** Un proyecto de solo imagenes, para la lista. */
@@ -318,6 +324,10 @@ export default function ImagenesBoard({
   const [formato, setFormato] = useState("9:16");
   const [calidad, setCalidad] = useState("1K");
   const [negativo, setNegativo] = useState("");
+  /** Imagen subida para arrancar por image2image en vez de text2image. Opcional. */
+  const [imagenBase, setImagenBase] = useState<File | null>(null);
+  const [imagenBasePreview, setImagenBasePreview] = useState<string | null>(null);
+  const imagenBaseInputRef = useRef<HTMLInputElement | null>(null);
 
   /*
     Las calidades dependen del modelo. Si estabas en 4K y cambias al lite (que solo
@@ -330,6 +340,32 @@ export default function ImagenesBoard({
       setCalidad(calidadesPermitidas[0]);
     }
   }, [calidadesPermitidas, calidad]);
+
+  /*
+    Preview de la imagen base con `URL.createObjectURL`, revocada en cleanup: sin el
+    `revokeObjectURL` cada archivo elegido queda vivo en memoria hasta que se cierra la
+    pestaña, y esta pantalla puede quedar abierta horas con el usuario probando varias
+    imagenes base antes de elegir una.
+  */
+  useEffect(() => {
+    if (!imagenBase) {
+      setImagenBasePreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(imagenBase);
+    setImagenBasePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [imagenBase]);
+
+  function elegirImagenBase(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    setImagenBase(file);
+  }
+
+  function quitarImagenBase() {
+    setImagenBase(null);
+    if (imagenBaseInputRef.current) imagenBaseInputRef.current.value = "";
+  }
 
   /*
     ─── EL PROYECTO ABIERTO VIVE EN LA URL ─────────────────────────────────────
@@ -388,6 +424,14 @@ export default function ImagenesBoard({
   );
   const [jobs, setJobs] = useState<Job[]>([]);
   const [prompts, setPrompts] = useState<Record<string, string>>({});
+  /**
+   * `ref_image_id` por imagen, del manifest. Es lo que permite armar el HILO del
+   * chat iterativo en el cliente (seguir el puntero hacia atras) sin pedirle al
+   * server un endpoint nuevo de solo lectura: el dato ya viaja en `/jobs`.
+   */
+  const [refImageIds, setRefImageIds] = useState<Record<string, string | undefined>>(
+    {},
+  );
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   // Prompts en edicion, por refId. Separado de `prompts` para no perder lo tipeado
@@ -395,6 +439,12 @@ export default function ImagenesBoard({
   const [editando, setEditando] = useState<Record<string, string>>({});
   const [ocupado, setOcupado] = useState<Record<string, boolean>>({});
   const [aprobandoLote, setAprobandoLote] = useState(false);
+  // Texto del chat en curso, por imageId "cabeza" de la cadena (la mas nueva de cada
+  // hilo). Separado de `prompts`/`editando` porque no edita nada existente: es lo que
+  // se va a mandar como el PROXIMO turno.
+  const [chatTexto, setChatTexto] = useState<Record<string, string>>({});
+  const [chatEnviando, setChatEnviando] = useState<Record<string, boolean>>({});
+  const [chatError, setChatError] = useState<Record<string, string | null>>({});
 
   // Para que el boton del estado vacio lleve al campo que hay que llenar.
   const promptsRef = useRef<HTMLTextAreaElement | null>(null);
@@ -474,8 +524,13 @@ export default function ImagenesBoard({
       };
       setJobs((data.jobs ?? []).filter((j) => j.type === "image"));
       const mapa: Record<string, string> = {};
-      for (const img of data.manifest?.images ?? []) mapa[img.id] = img.prompt;
+      const refs: Record<string, string | undefined> = {};
+      for (const img of data.manifest?.images ?? []) {
+        mapa[img.id] = img.prompt;
+        refs[img.id] = img.ref_image_id;
+      }
       setPrompts(mapa);
+      setRefImageIds(refs);
       /*
         El formato del proyecto GENERADO, que no es necesariamente el que dice el
         selector: si ya generaste en 16:9 y despues moviste el selector a 9:16, las
@@ -525,19 +580,41 @@ export default function ImagenesBoard({
     setError(null);
     setEnviando(true);
     try {
-      const res = await fetch("/api/imagenes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          nombre,
-          prompt: texto,
-          variantes,
-          model: modelo,
-          aspectRatio: formato,
-          imageSize: calidad,
-          negativePrompt: negativo,
-        }),
-      });
+      /*
+        Con imagen base: FormData (multipart), porque hay un File de por medio. Sin
+        ella: el mismo JSON de siempre. El server decide el parser por Content-Type
+        (ver /api/imagenes/route.ts), asi que alcanza con no mandar el header a mano
+        y dejar que `fetch` lo arme solo con el boundary cuando el body es FormData.
+      */
+      const res = imagenBase
+        ? await fetch("/api/imagenes", {
+            method: "POST",
+            body: (() => {
+              const fd = new FormData();
+              fd.set("nombre", nombre);
+              fd.set("prompt", texto);
+              fd.set("variantes", String(variantes));
+              fd.set("model", modelo);
+              fd.set("aspectRatio", formato);
+              fd.set("imageSize", calidad);
+              if (negativo.trim()) fd.set("negativePrompt", negativo);
+              fd.set("imagenBase", imagenBase);
+              return fd;
+            })(),
+          })
+        : await fetch("/api/imagenes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              nombre,
+              prompt: texto,
+              variantes,
+              model: modelo,
+              aspectRatio: formato,
+              imageSize: calidad,
+              negativePrompt: negativo,
+            }),
+          });
       const data = (await res.json().catch(() => ({}))) as {
         project?: { id: string };
         error?: string;
@@ -548,6 +625,7 @@ export default function ImagenesBoard({
         return;
       }
       setJobs([]);
+      quitarImagenBase();
       // El nuevo pasa a ser el abierto, pero los anteriores NO se pierden: quedan en
       // la lista de abajo, que se recarga acá mismo.
       abrirProyecto(data.project.id);
@@ -635,12 +713,98 @@ export default function ImagenesBoard({
     }
   }
 
+  /**
+   * Manda un turno del chat iterativo: la imagen `fromImageId` (ya aprobada) mas el
+   * texto escrito se convierten en una imagen NUEVA (`POST /api/projects/:id/images`,
+   * ver ese endpoint para el porque de una imagen nueva y no un `changePrompt`). No
+   * hay optimismo local: se limpia el input recien cuando el server confirma, asi que
+   * si el pedido falla el texto queda ahi para reintentar sin volver a escribirlo.
+   */
+  async function enviarTurnoChat(fromImageId: string) {
+    if (!projectId) return;
+    const prompt = (chatTexto[fromImageId] ?? "").trim();
+    if (!prompt) return;
+    setChatEnviando((e) => ({ ...e, [fromImageId]: true }));
+    setChatError((e) => ({ ...e, [fromImageId]: null }));
+    try {
+      const res = await fetch(`/api/projects/${projectId}/images`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fromImageId, prompt }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        created?: boolean;
+        error?: string;
+      };
+      if (!res.ok || !data.created) {
+        setChatError((e) => ({ ...e, [fromImageId]: data.error ?? `Error ${res.status}` }));
+        return;
+      }
+      setChatTexto((t) => ({ ...t, [fromImageId]: "" }));
+      await traerEstado(projectId);
+      relanzarPolling(projectId);
+    } catch (err) {
+      setChatError((e) => ({
+        ...e,
+        [fromImageId]: err instanceof Error ? err.message : "Error de red",
+      }));
+    } finally {
+      setChatEnviando((e) => ({ ...e, [fromImageId]: false }));
+    }
+  }
+
   // ─── Derivados de la vista ────────────────────────────────────────────────
   // Se leen del TONO que devuelve `estadoDeJob`, no de los strings de status: asi esta
   // pantalla no repite el mapeo de estados (§6.1 del plan) y no imprime ni compara los
   // nombres internos. `ok` = terminado, `attention` = espera tu decisión, `animado` =
   // la maquina esta trabajando.
   const tono = (j: Job) => estadoDeJob(j.status).tone;
+
+  /**
+   * Agrupa los jobs de imagen en HILOS de chat: cada hilo es la cadena completa
+   * v1 -> v2 -> v3 de una misma imagen base, ordenada de mas vieja a mas nueva.
+   *
+   * Se agrupa por `ref_image_id` (del manifest) y no por el sufijo del id: seguir el
+   * puntero real es correcto aunque el usuario haya escrito un nombre de proyecto raro
+   * que ya contenga "_v2" — cosa que `chatTurnImageId` evita para los ids que genera
+   * esta pantalla, pero un plan pegado a mano (o importado) podria no respetarlo.
+   *
+   * children: por cada imageId, el/los id(s) de imagen que lo tienen como
+   * ref_image_id. Un job puede en teoria tener mas de un hijo si se abren dos turnos
+   * desde el mismo punto (no lo hace esta UI, pero no se asume que no pasa): se toma
+   * el ULTIMO creado (mayor updatedAt) como continuacion del hilo visible, y el resto
+   * simplemente no aparece encadenado (igual siguen existiendo como jobs sueltos).
+   */
+  const hilos = useMemo(() => {
+    const byId = new Map(jobs.map((j) => [j.refId, j]));
+    const children = new Map<string, Job[]>();
+    for (const job of jobs) {
+      const ref = refImageIds[job.refId];
+      if (!ref || !byId.has(ref)) continue; // ref a una reference subida, no a otro job
+      children.set(ref, [...(children.get(ref) ?? []), job]);
+    }
+    // Raices: jobs cuyo ref_image_id NO es otro job de este proyecto (text2image, o
+    // image2image contra una reference subida).
+    const raices = jobs.filter((j) => {
+      const ref = refImageIds[j.refId];
+      return !ref || !byId.has(ref);
+    });
+    return raices.map((raiz) => {
+      const cadena: Job[] = [raiz];
+      let actual = raiz;
+      for (let i = 0; i < 200; i++) {
+        const hijos = children.get(actual.refId);
+        if (!hijos || hijos.length === 0) break;
+        // Si hay mas de un hijo (rama), seguimos el mas nuevo por updatedAt.
+        const siguiente = hijos.reduce((a, b) =>
+          (b.updatedAt ?? "") > (a.updatedAt ?? "") ? b : a,
+        );
+        cadena.push(siguiente);
+        actual = siguiente;
+      }
+      return cadena;
+    });
+  }, [jobs, refImageIds]);
 
   const listas = jobs.filter((j) => tono(j) === "ok").length;
   const esperandoDecision = jobs.filter((j) => tono(j) === "attention");
@@ -727,6 +891,66 @@ export default function ImagenesBoard({
               "A woman applying hand cream, close up on dry hands.\nNatural window light, shallow depth of field.\nPhotorealistic, documentary style."
             }
           />
+
+          {/*
+            Imagen base (opcional): sube un archivo y la primera generación es
+            image2image contra él, en vez de text2image. Mismo mecanismo que usan los
+            avatares de referencia del flujo VSL, expuesto acá para imágenes sueltas.
+          */}
+          <div>
+            <span className="mb-1 block text-label font-medium text-fg-dim">
+              Imagen base (opcional)
+            </span>
+            {imagenBasePreview ? (
+              <div className="flex items-center gap-3 rounded-md border border-divider bg-surface p-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={imagenBasePreview}
+                  alt="Vista previa de la imagen base"
+                  className="size-16 shrink-0 rounded-sm object-cover"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-body text-fg" title={imagenBase?.name}>
+                    {imagenBase?.name}
+                  </p>
+                  <p className="text-label text-fg-dim">
+                    Se usa como referencia: la primera generación va a ser image2image
+                    contra esta imagen.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={quitarImagenBase}
+                  icon={<X aria-hidden className="size-3.5" />}
+                >
+                  Quitar
+                </Button>
+              </div>
+            ) : (
+              <label
+                className={cn(
+                  "flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed",
+                  "border-divider bg-surface px-3 py-4 text-body text-fg-dim transition-colors",
+                  "hover:border-border hover:text-fg",
+                )}
+              >
+                <ImageSquare aria-hidden className="size-4" />
+                Subir una imagen para partir de ella
+                <input
+                  ref={imagenBaseInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={elegirImagenBase}
+                  className="sr-only"
+                />
+              </label>
+            )}
+            <p className="mt-1 text-label text-fg-dim">
+              Sin imagen, se genera desde cero con el prompt (text2image).
+            </p>
+          </div>
 
           <SelectorFormato valor={formato} onChange={setFormato} />
 
@@ -903,7 +1127,8 @@ export default function ImagenesBoard({
               </CardTitle>
               <CardDescription>
                 Tocá una miniatura para que quede esa variante. Los botones de arriba de
-                cada una la abren en grande o la bajan sola.
+                cada una la abren en grande o la bajan sola. Una vez aprobada, pedí un
+                cambio en el chat de abajo para encadenar otra imagen a partir de esa.
               </CardDescription>
             </div>
             {/*
@@ -964,25 +1189,36 @@ export default function ImagenesBoard({
             </div>
           ) : (
             /*
-              GRILLA, no lista vertical de bloques (§4 de T06). Con 40 prompts la lista
-              vieja medía metros y no se podia comparar una imagen con otra.
+              Un bloque por HILO de chat, no una grilla plana de N tarjetas (§5 de la
+              feature de chat iterativo). Con una sola imagen en el proyecto esto se ve
+              exactamente igual que la grilla de antes (un hilo de un solo eslabon), asi
+              que el caso simple no cambia. Con mas de un turno, el hilo entero
+              (v1 -> v2 -> v3) se lee de una fila, y el chat para seguir editando queda
+              pegado debajo de la ULTIMA imagen aprobada de esa cadena.
             */
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {jobs.map((job) => (
-                <TarjetaImagen
-                  key={job.id}
-                  job={job}
+            <div className="flex flex-col gap-6">
+              {hilos.map((cadena) => (
+                <HiloChat
+                  key={cadena[0].id}
+                  cadena={cadena}
                   projectId={projectId}
-                  prompt={prompts[job.refId] ?? ""}
+                  prompts={prompts}
                   formato={formatoGenerado ?? formato}
-                  enEdicion={editando[job.refId]}
-                  ocupado={Boolean(ocupado[job.id])}
-                  onEditar={(valor) =>
-                    setEditando((ed) => ({ ...ed, [job.refId]: valor }))
+                  editando={editando}
+                  ocupado={ocupado}
+                  onEditar={(refId, valor) =>
+                    setEditando((ed) => ({ ...ed, [refId]: valor }))
                   }
-                  onElegir={(index) => void elegir(job, index)}
-                  onVariar={() => void variar(job)}
+                  onElegir={(job, index) => void elegir(job, index)}
+                  onVariar={(job) => void variar(job)}
                   onAmpliar={(url, titulo) => setAmpliada({ url, titulo })}
+                  chatTexto={chatTexto}
+                  chatEnviando={chatEnviando}
+                  chatError={chatError}
+                  onChatTexto={(imageId, valor) =>
+                    setChatTexto((t) => ({ ...t, [imageId]: valor }))
+                  }
+                  onChatEnviar={(imageId) => void enviarTurnoChat(imageId)}
                 />
               ))}
             </div>
@@ -1327,5 +1563,153 @@ function TarjetaImagen({
         </div>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Un HILO de chat iterativo: la cadena completa de una imagen (v1 -> v2 -> v3...)
+ * como tira horizontal de tarjetas, con el chat para seguir editando pegado abajo de
+ * la ULTIMA.
+ *
+ * Por que una fila horizontal con scroll y no una grilla como el resto de la
+ * pantalla: la cadena tiene un ORDEN (cada paso depende del anterior) y una grilla
+ * envuelve sin avisar, así que "v3" podría terminar arriba de "v1" en una fila
+ * distinta. Una fila preserva la lectura izquierda->derecha = viejo->nuevo.
+ *
+ * El chat solo se habilita cuando la ULTIMA imagen de la cadena esta aprobada
+ * (`outputPath` presente): pedir un turno nuevo contra algo que todavia no tiene
+ * archivo en disco es exactamente el 400 que devuelve el endpoint, así que se evita
+ * ofrecer la accion antes de que tenga sentido.
+ */
+function HiloChat({
+  cadena,
+  projectId,
+  prompts,
+  formato,
+  editando,
+  ocupado,
+  onEditar,
+  onElegir,
+  onVariar,
+  onAmpliar,
+  chatTexto,
+  chatEnviando,
+  chatError,
+  onChatTexto,
+  onChatEnviar,
+}: {
+  cadena: Job[];
+  projectId: string;
+  prompts: Record<string, string>;
+  formato: string;
+  editando: Record<string, string>;
+  ocupado: Record<string, boolean>;
+  onEditar: (refId: string, valor: string) => void;
+  onElegir: (job: Job, index: number) => void;
+  onVariar: (job: Job) => void;
+  onAmpliar: (url: string, titulo: string) => void;
+  chatTexto: Record<string, string>;
+  chatEnviando: Record<string, boolean>;
+  chatError: Record<string, string | null>;
+  onChatTexto: (imageId: string, valor: string) => void;
+  onChatEnviar: (imageId: string) => void;
+}) {
+  const ultima = cadena[cadena.length - 1];
+  const ultimaAprobada = Boolean(ultima.outputPath) && ultima.status === "done";
+  const enviando = Boolean(chatEnviando[ultima.refId]);
+  const texto = chatTexto[ultima.refId] ?? "";
+  const error = chatError[ultima.refId];
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* La cadena: scroll horizontal si no entra, nunca envuelve (ver comentario arriba). */}
+      <div className="flex gap-3 overflow-x-auto pb-1">
+        {cadena.map((job, i) => (
+          <div key={job.id} className="flex shrink-0 items-center gap-3">
+            {i > 0 && (
+              <span aria-hidden className="hidden shrink-0 text-fg-dim sm:inline">
+                →
+              </span>
+            )}
+            <div className="w-64 shrink-0">
+              <TarjetaImagen
+                job={job}
+                projectId={projectId}
+                prompt={prompts[job.refId] ?? ""}
+                formato={formato}
+                enEdicion={editando[job.refId]}
+                ocupado={Boolean(ocupado[job.id])}
+                onEditar={(valor) => onEditar(job.refId, valor)}
+                onElegir={(index) => onElegir(job, index)}
+                onVariar={() => onVariar(job)}
+                onAmpliar={onAmpliar}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* El chat: siguiente turno a partir de la ULTIMA imagen de la cadena. */}
+      <div className="rounded-md border border-divider bg-surface p-2.5">
+        {!ultimaAprobada ? (
+          <p className="flex items-center gap-1.5 text-label text-fg-dim">
+            <Info aria-hidden className="size-3.5 shrink-0" />
+            Elegí una variante de <span className="font-mono">{ultima.refId}</span> para
+            poder seguir el chat desde ahí.
+          </p>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              onChatEnviar(ultima.refId);
+            }}
+            className="flex flex-col gap-2"
+          >
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Textarea
+                  id={`chat-${ultima.refId}`}
+                  label={`Pedir un cambio sobre ${ultima.refId}`}
+                  labelOculto
+                  rows={2}
+                  value={texto}
+                  onChange={(e) => onChatTexto(ultima.refId, e.target.value)}
+                  placeholder="Ej: cambiá el fondo a un living luminoso, mantené la pose"
+                  onKeyDown={(e) => {
+                    // Enter envia, Shift+Enter agrega una linea: el mismo atajo que
+                    // cualquier chat, y el prompt de imagen puede necesitar mas de
+                    // una linea igual que el textarea principal.
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      onChatEnviar(ultima.refId);
+                    }
+                  }}
+                />
+              </div>
+              <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                loading={enviando}
+                disabled={!texto.trim()}
+                icon={<Sparkle aria-hidden className="size-4" />}
+              >
+                Modificar
+              </Button>
+            </div>
+            {error && (
+              <p role="alert" className="flex items-start gap-1.5 text-label text-danger">
+                <WarningCircle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+                {error}
+              </p>
+            )}
+            <p className="text-label text-fg-dim">
+              Crea una imagen nueva a partir de <span className="font-mono">{ultima.refId}</span>{" "}
+              — la anterior queda intacta arriba, no se reemplaza.
+            </p>
+          </form>
+        )}
+      </div>
+    </div>
   );
 }

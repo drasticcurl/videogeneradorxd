@@ -1,8 +1,17 @@
 /**
  * POST /api/imagenes
  * Crea un proyecto de SOLO IMAGENES a partir de UN prompt y lo encola.
- * Body: { nombre: string, prompt: string, variantes?: number, model?: string,
- *         aspectRatio?: string, imageSize?: "1K"|"2K"|"4K", negativePrompt?: string }
+ *
+ * Acepta DOS content-types, a proposito:
+ *  - application/json (como siempre): { nombre, prompt, variantes?, model?,
+ *    aspectRatio?, imageSize?, negativePrompt? }. Genera la primera imagen text2image.
+ *  - multipart/form-data (nuevo, imagen base): los MISMOS campos como form fields +
+ *    `imagenBase` (File). Con archivo, la primera imagen del proyecto es image2image
+ *    contra ese archivo (subido como `reference`, mismo mecanismo que usan los
+ *    avatares VSL en /api/projects/:id/references) en vez de text2image.
+ *
+ * Se resuelve por Content-Type y NO por si el campo esta presente: `req.json()`
+ * revienta si el body es multipart, asi que hay que saber ANTES de leer el body.
  *
  * UN prompt por proyecto. Los saltos de linea son parte del prompt: un prompt de
  * imagen serio tiene varias lineas (encuadre, luz, estilo, negativos) y partirlo por
@@ -35,13 +44,50 @@ import { imageIdPara } from "@/lib/imagenes";
 import { buildJobs } from "@/lib/jobs/pipeline";
 import { enqueueProject } from "@/lib/jobs/queue";
 import { validatePlan } from "@/lib/schema";
-import { ensureProjectDirs, slugify, writeManifest } from "@/lib/storage";
+import {
+  ensureProjectDirs,
+  referenceRelPath,
+  saveBytes,
+  slugify,
+  writeManifest,
+} from "@/lib/storage";
 import { sessionUser } from "@/lib/ownership";
 import type { ProjectRecord } from "@/lib/types";
 import { badRequest, ok, serverError } from "@/lib/http";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+interface ImagenesBody {
+  nombre?: string;
+  prompt?: string;
+  variantes?: number;
+  model?: string;
+  aspectRatio?: string;
+  imageSize?: string;
+  negativePrompt?: string;
+}
+
+/** Extension a partir del mime type del archivo subido, con fallback al nombre. */
+const MIME_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+function extFor(file: File): string {
+  const byMime = MIME_EXT[file.type];
+  if (byMime) return byMime;
+  const dot = (file.name ?? "").lastIndexOf(".");
+  if (dot >= 0) {
+    const ext = file.name.slice(dot + 1).toLowerCase();
+    if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) {
+      return ext === "jpeg" ? "jpg" : ext;
+    }
+  }
+  return "png";
+}
 
 export async function POST(req: Request) {
   try {
@@ -50,15 +96,33 @@ export async function POST(req: Request) {
       return ok({ error: "No autenticado. Volvé a entrar." }, { status: 401 });
     }
 
-    const body = (await req.json()) as {
-      nombre?: string;
-      prompt?: string;
-      variantes?: number;
-      model?: string;
-      aspectRatio?: string;
-      imageSize?: string;
-      negativePrompt?: string;
-    };
+    // multipart/form-data si viene una imagen base; si no, el JSON de siempre.
+    // Se decide por Content-Type y no leyendo el body primero: `req.json()` en un
+    // body multipart tira SyntaxError, asi que hay que elegir el parser ANTES.
+    const contentType = req.headers.get("content-type") ?? "";
+    const esMultipart = contentType.includes("multipart/form-data");
+
+    let body: ImagenesBody;
+    let imagenBase: File | null = null;
+
+    if (esMultipart) {
+      const form = await req.formData();
+      const archivo = form.get("imagenBase");
+      if (archivo instanceof File && archivo.size > 0) imagenBase = archivo;
+      const num = (v: FormDataEntryValue | null) =>
+        v === null || v === "" ? undefined : Number(v);
+      body = {
+        nombre: (form.get("nombre") as string) ?? undefined,
+        prompt: (form.get("prompt") as string) ?? undefined,
+        variantes: num(form.get("variantes")),
+        model: (form.get("model") as string) ?? undefined,
+        aspectRatio: (form.get("aspectRatio") as string) ?? undefined,
+        imageSize: (form.get("imageSize") as string) ?? undefined,
+        negativePrompt: (form.get("negativePrompt") as string) ?? undefined,
+      };
+    } else {
+      body = (await req.json()) as ImagenesBody;
+    }
 
     const nombre = (body.nombre ?? "").trim();
     if (!nombre) {
@@ -92,9 +156,28 @@ export async function POST(req: Request) {
     }
 
     const imageId = imageIdPara(nombre);
+    const assetId = slugify(nombre) || "imagenes";
+    const id = randomUUID();
 
-    // Un solo asset `broll` con UNA imagen en text2image. `broll` y no `avatar`
-    // porque no hay una persona cuya identidad haya que mantener entre planos.
+    // Referencia subida (imagen base): mismo mecanismo que los avatares VSL. El
+    // archivo se guarda ANTES de armar el plan porque el plan necesita saber si hay
+    // reference para decidir modo text2image vs image2image.
+    let referenceId: string | null = null;
+    let referenceRelFile: string | null = null;
+    if (imagenBase) {
+      referenceId = `${assetId}_base`;
+      await ensureProjectDirs(id);
+      const ext = extFor(imagenBase);
+      referenceRelFile = referenceRelPath(referenceId, ext);
+      const bytes = new Uint8Array(await imagenBase.arrayBuffer());
+      await saveBytes(id, referenceRelFile, bytes);
+    }
+
+    // Un solo asset `broll` con UNA imagen. `broll` y no `avatar` porque no hay una
+    // persona cuya identidad haya que mantener entre planos.
+    // Con imagen base: image2image contra la reference recien subida (mismo caso que
+    // valida schema.ts para la primera imagen de un asset: image2image esta permitido
+    // ahi SOLO si las referencias son, todas, `references` subidas).
     const planCrudo = {
       global: {
         idioma_dialogo: "es-AR",
@@ -102,12 +185,19 @@ export async function POST(req: Request) {
         reglas_realismo: "",
         negative_prompt: body.negativePrompt?.trim() ?? "",
       },
-      references: [],
+      references:
+        referenceId && referenceRelFile
+          ? [{ id: referenceId, label: `${nombre} (imagen base)`, file: referenceRelFile }]
+          : [],
       assets: [
         {
-          id: slugify(nombre) || "imagenes",
+          id: assetId,
           tipo: "broll",
-          images: [{ id: imageId, modo: "text2image", prompt }],
+          images: [
+            referenceId
+              ? { id: imageId, modo: "image2image", ref_image_id: referenceId, prompt }
+              : { id: imageId, modo: "text2image", prompt },
+          ],
         },
       ],
       // Vacio a proposito: es lo que hace que este proyecto NO genere video.
@@ -125,12 +215,13 @@ export async function POST(req: Request) {
       );
     }
 
-    const id = randomUUID();
     const ahora = new Date().toISOString();
     const record: ProjectRecord = {
       id,
       name: nombre,
-      brief: `Solo imágenes: 1 prompt, ${variantes} variante(s), ${aspectRatio} en ${imageSize}.`,
+      brief: `Solo imágenes: 1 prompt, ${variantes} variante(s), ${aspectRatio} en ${imageSize}${
+        referenceId ? ", con imagen base subida" : ""
+      }.`,
       plan: validacion.plan,
       status: "draft",
       // El dueño sale SOLO de la sesion, nunca del body (D3 del plan de aislamiento).
