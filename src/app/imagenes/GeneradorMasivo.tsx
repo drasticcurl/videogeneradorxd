@@ -89,6 +89,17 @@ const STATUS_EN_CURSO = new Set(["draft", "running", "review"]);
 export default function GeneradorMasivo() {
   const [nombreBase, setNombreBase] = useState("");
   const [prompt, setPrompt] = useState("");
+  /**
+   * "Prompt dual": en vez de un prompt con N variantes del mismo modelo, dos prompts
+   * fijos en 4 variantes cruzadas con los dos modelos (ver el comentario de
+   * `/api/imagenes/masivo`, sección "PROMPT DUAL"). `promptA` es la variación
+   * conservadora, `promptB` la libre. Con el switch activo, `variantes` se ignora
+   * (el selector queda deshabilitado en vez de escondido: así se ve el "4" fijo y no
+   * parece que la app se olvidó de mostrarlo).
+   */
+  const [dual, setDual] = useState(false);
+  const [promptA, setPromptA] = useState("");
+  const [promptB, setPromptB] = useState("");
   const [variantes, setVariantes] = useState(2);
   const [formato, setFormato] = useState("9:16");
   const [calidad, setCalidad] = useState("1K");
@@ -197,7 +208,9 @@ export default function GeneradorMasivo() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hayTandaEnCurso, tandas.length]);
 
-  const tienePrompt = prompt.trim().length > 0;
+  const tienePrompt = dual
+    ? promptA.trim().length > 0 && promptB.trim().length > 0
+    : prompt.trim().length > 0;
   const puedeEnviar = tienePrompt && nombreBase.trim().length > 0 && fotos.length > 0;
 
   async function generar(e: React.FormEvent) {
@@ -207,8 +220,14 @@ export default function GeneradorMasivo() {
     try {
       const fd = new FormData();
       fd.set("nombreBase", nombreBase);
-      fd.set("prompt", prompt);
-      fd.set("variantes", String(variantes));
+      fd.set("dual", String(dual));
+      if (dual) {
+        fd.set("promptA", promptA);
+        fd.set("promptB", promptB);
+      } else {
+        fd.set("prompt", prompt);
+        fd.set("variantes", String(variantes));
+      }
       fd.set("aspectRatio", formato);
       fd.set("imageSize", calidad);
       if (negativo.trim()) fd.set("negativePrompt", negativo);
@@ -239,6 +258,8 @@ export default function GeneradorMasivo() {
         ...prev,
       ]);
       setPrompt("");
+      setPromptA("");
+      setPromptB("");
       setNombreBase("");
       limpiarFotos();
     } catch (err) {
@@ -250,11 +271,14 @@ export default function GeneradorMasivo() {
 
   const resumenCosto = useMemo(() => {
     if (fotos.length === 0) return null;
-    const totalImagenes = fotos.length * variantes;
-    return `${fotos.length} ${fotos.length === 1 ? "foto" : "fotos"} × ${variantes} ${
-      variantes === 1 ? "variante" : "variantes"
-    } = ${totalImagenes} imágenes · ${formato} · ${calidad}`;
-  }, [fotos.length, variantes, formato, calidad]);
+    const variantesEfectivas = dual ? 4 : variantes;
+    const totalImagenes = fotos.length * variantesEfectivas;
+    return `${fotos.length} ${fotos.length === 1 ? "foto" : "fotos"} × ${variantesEfectivas} ${
+      variantesEfectivas === 1 ? "variante" : "variantes"
+    } = ${totalImagenes} imágenes · ${formato} · ${calidad}${
+      dual ? " · 2 prompts × 2 modelos" : ""
+    }`;
+  }, [fotos.length, variantes, dual, formato, calidad]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -282,20 +306,86 @@ export default function GeneradorMasivo() {
             hint="Cada proyecto se va a llamar así + un número (alma-gemela 1, alma-gemela 2, …)."
           />
 
-          <Textarea
-            id="prompt-masivo"
-            label="Prompt (el mismo para todas)"
-            hint="Se aplica igual a cada foto. Podés usar varios renglones."
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            required
-            rows={6}
-            mono
-            spellCheck={false}
-            placeholder={
-              'Me haces una variación de este creativo.\nEs un ad para vender una oferta de "dibujá tu alma gemela".\nVa orientado a mujeres.\nNo hace falta que cambies mucho, este ya funcionó.'
-            }
-          />
+          {/*
+            Switch "Prompt dual". Mismo patron que el de auto-aprobacion de la home
+            (checkbox nativo + accent-accent): no hay un componente Switch en el
+            sistema de diseño, y agregar uno para un solo uso no se justifica.
+          */}
+          <Card flush>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg p-3.5 focus-within:ring-2 focus-within:ring-accent">
+              <input
+                type="checkbox"
+                checked={dual}
+                onChange={(e) => setDual(e.target.checked)}
+                className="mt-0.5 size-4 shrink-0 accent-accent"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-body font-medium text-fg">Prompt dual</span>
+                <span className="mt-0.5 block max-w-prose text-label text-fg-dim">
+                  {dual ? (
+                    <>
+                      4 variantes fijas por foto: <b className="font-medium text-fg">A</b>{" "}
+                      (variación casi igual) y <b className="font-medium text-fg">B</b>{" "}
+                      (libertad para armar el ad), cada una con Flash y con Pro.
+                    </>
+                  ) : (
+                    <>
+                      Probá dos prompts distintos por foto — uno conservador y otro con
+                      más libertad creativa — cruzados con los dos modelos.
+                    </>
+                  )}
+                </span>
+              </span>
+            </label>
+          </Card>
+
+          {dual ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Textarea
+                id="prompt-a-masivo"
+                label="Prompt A — variación casi igual"
+                hint="Conservador: mantiene la composición, cambia poco."
+                value={promptA}
+                onChange={(e) => setPromptA(e.target.value)}
+                required
+                rows={6}
+                mono
+                spellCheck={false}
+                placeholder={
+                  "Me haces una variación de este creativo.\nNo hace falta que cambies mucho, este ya funcionó."
+                }
+              />
+              <Textarea
+                id="prompt-b-masivo"
+                label="Prompt B — libertad creativa"
+                hint="Usa la foto solo como referencia y le da más libertad al modelo."
+                value={promptB}
+                onChange={(e) => setPromptB(e.target.value)}
+                required
+                rows={6}
+                mono
+                spellCheck={false}
+                placeholder={
+                  'Usá esta foto como referencia de la persona/producto y armá un ad nuevo.\nEs para vender una oferta de "dibujá tu alma gemela", orientado a mujeres.\nTenés libertad para cambiar composición, fondo y estilo.'
+                }
+              />
+            </div>
+          ) : (
+            <Textarea
+              id="prompt-masivo"
+              label="Prompt (el mismo para todas)"
+              hint="Se aplica igual a cada foto. Podés usar varios renglones."
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              required
+              rows={6}
+              mono
+              spellCheck={false}
+              placeholder={
+                'Me haces una variación de este creativo.\nEs un ad para vender una oferta de "dibujá tu alma gemela".\nVa orientado a mujeres.\nNo hace falta que cambies mucho, este ya funcionó.'
+              }
+            />
+          )}
 
           {/* Dropzone multi-archivo */}
           <div>
@@ -396,12 +486,24 @@ export default function GeneradorMasivo() {
               onValueChange={setCalidad}
               options={CALIDADES}
             />
-            <Select
-              label="Variantes por foto"
-              value={String(variantes)}
-              onValueChange={(v) => setVariantes(Number(v))}
-              options={VARIANTES}
-            />
+            {dual ? (
+              // Deshabilitado y no escondido: se ve el "4" fijo en vez de que
+              // parezca que la pantalla se olvidó de mostrar el selector.
+              <Select
+                label="Variantes por foto"
+                value="4"
+                onValueChange={() => {}}
+                options={[{ value: "4", label: "4 (fijo con prompt dual)" }]}
+                disabled
+              />
+            ) : (
+              <Select
+                label="Variantes por foto"
+                value={String(variantes)}
+                onValueChange={(v) => setVariantes(Number(v))}
+                options={VARIANTES}
+              />
+            )}
           </div>
 
           <Input

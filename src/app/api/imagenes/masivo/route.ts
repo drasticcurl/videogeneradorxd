@@ -43,6 +43,24 @@
  * "done" solo al terminar (con la variante que salga, o la primera de varias) y el
  * proyecto llega a un status terminal sin intervencion, que es la condicion que
  * `notifyProjectFinished` necesita para arrancar el siguiente.
+ *
+ * ─── "PROMPT DUAL" (dual=true): 4 VARIANTES FIJAS, 2 PROMPTS x 2 MODELOS ─────
+ *
+ * En vez de un solo prompt con N variantes del mismo modelo, el switch "Prompt dual"
+ * pide DOS prompts (A: variación conservadora, "no cambies mucho"; B: libre, "usá la
+ * foto de referencia y armá el ad") y arma SIEMPRE 4 variantes por foto, cruzando
+ * cada prompt con cada modelo:
+ *
+ *   v1 = prompt A + Flash   v2 = prompt B + Flash
+ *   v3 = prompt A + Pro     v4 = prompt B + Pro
+ *
+ * `variantes` del form se IGNORA si `dual` viene true (se fuerza a 4 en el backend,
+ * no solo deshabilitado en la UI: un cliente que mande otra cosa no tiene que poder
+ * saltarse la regla). El plan por variante viaja en `job.meta.variantPlan` (ver
+ * `VariantPlanEntry` en types.ts) y lo interpreta `runImageGeneration` — el resto del
+ * pipeline (reintentos, backoff, persistencia incremental, auto-approve) es EXACTAMENTE
+ * el mismo camino que una imagen con variantes normales; lo unico que cambia es de
+ * donde sale el prompt/modelo de cada request individual.
  */
 import { randomUUID } from "node:crypto";
 
@@ -54,7 +72,7 @@ import {
 } from "@/lib/config";
 import { jobsDb, projectsDb } from "@/lib/db";
 import { imageIdPara } from "@/lib/imagenes";
-import { buildJobs } from "@/lib/jobs/pipeline";
+import { buildJobs, imageJobId } from "@/lib/jobs/pipeline";
 import { enqueueProject } from "@/lib/jobs/queue";
 import { startBatch } from "@/lib/jobs/masivo";
 import { validatePlan } from "@/lib/schema";
@@ -66,7 +84,7 @@ import {
   writeManifest,
 } from "@/lib/storage";
 import { sessionUser } from "@/lib/ownership";
-import type { ProjectRecord } from "@/lib/types";
+import type { ProjectRecord, VariantPlanEntry } from "@/lib/types";
 import { badRequest, ok, serverError } from "@/lib/http";
 
 export const runtime = "nodejs";
@@ -74,6 +92,9 @@ export const dynamic = "force-dynamic";
 
 /** Los dos modelos que se alternan. Fijo: no es elegible desde el form (ver arriba). */
 const MODELOS_ALTERNADOS = ["gemini-3-pro-image", "gemini-3.1-flash-image"] as const;
+/** Mismos dos modelos, con nombre por rol para armar el cruce de "prompt dual". */
+const MODELO_PRO = "gemini-3-pro-image";
+const MODELO_FLASH = "gemini-3.1-flash-image";
 
 /** Cuantas fotos acepta una sola tanda. Une un limite de UX con uno de sanidad de
  *  recursos: 30 proyectos secuenciales con reintentos ya es una corrida de horas, y
@@ -131,16 +152,36 @@ export async function POST(req: Request) {
       return badRequest("Falta el nombre de la tanda: se usa para nombrar los proyectos.");
     }
 
+    // "Prompt dual": dos prompts en vez de uno, ver el comentario del encabezado.
+    // El flag viaja como string ("true"/"false") porque FormData no tiene booleanos.
+    const dual = (form.get("dual") as string) === "true";
+
     // Mismas reglas que /api/imagenes: se preservan los saltos de linea, son parte
     // del prompt (encuadre, luz, estilo, negativos en renglones distintos).
     const prompt = ((form.get("prompt") as string) ?? "").trim();
-    if (!prompt) {
+    const promptA = ((form.get("promptA") as string) ?? "").trim();
+    const promptB = ((form.get("promptB") as string) ?? "").trim();
+
+    if (dual) {
+      if (!promptA) {
+        return badRequest('Falta el prompt A ("variación casi igual").');
+      }
+      if (!promptB) {
+        return badRequest('Falta el prompt B ("libertad para armar el ad").');
+      }
+    } else if (!prompt) {
       return badRequest("Falta el prompt de la variación.");
     }
 
     const numField = (v: FormDataEntryValue | null) =>
       v === null || v === "" ? undefined : Number(v);
-    const variantes = Math.min(4, Math.max(1, Math.round(numField(form.get("variantes")) ?? 2)));
+    // Con prompt dual las 4 variantes son FIJAS (2 prompts x 2 modelos): lo que venga
+    // en `variantes` se ignora. No es solo la UI la que lo deshabilita — se fuerza
+    // aca tambien para que un cliente que mande otra cosa no pueda saltarse la regla
+    // (ver el comentario del encabezado).
+    const variantes = dual
+      ? 4
+      : Math.min(4, Math.max(1, Math.round(numField(form.get("variantes")) ?? 2)));
     const aspectRatio = resolveAspectRatio((form.get("aspectRatio") as string) ?? undefined);
     const negativePrompt = ((form.get("negativePrompt") as string) ?? "").trim();
 
@@ -170,7 +211,14 @@ export async function POST(req: Request) {
     // y otros que nunca se van a crear.
     for (let i = 0; i < fotos.length; i++) {
       const foto = fotos[i];
-      const modelo = MODELOS_ALTERNADOS[i % MODELOS_ALTERNADOS.length];
+      // Sin dual: alterna Pro/Flash POR PROYECTO, como siempre. Con dual, el modelo
+      // ya no se decide por proyecto sino POR VARIANTE (cada foto usa los dos, ver
+      // variantPlan mas abajo) — el modelo que queda acá es solo el "nominal" del
+      // proyecto (el que se muestra en la UI y se usaría si algo regenerara sin
+      // variantPlan), y se elige Flash por ser el primero en el orden de variantes.
+      const modelo = dual
+        ? MODELO_FLASH
+        : MODELOS_ALTERNADOS[i % MODELOS_ALTERNADOS.length];
       const nombre = `${nombreBase} ${i + 1}`;
       const imageId = imageIdPara(nombre);
       const assetId = slugify(nombre) || `imagenes_${i + 1}`;
@@ -182,6 +230,12 @@ export async function POST(req: Request) {
       const referenceRelFile = referenceRelPath(referenceId, ext);
       const bytes = new Uint8Array(await foto.arrayBuffer());
       await saveBytes(id, referenceRelFile, bytes);
+
+      // El prompt que queda en el PLAN (y por lo tanto en el manifest/UI como "el
+      // prompt de la imagen") es promptA en modo dual: es el conservador, el mas
+      // parecido a "el prompt de esta imagen" en el sentido de siempre. promptB solo
+      // vive en el variantPlan, ligado a las variantes 2 y 4.
+      const promptEfectivo = dual ? promptA : prompt;
 
       const planCrudo = {
         global: {
@@ -198,7 +252,12 @@ export async function POST(req: Request) {
             id: assetId,
             tipo: "broll",
             images: [
-              { id: imageId, modo: "image2image", ref_image_id: referenceId, prompt },
+              {
+                id: imageId,
+                modo: "image2image",
+                ref_image_id: referenceId,
+                prompt: promptEfectivo,
+              },
             ],
           },
         ],
@@ -217,9 +276,12 @@ export async function POST(req: Request) {
       const record: ProjectRecord = {
         id,
         name: nombre,
-        brief: `Generador masivo: 1 prompt, ${variantes} variante(s), ${aspectRatio} en ${imageSize}, foto ${
-          i + 1
-        }/${fotos.length} de la tanda (${modelo}).`,
+        brief: dual
+          ? `Generador masivo (prompt dual): 4 variantes fijas (A+Flash, B+Flash, A+Pro, B+Pro), ` +
+            `${aspectRatio} en ${imageSize}, foto ${i + 1}/${fotos.length} de la tanda.`
+          : `Generador masivo: 1 prompt, ${variantes} variante(s), ${aspectRatio} en ${imageSize}, foto ${
+              i + 1
+            }/${fotos.length} de la tanda (${modelo}).`,
         plan: validacion.plan,
         status: "draft",
         owner: user,
@@ -243,6 +305,27 @@ export async function POST(req: Request) {
 
       projectsDb.upsert(record);
       const jobs = buildJobs(record);
+
+      // "Prompt dual": el plan por variante se guarda en `job.meta.variantPlan`
+      // DESPUES de crear el job (buildJobs no sabe nada de esto — ver el contrato en
+      // VariantPlanEntry, types.ts). Se busca el job por id derivado en vez de asumir
+      // que es `jobs[0]`: un proyecto de esta pantalla tiene exactamente UNA imagen,
+      // pero buscarlo por id explícito no depende de esa asunción si algún día deja
+      // de serlo.
+      if (dual) {
+        const imgJobId = imageJobId(id, imageId);
+        const variantPlan: VariantPlanEntry[] = [
+          { prompt: promptA, model: MODELO_FLASH, label: "A" },
+          { prompt: promptB, model: MODELO_FLASH, label: "B" },
+          { prompt: promptA, model: MODELO_PRO, label: "A" },
+          { prompt: promptB, model: MODELO_PRO, label: "B" },
+        ];
+        const imgJob = jobsDb.get(imgJobId);
+        if (imgJob) {
+          jobsDb.update(imgJobId, { meta: { ...imgJob.meta, variantPlan } });
+        }
+      }
+
       await writeManifest(record, jobs);
       projectIds.push(id);
     }

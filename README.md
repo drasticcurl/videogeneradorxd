@@ -146,6 +146,12 @@ de generar muchos creativos de golpe sin pegar contra la cuota por minuto de un 
 (el proyecto N+1 no arranca hasta que el N termina), no en paralelo. Ver `POST /api/imagenes/masivo`
 y `src/lib/jobs/masivo.ts`.
 
+Switch **"Prompt dual"**: en vez de un prompt con N variantes iguales, pide dos prompts (A:
+variación conservadora; B: libertad creativa) y fija 4 variantes por foto cruzando cada prompt con
+cada modelo (`v1=A+Flash, v2=B+Flash, v3=A+Pro, v4=B+Pro`). El detalle de qué prompt/modelo generó
+cada variante se ve en un badge en la miniatura, en la pestaña "Generar". Ver `VariantPlanEntry` en
+`src/lib/types.ts` y `job.meta.variantPlan` en `runImageGeneration` (`src/lib/jobs/pipeline.ts`).
+
 ### `/batch` — Tablero de varios proyectos a la vez
 
 Es la pantalla para producir en volumen. Los ids del lote viajan en la URL (`/batch?ids=a,b,c`);

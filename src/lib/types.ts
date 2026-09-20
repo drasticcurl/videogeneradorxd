@@ -17,6 +17,21 @@ export interface Candidate {
   /** path relativo dentro de output/<projectId>/ */
   file: string;
   index: number;
+  /**
+   * Modelo con el que se generó ESTA variante puntual. OPCIONAL: sin "prompt dual"
+   * (el caso normal) todas las variantes de un job usan el mismo modelo, que ya se
+   * ve en `JobRecord.model`, así que este campo queda undefined y no duplica nada.
+   * Con "prompt dual" (ver `JobRecord.meta.variantPlan`) cada variante puede haber
+   * usado un modelo distinto (Flash/Pro), y sin esto la UI no podría mostrar cuál
+   * fue cuál.
+   */
+  model?: string;
+  /**
+   * Etiqueta corta del prompt usado en ESTA variante ("A" / "B"), solo con "prompt
+   * dual". OPCIONAL por el mismo motivo que `model`: en el caso normal todas las
+   * variantes comparten el prompt de la imagen y no hay nada que distinguir.
+   */
+  promptLabel?: string;
 }
 
 export interface JobRecord {
@@ -47,10 +62,38 @@ export interface JobRecord {
   model: string | null;
   /** override de modelo elegido por el usuario para ESTE job (pisa el del proyecto) */
   modelOverride: string | null;
-  /** info extra para debug/UI (ej operationName de Veo) */
+  /**
+   * info extra para debug/UI (ej operationName de Veo).
+   *
+   * `meta.variantPlan?: VariantPlanEntry[]` — "prompt dual" del generador masivo
+   * (ver `VariantPlanEntry` mas abajo). Vive en `meta` y no como campo propio de
+   * `JobRecord` porque es un caso de uso especifico (una sola pantalla lo setea) y
+   * agregar un campo nuevo al tipo central para eso obligaria a tocarlo en todos los
+   * lugares que construyen un JobRecord "a mano" (tests, providers/mock, etc), la
+   * mayoria de los cuales nunca lo va a usar.
+   */
   meta: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Una entrada del "prompt dual" del generador masivo: que PROMPT y que MODELO usar
+ * para la variante en esa posicion (1-based, coincide con `Candidate.index`).
+ *
+ * Contrato con `runImageGeneration` (jobs/pipeline.ts): si `job.meta.variantPlan` es
+ * un array de esta forma, la variante `i` usa `variantPlan[i-1]` en vez de
+ * `img.prompt` / `job.modelOverride || project.models.image` (el comportamiento de
+ * SIEMPRE). Si `meta.variantPlan` no esta presente, o el array no cubre el indice `i`,
+ * cae al comportamiento normal para esa variante — asi un plan corto (ej. 2 entradas
+ * pedido con `variants: 4`) no revienta, genera las que faltan con el prompt/modelo
+ * del job como si no hubiera plan.
+ */
+export interface VariantPlanEntry {
+  prompt: string;
+  model: string;
+  /** etiqueta corta para la UI ("A" / "B"). No afecta la generacion. */
+  label?: string;
 }
 
 export type ProjectStatus =

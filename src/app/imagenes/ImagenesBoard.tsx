@@ -74,6 +74,14 @@ import { estadoDeJob } from "@/lib/ui-tokens";
 interface Candidate {
   index: number;
   file: string;
+  /**
+   * Modelo/etiqueta de prompt de ESTA variante puntual. Solo vienen completos con
+   * "prompt dual" (generador masivo): en el caso normal el backend los deja
+   * `undefined` porque ya se sabe que las 4 comparten el mismo modelo/prompt (ver
+   * el comentario de `Candidate` en types.ts).
+   */
+  model?: string;
+  promptLabel?: string;
 }
 
 interface Job {
@@ -1357,6 +1365,28 @@ function TarjetaImagen({
                   >
                     {elegida && <Check aria-hidden className="size-3" />}v{c.index}
                   </span>
+
+                  {/*
+                    "Prompt dual" (generador masivo): que prompt (A/B) y que modelo
+                    generaron ESTA variante puntual. Solo aparece cuando el backend
+                    los completo (candidates[].model/promptLabel, ver types.ts) — en
+                    el caso normal las 4 variantes comparten prompt/modelo y esto no
+                    aporta nada, así que no se muestra.
+                  */}
+                  {c.promptLabel && (
+                    <span
+                      className="absolute bottom-1 left-1 inline-flex items-center gap-0.5 rounded-sm bg-bg/80 px-1 py-px font-mono text-label text-fg-dim"
+                      title={c.model ? `Prompt ${c.promptLabel} · ${c.model}` : `Prompt ${c.promptLabel}`}
+                    >
+                      {c.promptLabel}
+                      {c.model && (
+                        <span aria-hidden>
+                          {" · "}
+                          {c.model.includes("pro") ? "Pro" : "Flash"}
+                        </span>
+                      )}
+                    </span>
+                  )}
 
                   {/*
                     Ver en grande y bajar, arriba de cada variante.

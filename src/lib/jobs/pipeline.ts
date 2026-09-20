@@ -35,7 +35,7 @@ import { hasFfmpeg } from "../providers/placeholder";
 import { runFfmpeg } from "../ffmpeg";
 import { ProviderHttpError } from "../providers/types";
 import type { ProjectPlan } from "../schema";
-import type { Candidate, JobRecord, LogEntry, LogLevel, ProjectRecord } from "../types";
+import type { Candidate, JobRecord, LogEntry, LogLevel, ProjectRecord, VariantPlanEntry } from "../types";
 
 /** Pausa. Se usa para espaciar las variantes de una imagen y para el backoff de 429. */
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -233,6 +233,38 @@ async function runImageGeneration(
   const negativePrompt =
     img.negative_prompt || project.plan.global.negative_prompt || undefined;
 
+  /*
+    "Prompt dual" (generador masivo, /imagenes): si el job trae un plan por variante,
+    cada indice usa SU prompt y SU modelo en vez de los fijos de arriba. Ver el
+    contrato completo en `VariantPlanEntry` (types.ts).
+
+    Se valida la FORMA acá y no se confia en el tipo: `meta` es
+    `Record<string, unknown>`, así que lo que haya quedado guardado ahi (via API,
+    edicion manual del db.json, o un bug de otro lado) puede no ser lo que el tipo
+    promete. Si algo no calza, esa entrada se descarta EN SILENCIO y la variante cae
+    al comportamiento normal — nunca revienta el job por un dato mal formado en algo
+    que es, en el fondo, una optimizacion de UX.
+  */
+  const variantPlanRaw = job.meta?.variantPlan;
+  const variantPlan: VariantPlanEntry[] | null =
+    Array.isArray(variantPlanRaw) &&
+    variantPlanRaw.every(
+      (e) =>
+        e &&
+        typeof e === "object" &&
+        typeof (e as VariantPlanEntry).prompt === "string" &&
+        typeof (e as VariantPlanEntry).model === "string"
+    )
+      ? (variantPlanRaw as VariantPlanEntry[])
+      : null;
+
+  /** Prompt/modelo/label EFECTIVOS para la variante `i` (1-based). */
+  function planParaVariante(i: number): { prompt: string; model: string; label?: string } {
+    const entry = variantPlan?.[i - 1];
+    if (!entry) return { prompt: img.prompt, model };
+    return { prompt: entry.prompt, model: entry.model, label: entry.label };
+  }
+
   // Reunimos las imagenes de referencia para mantener identidad. Pueden venir de:
   //  - referencias subidas por el usuario (VSL): plan.references[].file en disco.
   //  - otra imagen generada y APROBADA del proyecto.
@@ -285,7 +317,10 @@ async function runImageGeneration(
       candidates,
       selectedIndex: variants === 1 ? 1 : candidates.length === 1 ? candidates[0].index : job.selectedIndex ?? null,
       outputPath: null,
-      model,
+      // Mismo criterio que el resto de esta funcion: sin plan dual, el modelo fijo
+      // de siempre; con plan dual, el de la ULTIMA variante (ya generada, en este
+      // caso — no hay nada pendiente).
+      model: variantPlan ? planParaVariante(variants).model : model,
     });
     return;
   }
@@ -295,8 +330,13 @@ async function runImageGeneration(
     "info",
     `Generando ${missing.length} variante(s) de imagen "${img.id}" (${img.modo}${
       refImages.length ? `, ${refImages.length} ref` : ""
-    }${existing.length ? `, ${existing.length} ya hecha/s` : ""}) · request individual por variante`,
-    { jobId: job.id, model }
+    }${existing.length ? `, ${existing.length} ya hecha/s` : ""}${
+      variantPlan ? ", prompt dual" : ""
+    }) · request individual por variante`,
+    // Con variantPlan cada variante puede ir a un modelo distinto: no hay UN model
+    // que describa la tanda entera, así que se omite en vez de mostrar uno que
+    // solo aplicaría a alguna de las variantes.
+    variantPlan ? { jobId: job.id } : { jobId: job.id, model }
   );
 
   // Generamos UNA variante por request (no las dos a la vez). Persistimos cada exito
@@ -321,10 +361,15 @@ async function runImageGeneration(
     const maxIntentos = Math.max(1, config.pipeline.imageVariantRateLimitRetries);
     let salio = false;
 
+    // Prompt y modelo EFECTIVOS de esta variante: del plan dual si hay uno que cubra
+    // el indice `i`, si no los fijos del job (comportamiento de siempre).
+    const { prompt: promptVariante, model: modelVariante, label: labelVariante } =
+      planParaVariante(i);
+
     for (let intento = 1; intento <= maxIntentos && !salio; intento++) {
       try {
         const result = await getImageProvider().generate({
-          prompt: img.prompt,
+          prompt: promptVariante,
           refImages: refImages.length > 0 ? refImages : undefined,
           negativePrompt,
           /*
@@ -335,24 +380,39 @@ async function runImageGeneration(
           */
           aspectRatio: project.imageAspectRatio ?? ASPECT_RATIO,
           imageSize: project.imageSize,
-          model,
+          model: modelVariante,
         });
         const ext = result.mimeType.includes("jpeg") ? "jpg" : "png";
         const rel = candidateRelPath(img.id, i, ext);
         await saveBytes(project.id, rel, result.bytes);
-        candidates.push({ file: rel, index: i });
+        candidates.push({
+          file: rel,
+          index: i,
+          // Solo se completan con "prompt dual": en el caso normal quedan undefined
+          // (ver el comentario de Candidate en types.ts) para no duplicar el `model`
+          // que ya expone JobRecord.model.
+          ...(variantPlan ? { model: modelVariante, promptLabel: labelVariante } : {}),
+        });
         candidates.sort((a, b) => a.index - b.index);
         // Persistimos incrementalmente (cada request individual).
+        //
+        // `model` a nivel de JOB (no de variante) queda en el modelo de la ULTIMA
+        // variante generada cuando hay plan dual: es el mismo compromiso que ya
+        // existia antes de este cambio (un solo campo `model` para representar un
+        // job que, con plan dual, ya no tiene un modelo unico). El detalle real
+        // por variante vive en `candidates[].model`.
         jobsDb.update(job.id, {
           candidates: [...candidates],
           selectedIndex: variants === 1 ? 1 : job.selectedIndex ?? null,
           outputPath: null,
-          model,
+          model: modelVariante,
         });
-        logEvent(project.id, "info", `Variante v${i} de "${img.id}" lista.`, {
-          jobId: job.id,
-          model,
-        });
+        logEvent(
+          project.id,
+          "info",
+          `Variante v${i} de "${img.id}" lista${labelVariante ? ` (prompt ${labelVariante})` : ""}.`,
+          { jobId: job.id, model: modelVariante }
+        );
         salio = true;
       } catch (err) {
         lastErr = err;
@@ -372,7 +432,7 @@ async function runImageGeneration(
             `Variante v${i} de "${img.id}" fallo: ${
               err instanceof Error ? err.message : String(err)
             }`,
-            { jobId: job.id, model }
+            { jobId: job.id, model: modelVariante }
           );
           break;
         }
@@ -382,7 +442,7 @@ async function runImageGeneration(
             project.id,
             "warn",
             `Variante v${i} de "${img.id}": sigue en 429 tras ${maxIntentos} intentos. Devuelvo el job a la cola para que espere la ventana de cuota.`,
-            { jobId: job.id, model }
+            { jobId: job.id, model: modelVariante }
           );
           // Se RELANZA en vez de seguir con la variante siguiente.
           //
@@ -411,7 +471,7 @@ async function runImageGeneration(
           `Variante v${i} de "${img.id}": 429 de cuota, espero ${Math.round(
             espera / 1000
           )}s y reintento (${intento}/${maxIntentos}).`,
-          { jobId: job.id, model }
+          { jobId: job.id, model: modelVariante }
         );
         await sleep(espera);
       }
@@ -434,11 +494,19 @@ async function runImageGeneration(
   // respuesta sin imagen, red). Por eso el mensaje no habla de cuota.
   const faltan = variants - candidates.length;
   const motivo = lastErr instanceof Error ? lastErr.message : String(lastErr ?? "");
+  // Mismo compromiso que dentro del loop: sin plan dual, `model` es el de siempre.
+  // Con plan dual, el de la ULTIMA variante que se llegó a generar (no hay un solo
+  // modelo que describa el job entero; el detalle por variante vive en
+  // `candidates[].model`).
+  const modelFinal =
+    variantPlan && candidates.length > 0
+      ? planParaVariante(candidates[candidates.length - 1].index).model
+      : model;
   jobsDb.update(job.id, {
     candidates,
     selectedIndex: variants === 1 ? 1 : candidates.length === 1 ? candidates[0].index : job.selectedIndex ?? null,
     outputPath: null,
-    model,
+    model: modelFinal,
     error:
       faltan > 0
         ? `Salieron ${candidates.length}/${variants} variantes. La/s otra/s fallaron: ${motivo.slice(0, 200)}`

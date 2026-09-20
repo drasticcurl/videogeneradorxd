@@ -96,6 +96,10 @@ Los cambios grandes se planifican antes de escribir código, en `tasks/<modulo>/
   auto-recuperación de jobs colgados. Al final de `finalizeProjects()` llama a
   `notifyProjectFinished` (jobs/masivo.ts) para el generador masivo — no tocar sin leer ese modulo.
 - `src/lib/jobs/pipeline.ts` — `buildJobs`, `run*Generation`, `approveJob`, `changePrompt`, `extend`.
+  `runImageGeneration` lee `job.meta.variantPlan` (tipo `VariantPlanEntry[]`, types.ts) para el
+  "prompt dual" del generador masivo: si esta presente, cada variante usa SU prompt/modelo en vez
+  de los fijos del job. Se valida la forma en runtime (una entrada mal formada cae al comportamiento
+  normal para esa variante, nunca revienta el job).
 - `src/lib/jobs/masivo.ts` — tandas SECUENCIALES del generador masivo (`/imagenes`, pestaña
   "Generador masivo"): `startBatch`/`notifyProjectFinished`. No importa `queue.ts` a propósito
   (recibe `enqueueProject` como parámetro) para no crear un ciclo de import.

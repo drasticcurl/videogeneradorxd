@@ -6,6 +6,57 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-20 (2) — Generador masivo: switch "Prompt dual" (2 prompts × 2 modelos, 4 variantes fijas)
+
+**Qué pasó:** el generador masivo (ver la entrada de más abajo) generaba las N variantes de una foto
+con un solo prompt y el modelo del proyecto. El pedido: poder probar **dos prompts** por foto — uno
+conservador ("variación casi igual, no cambies mucho") y otro con libertad creativa ("usá esta foto
+de referencia y armá el ad") — cruzados con los dos modelos, en vez de 4 variantes idénticas del
+mismo prompt/modelo. Mapeo fijo, sin opción de elegir otro:
+
+```
+v1 = prompt A + Flash     v2 = prompt B + Flash
+v3 = prompt A + Pro       v4 = prompt B + Pro
+```
+
+Esto tocó una asunción de fondo del pipeline de imagen: `runImageGeneration` asumía que **todas**
+las variantes de un job comparten el mismo prompt y el mismo modelo (solo cambiaba el request, no
+sus parámetros). Se cambió eso puntualmente, de forma aditiva:
+
+- **`Candidate` (types.ts)** gana `model?` y `promptLabel?` — qué modelo/prompt generó ESA variante
+  puntual. Quedan `undefined` (no se serializan) fuera del modo dual: en el caso normal las 4
+  variantes comparten prompt/modelo (ya expuesto en `JobRecord.model`), así que no hay nada nuevo
+  que mostrar y no se duplica información.
+- **`VariantPlanEntry` (types.ts, nuevo tipo)** — contrato de `job.meta.variantPlan`: un array
+  `{prompt, model, label?}[]` 1-based, por índice de variante. Vive en `meta` (no como campo propio
+  de `JobRecord`) porque es un caso de uso específico de una sola pantalla.
+- **`runImageGeneration` (jobs/pipeline.ts)** — si `job.meta.variantPlan` está presente (validado en
+  runtime: una forma que no calza se descarta en silencio y esa variante cae al comportamiento de
+  siempre, nunca revienta el job por esto), cada variante `i` usa `planParaVariante(i)` en vez de
+  `img.prompt` / `model` fijos. El resto de la función es exactamente el mismo camino: una request
+  por variante, pausa entre ellas, reintentos con backoff ante 429, persistencia incremental. Los
+  tres puntos donde se guardaba `model` a nivel de job se ajustaron para reflejar el modelo de la
+  variante correspondiente en vez de un valor que, con plan dual, ya no describe al job entero.
+- **`POST /api/imagenes/masivo`** — nuevo flag `dual` (string "true"/"false", FormData no tiene
+  booleanos) + `promptA`/`promptB` en vez de `prompt`. Con `dual=true` se fuerza `variantes: 4`
+  **en el backend** (no solo deshabilitado en la UI: un cliente que mande otra cosa no se puede
+  saltar la regla), el plan del proyecto usa `promptA` como "el prompt" de siempre (se ve así en
+  manifest/UI), y tras `buildJobs` se le escribe `meta.variantPlan` al job de imagen recién creado.
+- **UI (`GeneradorMasivo.tsx`)** — switch "Prompt dual" (mismo patrón que el de auto-aprobación de
+  la home): activado, cambia el formulario a dos textareas (Prompt A / Prompt B) y deja el selector
+  de variantes deshabilitado mostrando "4" fijo. **`ImagenesBoard.tsx`** (donde se revisan las 4
+  variantes) muestra un badge nuevo en la esquina inferior izquierda de cada miniatura ("A · Flash",
+  "B · Pro"...) cuando `candidates[].promptLabel` viene poblado — invisible en el caso normal.
+- **Verificado**: `tsc --noEmit` sin errores. Probado en modo mock con 1 foto: `GET
+  /api/projects/:id/jobs` confirma `candidates[0..3]` con exactamente `{A,Flash}, {B,Flash}, {A,Pro},
+  {B,Pro}` en ese orden, y `pipeline.log` confirma los mismos prompts/modelos en cada request real
+  (con la pausa entre variantes intacta). Validado que `dual=true` sin `promptB` da 400 con mensaje
+  claro. Confirmado que el modo normal (`dual=false`) no cambió: mismos candidatos sin
+  `model`/`promptLabel` (ausentes del JSON, no `null`). `tasks/_verificacion-endpoints.sh` →
+  `SIN REGRESIONES`.
+
+---
+
 ## 2026-09-20 — `/imagenes`: generador masivo de variaciones (N fotos + 1 prompt, secuencial)
 
 **Qué pasó:** generar muchos creativos de golpe (subir 10 fotos, un prompt genérico tipo "hacé una
