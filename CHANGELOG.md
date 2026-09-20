@@ -6,6 +6,24 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-20 (3) — "Prompt dual": los dos prompts vienen precargados como referencia editable
+
+**Qué pasó:** los textareas de Prompt A / Prompt B del switch "Prompt dual" arrancaban vacíos con
+solo un placeholder gris de ejemplo. Ahora, la primera vez que se activa el switch, se precargan con
+un prompt de referencia REAL y editable — no un placeholder que desaparece al tipear, texto de
+verdad que se puede dejar tal cual o modificar. `PROMPT_A_DEFAULT` es (casi textual) el prompt que
+ya se usa en producción para la variación conservadora; `PROMPT_B_DEFAULT` es la contraparte de
+libertad creativa pensada para el mismo caso.
+
+- **No son obligatorios**: `toggleDual()` solo precarga si el campo está VACÍO (`actual || default`).
+  Si el usuario ya escribió algo y apaga/prende el switch, lo suyo no se pisa.
+- **Botón "Restaurar el sugerido"** debajo de cada textarea, visible solo cuando el contenido se
+  desvió del default — para volver atrás sin borrar todo a mano.
+- Verificado: `tsc --noEmit` sin errores. Smoke test HTTP de `/imagenes` en modo mock (200, sin
+  errores de render).
+
+---
+
 ## 2026-09-20 (2) — Generador masivo: switch "Prompt dual" (2 prompts × 2 modelos, 4 variantes fijas)
 
 **Qué pasó:** el generador masivo (ver la entrada de más abajo) generaba las N variantes de una foto

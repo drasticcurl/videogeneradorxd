@@ -70,6 +70,28 @@ const CALIDADES: ReadonlyArray<SelectOption<string>> = IMAGE_SIZES.map((s) => ({
 /** Los dos modelos fijos que alterna el backend. Solo informativo en esta pantalla. */
 const MODELOS_TANDA = "Nano Banana Pro y Flash, alternados";
 
+/**
+ * Prompts de referencia para "Prompt dual": se precargan en los textareas la
+ * PRIMERA vez que se activa el switch (si el campo todavía está vacío), como punto
+ * de partida editable — no son obligatorios ni se vuelven a pisar si el usuario ya
+ * escribió otra cosa y desactiva/reactiva el switch.
+ *
+ * `PROMPT_A_DEFAULT` es, casi textual, el prompt real que ya se usa en producción
+ * para la variación conservadora. `PROMPT_B_DEFAULT` es la contraparte de libertad
+ * creativa que completa el par, pensada para el mismo caso de uso (ads con foto de
+ * referencia).
+ */
+const PROMPT_A_DEFAULT =
+  'Me haces una variación de este creativo.\n' +
+  'Es un creativo ad para vender una oferta de "dibujá tu alma gemela".\n' +
+  "Va orientado a mujeres.\n" +
+  "No hace falta que cambies mucho, este ya funcionó.";
+const PROMPT_B_DEFAULT =
+  "Usá esta foto solo como referencia de la persona/producto, no la copies tal cual.\n" +
+  'Armá un ad nuevo para vender una oferta de "dibujá tu alma gemela", orientado a mujeres.\n' +
+  "Tenés libertad para cambiar composición, fondo, pose y estilo — el objetivo es un\n" +
+  "creativo distinto que siga vendiendo la misma oferta.";
+
 interface ProyectoTanda {
   id: string;
   name: string;
@@ -107,6 +129,21 @@ export default function GeneradorMasivo() {
   const [fotos, setFotos] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * Activa/desactiva "Prompt dual". Al ACTIVAR (no al desactivar), si algún campo
+   * está vacío se precarga con el default de referencia — así la primera vez que se
+   * prueba el switch ya hay algo editable en pantalla en vez de dos textareas en
+   * blanco. Si el campo ya tiene texto (el usuario lo escribió, o ya lo había
+   * precargado antes), se deja tal cual: activar el switch no pisa nada.
+   */
+  function toggleDual(activar: boolean) {
+    setDual(activar);
+    if (activar) {
+      setPromptA((actual) => actual || PROMPT_A_DEFAULT);
+      setPromptB((actual) => actual || PROMPT_B_DEFAULT);
+    }
+  }
 
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -316,7 +353,7 @@ export default function GeneradorMasivo() {
               <input
                 type="checkbox"
                 checked={dual}
-                onChange={(e) => setDual(e.target.checked)}
+                onChange={(e) => toggleDual(e.target.checked)}
                 className="mt-0.5 size-4 shrink-0 accent-accent"
               />
               <span className="min-w-0 flex-1">
@@ -341,34 +378,50 @@ export default function GeneradorMasivo() {
 
           {dual ? (
             <div className="grid gap-4 sm:grid-cols-2">
-              <Textarea
-                id="prompt-a-masivo"
-                label="Prompt A — variación casi igual"
-                hint="Conservador: mantiene la composición, cambia poco."
-                value={promptA}
-                onChange={(e) => setPromptA(e.target.value)}
-                required
-                rows={6}
-                mono
-                spellCheck={false}
-                placeholder={
-                  "Me haces una variación de este creativo.\nNo hace falta que cambies mucho, este ya funcionó."
-                }
-              />
-              <Textarea
-                id="prompt-b-masivo"
-                label="Prompt B — libertad creativa"
-                hint="Usa la foto solo como referencia y le da más libertad al modelo."
-                value={promptB}
-                onChange={(e) => setPromptB(e.target.value)}
-                required
-                rows={6}
-                mono
-                spellCheck={false}
-                placeholder={
-                  'Usá esta foto como referencia de la persona/producto y armá un ad nuevo.\nEs para vender una oferta de "dibujá tu alma gemela", orientado a mujeres.\nTenés libertad para cambiar composición, fondo y estilo.'
-                }
-              />
+              <div className="flex flex-col gap-1">
+                <Textarea
+                  id="prompt-a-masivo"
+                  label="Prompt A — variación casi igual"
+                  hint="Conservador: mantiene la composición, cambia poco. Precargado con un ejemplo — editalo como quieras."
+                  value={promptA}
+                  onChange={(e) => setPromptA(e.target.value)}
+                  required
+                  rows={6}
+                  mono
+                  spellCheck={false}
+                />
+                {promptA !== PROMPT_A_DEFAULT && (
+                  <button
+                    type="button"
+                    onClick={() => setPromptA(PROMPT_A_DEFAULT)}
+                    className="self-start text-label text-fg-dim underline-offset-2 hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Restaurar el sugerido
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col gap-1">
+                <Textarea
+                  id="prompt-b-masivo"
+                  label="Prompt B — libertad creativa"
+                  hint="Usa la foto solo como referencia y le da más libertad al modelo. Precargado con un ejemplo — editalo como quieras."
+                  value={promptB}
+                  onChange={(e) => setPromptB(e.target.value)}
+                  required
+                  rows={6}
+                  mono
+                  spellCheck={false}
+                />
+                {promptB !== PROMPT_B_DEFAULT && (
+                  <button
+                    type="button"
+                    onClick={() => setPromptB(PROMPT_B_DEFAULT)}
+                    className="self-start text-label text-fg-dim underline-offset-2 hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Restaurar el sugerido
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <Textarea
