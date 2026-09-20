@@ -14,7 +14,7 @@
  */
 import { MODEL_CATALOG, config } from "@/lib/config";
 
-import ImagenesBoard from "./ImagenesBoard";
+import ImagenesTabs from "./ImagenesTabs";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +33,7 @@ export default function ImagenesPage() {
         </p>
       </header>
 
-      <ImagenesBoard
+      <ImagenesTabs
         modelos={[...MODEL_CATALOG.image]}
         modeloDefault={config.models.image}
       />

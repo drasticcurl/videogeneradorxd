@@ -21,6 +21,10 @@ import {
   refreshManifest,
   runJobGeneration,
 } from "./pipeline";
+// `notifyProjectFinished` recibe `enqueueProject` como parametro (definida mas abajo
+// en este mismo archivo) para que masivo.ts no necesite importar queue.ts: asi el
+// import va en un solo sentido y no hay ciclo. Ver el comentario de masivo.ts.
+import { notifyProjectFinished } from "./masivo";
 
 interface QueueState {
   activeProjects: Set<string>;
@@ -671,6 +675,16 @@ function finalizeProjects(): void {
     projectsDb.update(projectId, { status });
     state.activeProjects.delete(projectId);
     void refreshManifest(projectId);
+    /*
+      Hook del generador masivo (T02): si este proyecto es el que esta al frente de
+      una tanda secuencial, encola el siguiente. Va DESPUES de persistir el status
+      terminal: `notifyProjectFinished` puede llamar a `enqueueProject` sincronicamente
+      (que a su vez llama a `pump()`), y si corriera antes el siguiente proyecto podria
+      alcanzar a mirar el status viejo de este. Para un proyecto que no pertenece a
+      ninguna tanda (el 100% de los casos hasta ahora) es un lookup O(1) que no hace
+      nada, asi que no le agrega costo al camino existente.
+    */
+    notifyProjectFinished(projectId, enqueueProject);
   }
 }
 

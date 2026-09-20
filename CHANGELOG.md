@@ -6,6 +6,67 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-20 — `/imagenes`: generador masivo de variaciones (N fotos + 1 prompt, secuencial)
+
+**Qué pasó:** generar muchos creativos de golpe (subir 10 fotos, un prompt genérico tipo "hacé una
+variación de este creativo, no cambies mucho") pegaba contra la cuota por minuto de un solo modelo
+de imagen y terminaba en 429 en cascada — los jobs agotaban los `PIPELINE_RATE_LIMIT_MAX_ATTEMPTS`
+(10) reintentos y quedaban `failed`. Nueva pestaña "Generador masivo" en `/imagenes` que resuelve
+esto con dos mitigaciones, ninguna alcanza sola:
+
+1. **Alterna modelo por proyecto**: par → `gemini-3-pro-image` (Nano Banana Pro), impar →
+   `gemini-3.1-flash-image` (Flash). Dos proyectos corriendo cerca en el tiempo pegan contra cuotas
+   *distintas*, así no se suman contra el mismo límite.
+2. **Corre SECUENCIAL entre proyectos**, no en paralelo: el proyecto N+1 no se encola hasta que el N
+   llega a un status terminal (`done`/`partial`/`failed`). Dentro de cada proyecto individual las
+   variantes siguen corriendo en paralelo como siempre (eso no cambió); lo que se evita es que los
+   N proyectos de la tanda arranquen todos juntos y multipliquen la carga por N.
+
+No se creó un pipeline nuevo: cada foto se convierte en un proyecto de sólo-imágenes independiente
+(mismo mecanismo que `/api/imagenes` con imagen base — `image2image` contra la foto subida), así que
+reutiliza la cola, los reintentos, el rate limit y el auto-approve que ya existían.
+
+- **`src/lib/jobs/masivo.ts` (nuevo)** — estado de tandas secuenciales en `globalThis` (mismo patrón
+  que `queue.ts`, sobrevive al HMR). `startBatch(batchId, projectIds, enqueueProject)` encola sólo el
+  primer proyecto; los demás quedan `draft` con sus jobs ya armados. `notifyProjectFinished(projectId,
+  enqueueProject)` se llama desde `queue.ts` cada vez que un proyecto termina y, si es el que está al
+  frente de una tanda activa, encola el siguiente. `enqueueProject` se **recibe como parámetro** en
+  vez de importarse: `masivo.ts` no importa `queue.ts`, así evita el ciclo de import que se daría si
+  lo hiciera (`queue.ts` ya necesita llamar a este módulo desde `finalizeProjects`).
+- **`queue.ts`**: un solo hook nuevo, al final de `finalizeProjects()`, justo después de persistir el
+  status terminal del proyecto — `notifyProjectFinished(projectId, enqueueProject)`. Para un proyecto
+  que no pertenece a ninguna tanda (el 100% de los casos hasta ahora) es un lookup O(1) que no hace
+  nada; no se tocó ninguna otra lógica de la cola (concurrencia, backoff, rate limit de video, gate
+  por lotes siguen exactamente igual).
+- **`POST /api/imagenes/masivo` (nuevo)** — multipart: N archivos (`fotos`, repetido) + `prompt` +
+  `nombreBase` + `variantes`/`aspectRatio`/`imageSize`/`negativePrompt` opcionales. Crea los N
+  `ProjectRecord` primero (si algo falla a mitad de camino, no queda una tanda mitad creada mitad
+  corriendo) y recién después llama a `startBatch`. `autoApprove: true` a propósito — al revés que
+  `/api/imagenes`, que lo fuerza a `false` porque su UI es para elegir variante a mano: acá el punto
+  es no sentarse a aprobar cada una de N fotos, cada job pasa a `done` solo al terminar.
+- **`ProjectRecord.batch?: { batchId, position, total }` (`types.ts`)** — persistido en el proyecto
+  (no sólo en la memoria de `masivo.ts`) para que la UI pueda seguir agrupando visualmente los N
+  proyectos de una corrida después de un reinicio, aunque la cola en memoria (y con ella, el
+  autoavance secuencial) se pierda como el resto de la cola. Expuesto en `GET /api/projects`.
+- **UI**: `/imagenes` pasa a tener dos pestañas (`ImagenesTabs.tsx`, Radix `Tabs` no controlado,
+  `defaultValue` — a diferencia de `ProjectTabs` no sincroniza con la URL porque las dos pestañas
+  viven en la misma ruta y no chocan con el `?id=` que ya usa `ImagenesBoard`). "Generar" es
+  `ImagenesBoard` sin cambios. "Generador masivo" es `GeneradorMasivo.tsx` (nuevo): dropzone
+  multi-archivo con drag&drop, un prompt único, nombre de tanda, variantes/formato/calidad, y la
+  lista de tandas lanzadas en la sesión con el estado de cada proyecto (poll a `/api/projects`
+  filtrando por `batch.batchId`, mismo patrón de polling con apagado automático que `ImagenesBoard`)
+  y link a cada uno (`/imagenes?id=<id>`, se revisa en la pestaña "Generar" de siempre — esta
+  pantalla no duplica la grilla de variantes).
+- **Verificado**: `tsc --noEmit` sin errores. `tasks/_verificacion-endpoints.sh` →
+  `SIN REGRESIONES` (no se tocó ningún fetch existente). Probado en modo mock con 3 fotos: los 3
+  proyectos se crean (`alma-gemela 1/2/3`), alternan modelo (Pro/Flash/Pro) y el `pipeline.log`
+  confirma que corren secuencial (el proyecto N+1 arranca milisegundos después de que el N se
+  aprueba, nunca antes). Validado que sin fotos o sin prompt devuelve 400 con mensaje claro.
+  `npm run lint` no tiene `eslint.config.*` en este repo (pide setup interactivo de Next 14); no se
+  configuró, queda igual que antes de este cambio.
+
+---
+
 ## 2026-09-19 — `/imagenes`: imagen base subida (image2image) y chat iterativo con historial
 
 **Qué pasó:** `/imagenes` sólo podía generar desde cero (text2image) y "Variar" reemplazaba la

@@ -120,6 +120,26 @@ export interface ProjectRecord {
    */
   owner?: string;
   /**
+   * Info de la tanda del generador masivo de variaciones (/imagenes, pestaña
+   * "Generador masivo"), si este proyecto se creo como parte de una. `undefined` =
+   * proyecto suelto de siempre (el 100% de los casos hasta ahora).
+   *
+   * Se persiste en el PROYECTO (no solo en el estado en memoria de
+   * `jobs/masivo.ts`) para que la UI pueda agrupar los N proyectos de una corrida
+   * despues de un reinicio del proceso: la cola secuencial en memoria se pierde al
+   * reiniciar (igual que toda la cola), pero el AGRUPAMIENTO visual de "estas 10
+   * imagenes salieron de la misma tanda" tiene que sobrevivir, aunque la tanda ya
+   * no se autoavance sola tras el reinicio.
+   */
+  batch?: {
+    /** id compartido por los N proyectos de una misma corrida. */
+    batchId: string;
+    /** posicion 0-based dentro de la tanda (orden de las fotos subidas). */
+    position: number;
+    /** cuantos proyectos tiene la tanda en total. */
+    total: number;
+  };
+  /**
    * Fase actual: "images" frena los jobs de video hasta que el usuario pase a "videos".
    * undefined = sin fase (corre todo, como siempre).
    */

@@ -138,6 +138,14 @@ Antes esta pantalla partía el texto pegado en un prompt **por línea**. Se sac�
 varias líneas (encuadre, luz, estilo, negativos), así que partir por línea convertía un prompt en
 cinco prompts cortados al medio.
 
+**Pestaña "Generador masivo"**: subís N fotos + un solo prompt genérico ("hacé una variación de
+este creativo, no cambies mucho") y crea N proyectos de imágenes — uno por foto, `image2image`
+contra cada una, mismo mecanismo que la imagen base de la pestaña "Generar". Pensado para el caso
+de generar muchos creativos de golpe sin pegar contra la cuota por minuto de un solo modelo: alterna
+`gemini-3-pro-image` (Pro) y `gemini-3.1-flash-image` (Flash) por proyecto, y los corre **secuencial**
+(el proyecto N+1 no arranca hasta que el N termina), no en paralelo. Ver `POST /api/imagenes/masivo`
+y `src/lib/jobs/masivo.ts`.
+
 ### `/batch` — Tablero de varios proyectos a la vez
 
 Es la pantalla para producir en volumen. Los ids del lote viajan en la URL (`/batch?ids=a,b,c`);
@@ -334,7 +342,7 @@ que cualquier edición de prompt, diálogo o duración tiene que persistir en el
 
 ## API HTTP
 
-31 handlers en 25 archivos. Todas pasan por el middleware: sin cookie válida devuelven 401
+32 handlers en 26 archivos. Todas pasan por el middleware: sin cookie válida devuelven 401
 (`/api/*`) y las páginas redirigen a `/login`.
 
 | Método y ruta | Qué hace |
@@ -362,6 +370,7 @@ que cualquier edición de prompt, diálogo o duración tiene que persistir en el
 | `GET` `/api/batch?ids=a,b,c` | snapshot del lote |
 | `POST` `/api/batch` | acciones sobre el lote |
 | `POST` `/api/imagenes` | crea un proyecto de sólo imágenes |
+| `POST` `/api/imagenes/masivo` | generador masivo: N fotos + 1 prompt → N proyectos de imágenes, alternando modelo Pro/Flash, corridos SECUENCIAL (uno a la vez) |
 | `POST` `/api/jobs/:id/approve` | aprueba un job (con índice de variante en imágenes) |
 | `POST` `/api/jobs/:id/unapprove` | vuelve un job aprobado a `awaiting_approval` |
 | `POST` `/api/jobs/:id/retry` | regenera un job |

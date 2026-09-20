@@ -93,8 +93,12 @@ Los cambios grandes se planifican antes de escribir código, en `tasks/<modulo>/
 - `src/lib/prompts.ts` — `PARSER_SYSTEM_PROMPT`, `buildVeoVideoPrompt`, `buildImageInstruction`
   (compartida con el provider, así el preview es idéntico a lo ejecutado).
 - `src/lib/jobs/queue.ts` — concurrencia, auto-aprobación, gate por lotes, backoff 429+red,
-  auto-recuperación de jobs colgados.
+  auto-recuperación de jobs colgados. Al final de `finalizeProjects()` llama a
+  `notifyProjectFinished` (jobs/masivo.ts) para el generador masivo — no tocar sin leer ese modulo.
 - `src/lib/jobs/pipeline.ts` — `buildJobs`, `run*Generation`, `approveJob`, `changePrompt`, `extend`.
+- `src/lib/jobs/masivo.ts` — tandas SECUENCIALES del generador masivo (`/imagenes`, pestaña
+  "Generador masivo"): `startBatch`/`notifyProjectFinished`. No importa `queue.ts` a propósito
+  (recibe `enqueueProject` como parámetro) para no crear un ciclo de import.
 - `src/lib/batch.ts` — `buildBatchSnapshot` (tablero, review FIFO, timeline de clips).
 - `deploy/deploy.sh` — build + activación, con todos los guards. Leerlo antes de tocar deploy.
 

@@ -42,6 +42,13 @@ export async function GET() {
        * proyectos de imagenes aparecian en "Proyectos recientes" mezclados con los VSL.
        */
       soloImagenes: p.plan.clips.length === 0,
+      /**
+       * Info de la tanda del generador masivo, si este proyecto pertenece a una
+       * (ver ProjectRecord.batch en types.ts). undefined para el resto: la UI de
+       * /imagenes usa esto para agrupar visualmente los N proyectos de una corrida
+       * sin tener que inferir el agrupamiento de otro lado (nombre, fecha, etc).
+       */
+      batch: p.batch,
     }));
   return ok({ projects });
 }
