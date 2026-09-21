@@ -647,6 +647,22 @@ function finalizeProjects(): void {
       // aprobar mientras el reintento sigue su curso en paralelo.
       if (!conReintentoProgramado) {
         state.activeProjects.delete(projectId); // se re-activa al aprobar/regenerar
+        /*
+          Hook del batch secuencial (tablero /batch, T-batch-secuencial): en modo
+          manual (autoApprove false, el default de start-images/start-videos) un
+          proyecto NUNCA llega a done/partial/failed solo — se frena acá, esperando
+          que el usuario apruebe. Si notifyProjectFinished solo se llamara en la rama
+          de status terminal (mas abajo), un tablero de 30 proyectos en modo manual
+          arrancaria solo el primero y los otros 29 quedarian en draft para siempre,
+          porque el primero jamas "termina" sin intervencion humana.
+          Se llama aca TAMBIEN cuando el proyecto se desactiva esperando aprobacion:
+          para la tanda secuencial, "ya no le va a pedir mas nada a la cola por si
+          mismo" es la señal correcta para dejar pasar al siguiente, sea que haya
+          terminado de verdad o que este esperando que lo aprueben. Para un proyecto
+          que no pertenece a ninguna tanda (el caso de siempre) sigue siendo un
+          lookup O(1) que no hace nada.
+        */
+        notifyProjectFinished(projectId, enqueueProject);
       }
       void refreshManifest(projectId);
       continue;

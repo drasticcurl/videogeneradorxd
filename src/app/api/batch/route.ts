@@ -3,10 +3,21 @@
  * POST /api/batch             -> acciones sobre TODO el lote:
  *      { ids, action: "start-images" | "start-videos" | "pause" | "resume" }
  *
- * "start-images": deja cada proyecto en fase imagenes con auto-aprobacion APAGADA
- * (si no, no habria nada que revisar) y encola. Los videos NO arrancan hasta
- * "start-videos". La concurrencia de la cola es global, asi que arrancar 5 proyectos
- * juntos genera el mismo rate de requests que arrancar uno.
+ * "start-images"/"start-videos": deja cada proyecto en la fase correspondiente y los
+ * arranca de a UNO (startBatch/notifyProjectFinished, jobs/masivo.ts), NUNCA los N
+ * juntos con enqueueProject.
+ *
+ * Antes se hacia enqueueProject(project.id) por cada proyecto del lote, todos de una.
+ * La concurrencia de la cola es GLOBAL (PIPELINE_CONCURRENCY, default 3) pero eso no
+ * limita cuantos jobs quedan "pending" disponibles para llenar esos slots: con 30
+ * proyectos en el tablero, apenas termina un job entra el de OTRO proyecto a ocupar
+ * el slot, y la cola sostiene 3 requests simultaneas contra el mismo modelo sin
+ * pausa mientras haya trabajo de cualquier proyecto. Eso es lo que dispara el 429 en
+ * cascada: el backoff de rate limit tiene presupuesto de 10 reintentos aparte de los
+ * intentos normales, y con 30 proyectos empujando a la vez se agotan y el job queda
+ * "failed" en vez de esperar su turno. El generador masivo (/imagenes, pestaña
+ * "Generador masivo") ya resolvia esto mismo corriendo un proyecto a la vez; se reusa
+ * el mismo mecanismo aca en vez de inventar uno nuevo.
  */
 import { jobsDb, projectsDb } from "@/lib/db";
 import { buildBatchSnapshot } from "@/lib/batch";
@@ -17,9 +28,11 @@ import {
   resumeProject,
   retryBrokenJobs,
 } from "@/lib/jobs/queue";
+import { startBatch } from "@/lib/jobs/masivo";
 import { ensureProjectDirs, writeManifest } from "@/lib/storage";
 import { filterOwnedIds } from "@/lib/ownership";
 import { badRequest, ok, serverError } from "@/lib/http";
+import { randomUUID } from "node:crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,6 +100,11 @@ export async function POST(req: Request) {
 
     const applied: string[] = [];
     const requeued: string[] = [];
+    // Ids de start-images/start-videos que quedan listos para arrancar. Se acumulan
+    // en el loop y se encolan de a UNO al final (startBatch), en vez de
+    // enqueueProject por cada uno: ver el comentario del header sobre el 429 en
+    // cascada que causaba arrancar los N juntos.
+    const toStart: string[] = [];
     for (const id of owned) {
       const project = projectsDb.get(id);
       if (!project) continue;
@@ -142,8 +160,19 @@ export async function POST(req: Request) {
       await ensureProjectDirs(updated.id);
       const jobs = buildJobs(updated); // idempotente: no rehace lo aprobado
       await writeManifest(updated, jobs);
-      enqueueProject(updated.id);
+      toStart.push(updated.id);
       applied.push(updated.id);
+    }
+
+    // Arranca el lote de a UNO: startBatch encola solo toStart[0]; jobs/masivo.ts
+    // (notifyProjectFinished, enganchado en queue.ts/finalizeProjects) encola el
+    // siguiente en cuanto el anterior deja de necesitar la cola: llega a
+    // done/partial/failed, O se frena esperando aprobacion (modo manual, el default
+    // de start-images/start-videos) sin nada mas que pueda generarse solo. Un
+    // batchId nuevo por request: no hay que recordarlo despues, notifyProjectFinished
+    // lo desarma solo cuando el ultimo proyecto de la lista termina.
+    if (toStart.length > 0) {
+      startBatch(randomUUID(), toStart, enqueueProject);
     }
 
     const batch = buildBatchSnapshot(owned);

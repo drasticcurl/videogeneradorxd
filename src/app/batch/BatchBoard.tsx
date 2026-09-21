@@ -431,7 +431,7 @@ export function BatchBoard() {
               loading={busy === "start-images"}
               disabled={busy !== null}
               onClick={() => void action("start-images", imageTargets)}
-              title="Encola todos los proyectos en fase imagenes (los videos quedan frenados)"
+              title="Arranca los proyectos en fase imagenes de a uno, para no saturar la cuota (los videos quedan frenados)"
             >
               {imagesStarted ? "Seguir con las imágenes" : "Comenzar imágenes"}
             </Button>

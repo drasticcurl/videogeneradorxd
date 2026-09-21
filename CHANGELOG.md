@@ -6,6 +6,49 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-21 — El tablero (/batch) arranca los proyectos de a UNO, no todos juntos
+
+**Qué pasó:** con un tablero grande (30 proyectos en el reporte que motivó esto), "Comenzar
+imágenes"/"Comenzar videos" encolaba los N proyectos de una con `enqueueProject()` en un loop. La
+concurrencia de la cola es global (`PIPELINE_CONCURRENCY`, default 3) pero eso no limita cuántos
+jobs quedan "pending" disponibles para llenar esos slots: apenas termina un job de un proyecto, la
+cola toma el de OTRO proyecto para el slot libre, así que 30 proyectos sostienen 3 requests
+simultáneas contra el mismo modelo sin pausa. Resultado: 429 en cascada, se agota el presupuesto de
+10 reintentos de rate limit (aparte de los intentos normales) y los jobs quedan `failed` en vez de
+esperar su turno — los 30 proyectos del reporte fallaron todos.
+
+El generador masivo (`/imagenes`, pestaña "Generador masivo") ya resolvía exactamente este problema
+corriendo un proyecto a la vez (`startBatch`/`notifyProjectFinished`, `src/lib/jobs/masivo.ts`). Se
+reusa el mismo mecanismo para `/api/batch` en vez de inventar uno nuevo:
+
+- `POST /api/batch` (`start-images`/`start-videos`) ya no llama `enqueueProject` por cada proyecto:
+  arma el plan/jobs de todos primero y llama `startBatch()` una sola vez con el orden de los ids.
+  `startBatch` encola solo el primero; el resto queda esperando su turno.
+- `notifyProjectFinished` (el hook que encola "el siguiente") antes solo se llamaba cuando un
+  proyecto llegaba a un status terminal (`done`/`partial`/`failed`) — que es lo único que pasa en el
+  generador masivo, porque fuerza `autoApprove: true`. El tablero, en cambio, arranca en modo manual
+  por default (`autoApprove: false`): un proyecto ahí NUNCA llega solo a un estado terminal, se frena
+  en `review`/`awaiting_approval` esperando que el usuario apruebe. Sin más cambios, el batch
+  secuencial habría arrancado el proyecto 1 y dejado los 29 restantes esperando para siempre. Se
+  agregó el mismo llamado a `notifyProjectFinished` también en la rama de `finalizeProjects` donde el
+  proyecto se desactiva por quedar todo `awaiting_approval` sin nada más que pueda generarse solo:
+  "ya no le va a pedir más nada a la cola" es la señal correcta para dejar pasar al siguiente, sea
+  que terminó de verdad o que está esperando revisión humana (que puede pasar en paralelo mientras el
+  siguiente proyecto genera).
+- El guard existente de `notifyProjectFinished` (`idx !== batch.cursor`) ya cubre las llamadas
+  repetidas para el mismo proyecto sin trabajo adicional: un proyecto de video con gate por lotes
+  (`PIPELINE_APPROVAL_BATCH_VIDEOS`) puede caer en esa rama varias veces a medida que se aprueban
+  lotes de 5; solo la primera vez avanza el cursor.
+- Archivos: `src/app/api/batch/route.ts`, `src/lib/jobs/queue.ts`,
+  `src/app/batch/BatchBoard.tsx` (texto del tooltip de "Comenzar imágenes", desactualizado con el
+  comportamiento nuevo).
+- **No verificado con build/typecheck** (steering del proyecto: no correr salvo pedido explícito).
+  Verificado por lectura del flujo completo (`queue.ts`, `masivo.ts`, `batch/route.ts`,
+  `imagenes/masivo/route.ts`) y confirmando que no hay otro punto del código que encole varios
+  proyectos en loop (`grep` de `enqueueProject` en todo `src/`).
+
+---
+
 ## 2026-09-20 (3) — "Prompt dual": los dos prompts vienen precargados como referencia editable
 
 **Qué pasó:** los textareas de Prompt A / Prompt B del switch "Prompt dual" arrancaban vacíos con
