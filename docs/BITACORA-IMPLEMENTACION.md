@@ -6,6 +6,93 @@ edita una entrada vieja, se agrega una nueva si hay que corregir algo.
 
 ---
 
+## 2026-09-22 — Rediseño de las 4 pantallas (handoff `design_handoff_rediseno_augc`)
+
+**Pedido:** implementar el handoff de rediseño de `/imagenes`, `/project/[id]`, `/` y `/batch` con
+los componentes de `@/components/ui`, los tokens de `tailwind.config.ts` y `ui-tokens.ts`, sin tocar
+endpoints, payloads ni reglas de negocio. Los `.dc.html` del handoff son prototipos de referencia, no
+código para copiar. Cerrar con commits y push a producción.
+
+**Estado:** hecha. 5 commits. Verificada con `npx tsc --noEmit` (0 errores), `npm run build` (10/10
+páginas, sin warnings), `tasks/_verificacion-endpoints.sh` (SIN REGRESIONES),
+`_verificacion-cn.mjs` y `_verificacion-contraste.mjs` (0 fallos), y un grep que confirma que no
+entró ni un color literal en el código nuevo. **No verificada visualmente en navegador**: no había
+entorno de preview en la sesión. Eso es lo único que falta para darla por 100% cerrada.
+
+### Cómo se dividió
+
+Cinco commits, uno por unidad coherente, y el primero es la base de la que dependen los otros cuatro:
+
+1. `13a618a` shell de alto fijo + primitivas compartidas
+2. `9714af3` parte 1 — `/imagenes`
+3. `3c6c7e2` parte 2 — `/project/[id]` pipeline y resultado
+4. `0375350` parte 3 — home y wizard
+5. `8a0b0a7` parte 4 — tablero y revisión unificada
+
+Las cuatro partes se implementaron en paralelo con ownership de archivos disjunto. Para que eso fuera
+posible sin que se pisaran, las piezas compartidas se escribieron PRIMERO y se commitearon aparte:
+sin eso, cada parte habría inventado su propio segmented, su propia barra de progreso y su propio
+mapeo de estado a color, que es exactamente el problema que `ui-tokens.ts` documenta haber resuelto
+para los badges.
+
+### Decisiones tomadas sin especificación explícita
+
+- **`main` sin max-width ni padding, y cada página elige su contenedor.** La alternativa era que el
+  layout envolviera todo en un scroll y que las pantallas fijas se salieran de ahí con `h-full`, que
+  funciona pero es frágil: cualquiera que agregue un wrapper en el medio lo rompe sin error. El costo
+  es que hubo que envolver las 8 páginas; el beneficio es que el contrato es explícito.
+- **`.cq-size` en `globals.css` a mano.** `container-type: size` no existe en Tailwind 3.4: el plugin
+  oficial de container queries solo genera `inline-size`. Con `inline-size`, `100cqh` no resuelve y el
+  medio crece hasta desbordar, o sea vuelve el scroll que el rediseño saca.
+- **`MiniTimeline` con ancho proporcional (`flex-grow = duracionSeg`) en vez de px fijos.** El
+  `ClipTimeline` viejo daba `width: max(14, duracionSeg * 4)`, que con 95 clips son 3040px de tira y
+  scroll horizontal. Con `flex-grow` los 95 entran en el ancho que haya y la proporción entre
+  duraciones se mantiene.
+- **`Segmented` es `radiogroup`, no `tablist`.** No hay ningún `tabpanel` asociado en los cinco
+  lugares donde se usa, y anunciar pestañas que no existen le miente al lector de pantalla. Solo la
+  opción activa es tabulable: con las cinco en el orden de tabulación, llegar al contenido de la
+  galería costaba cuatro tabs de más.
+- **La revisión unificada es UN componente que montan las dos rutas, no un redirect.** Navegar entre
+  `/batch/review` y `/batch/videos` al tocar el segmented remonta el árbol y se pierden `lockRef`,
+  `resolved`/`skipped` y los candados de doble acción. Las dos URLs siguen existiendo, así que los
+  bookmarks y el historial no cambian.
+- **La home agrega `GET /api/batch?ids=`.** Es el único fetch nuevo de toda la tanda. Es de lectura,
+  el endpoint ya existía, y hace falta porque `GET /api/projects` no devuelve desglose de jobs ni
+  duración de clips, y las cards del handoff piden mini-timeline + dos barras + "N clips esperan tu
+  aprobación". Va best-effort: si falla, la card cae a su versión básica y el listado no se rompe.
+- **Se borraron tres componentes que quedaron sin un solo import:** `ProjectTabs.tsx`,
+  `FlowGraph.tsx` y `ClipTimeline.tsx`. Los tres tienen reemplazo (el segmented del header, `Etapas`
+  y `MiniTimeline`), así que no se fue ninguna funcionalidad. Se borran y no se dejan muertos porque
+  un componente sin uso es lo que alguien copia dentro de seis meses creyendo que es el vigente.
+- **Resultado tiene DOS layouts.** Con video final es de alto fijo (el video a `100cqh`, scrollea la
+  columna de al lado, que contiene descargas + clips + JSON). Sin video final scrollea como una lista
+  normal: ahí no hay nada que dimensionar contra el alto y forzarlo solo achica la grilla de clips,
+  que es lo único que hay para mirar. La primera versión usaba `70vh` fijo y volvía a meter scroll de
+  página en un monitor bajo.
+- **El bloque "Prompt" del header de `/imagenes` quedó editable**, no de solo lectura como el
+  prototipo: es donde se edita el prompt antes de "Variar", y dejarlo read-only sacaba esa función
+  sin reemplazo.
+- **`_verificacion-endpoints.sh`: se actualizó la `LINEA_BASE`** con los cuatro movimientos y su
+  motivo en el encabezado, que es lo que el propio script pide cuando un fetch se mueve a propósito.
+  Se verificó que el conjunto de endpoints que la app llama es el mismo de antes más el GET de
+  lectura de la home.
+- **Detalle que costó una regresión falsa:** el comentario que expliqué en el pipeline contenía el
+  literal `/api/` y el script de verificación lo contó como endpoint nuevo. El script grepea el
+  archivo entero, comentarios incluidos. Quedó anotado en el propio comentario.
+
+### Limitaciones conocidas que quedan
+
+- La meta del header de una tanda en `/imagenes` no muestra la calidad (1K/2K/4K) que pedía el
+  handoff: `/api/projects/:id/jobs` no la expone a nivel de proyecto y agregarla era tocar `lib/`,
+  que está fuera del alcance de un rediseño visual.
+- Falta la pasada visual en el navegador: las 4 pantallas están verificadas por typecheck, build,
+  los tres scripts de verificación y lectura de código, pero nadie las vio renderizadas.
+
+---
+
+
+---
+
 ## 2026-09-21 — Tablero `/batch`: arrancar proyectos de a UNO (no en paralelo)
 
 **Pedido:** el usuario reportó que con 30 proyectos en un tablero, al apretar "seguir", todos

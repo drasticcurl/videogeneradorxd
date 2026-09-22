@@ -6,6 +6,72 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-22 — Rediseño de las cuatro pantallas: el scroll sale de la página
+
+**Qué pasó:** las pantallas de trabajo (galería de imágenes, pipeline de un proyecto, revisar) son
+pantallas donde se mira contenido en 9:16 y se decide sobre él, y estaban armadas como documentos:
+la página scrolleaba, el contenido crecía para abajo y los medios se dimensionaban contra el ancho.
+Consecuencias medidas: para elegir una variante de una tanda había que scrollear hasta el final y
+volver a subir; el video de un clip quedaba de 162px de ancho, del tamaño de un sello, justo en la
+pantalla donde hay que decidir si sirve o se regenera; y el grafo del pipeline pedía ~2700px de
+scroll con un VSL de 95 clips para decir lo que tres barras de progreso dicen en un segundo.
+
+Se implementó el handoff `design_handoff_rediseno_augc` en cuatro partes. **Ningún endpoint, payload
+ni regla de negocio cambió**: es layout y presentación. Se mantienen el polling con ref, `editando`
+separado de `prompts`, el gate por lotes, los ids del lote en la URL, el orden FIFO de la cola y que
+el export a ffmpeg lee del plan.
+
+**La decisión de fondo:** `layout.tsx` pasa a ser un shell de alto fijo (`h-screen flex flex-col
+overflow-hidden`, header de 56px, `main` en `flex-1 min-h-0` sin max-width ni padding). El scroll
+vive adentro de cada columna y los medios se dimensionan con container queries contra el alto REAL
+disponible. De ahí sale la utilidad `.cq-size` de `globals.css`: va a mano porque el plugin de
+container queries de Tailwind 3.4 solo genera `inline-size`, que deja `100cqh` sin resolver y la
+imagen desborda el contenedor.
+
+**Consecuencia para quien agregue una pantalla:** el body es `overflow-hidden`, así que una página
+que no use `PantallaScroll` ni `PantallaFija` (`src/components/Pantalla.tsx`) y mida más que el
+viewport queda CORTADA, sin ningún error.
+
+Lo que cambió por pantalla:
+
+- **`/imagenes`** — grid `272px | 1fr` a alto completo: sidebar con las tandas y las N variantes en
+  una fila al alto disponible. "Nueva tanda" y el generador masivo pasan a ser pantallas propias en
+  vez de formularios siempre visibles. Lightbox, hilo de pastillas `v1 -> v2` armado desde
+  `ref_image_id`, chat de cambios fijo abajo y navegación con teclado.
+- **`/project/[id]`** — `FlowGraph` se reemplaza por `Etapas` (una fila de cards con `a/b` y barra de
+  4px). El pipeline es timeline grande + lista de clips con scroll propio + editor de clip en un
+  panel **redimensionable** (mínimo 320px, máximo `innerWidth - 360`, ancho en localStorage). En
+  Resultado el video final ocupa el alto disponible y lo que scrollea es la columna de al lado.
+- **`/`** — cards de proyecto con mini-timeline de clips, dos barras de progreso y CTA cuando algo te
+  espera; el formulario de nuevo proyecto pasa a wizard de 3 pasos con footer fijo.
+- **`/batch`** — dos cards de totales más tabla de proyectos; y las dos pantallas de revisión
+  (`/batch/review` y `/batch/videos`) se unifican en un solo componente con segmented Imágenes/Clips
+  y el modo en `?modo=img|vid`. Las dos rutas siguen existiendo y montan el mismo componente: hacerlo
+  con un redirect entre rutas remontaba el árbol y se perdían `lockRef`, `resolved`/`skipped` y los
+  candados de doble acción.
+
+**Un fetch nuevo, de lectura:** la home agrega `GET /api/batch?ids=`. El endpoint ya existía y no
+dispara ninguna acción, pero hace falta porque las cards muestran el mini-timeline, las barras de
+progreso y "N clips esperan tu aprobación", y `GET /api/projects` devuelve solo id, nombre, estado,
+fechas y los conteos del plan. Es best-effort: si falla, la card cae a su versión básica.
+
+**Archivos borrados por quedar sin un solo import:** `src/components/ProjectTabs.tsx` (lo reemplaza
+el segmented del header), `src/components/FlowGraph.tsx` (lo reemplaza `Etapas`) y
+`src/app/batch/ClipTimeline.tsx` (lo reemplaza `MiniTimeline`, que además pasa el ancho del bloque de
+px fijos a `flex-grow = duracionSeg`: con 95 clips la tira vieja medía 3040px y aparecía scroll
+horizontal). Ninguna funcionalidad se fue; los tres tienen reemplazo.
+
+`tasks/_verificacion-endpoints.sh` se actualizó porque el rediseño movió fetch a propósito (los dos
+decks a `ReviewBoard`, la home partida en `HomeProyectos` + `NuevoProyectoWizard`). Cada movimiento
+está explicado en el encabezado de la `LINEA_BASE`.
+
+**Verificado:** `npx tsc --noEmit` sin errores, `npm run build` compila las 10 páginas sin warnings,
+`_verificacion-endpoints.sh` SIN REGRESIONES, `_verificacion-cn.mjs` y `_verificacion-contraste.mjs`
+con 0 fallos, y una auditoría de que no se colara ni un color literal (ni `#hex` ni `zinc-700`) en el
+código nuevo. **Falta la prueba visual en el navegador**, que no se pudo hacer en esta sesión.
+
+---
+
 ## 2026-09-21 — El tablero (/batch) arranca los proyectos de a UNO, no todos juntos
 
 **Qué pasó:** con un tablero grande (30 proyectos en el reporte que motivó esto), "Comenzar
