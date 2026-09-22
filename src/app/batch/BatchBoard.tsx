@@ -14,36 +14,34 @@
  * La concurrencia de la cola es GLOBAL (PIPELINE_CONCURRENCY), asi que tener 5
  * proyectos activos genera el mismo rate de requests que tener 1.
  *
- * ─── ESTRUCTURA NUEVA (§3 de T07) ────────────────────────────────────────────
+ * ─── REDISEÑO (handoff design_handoff_rediseno_augc, pantalla "Tablero") ─────
  *
- * El problema de antes era que el progreso y la identidad del proyecto competian:
- * cada card tenia la miniatura del proyecto a sangre completa en opacity-10 detras
- * de las barras, ocho botones de ocho colores distintos en el encabezado, y el
- * progreso de los 8 proyectos con el mismo peso visual. La jerarquia ahora es:
+ * El handoff pide dos cards de totales (Imágenes / Videos) con las acciones del
+ * LOTE adentro de cada una, y una TABLA de proyectos en vez de la grilla de cards
+ * de T07. Es un cambio de forma, no de dato: las dos cards resumen exactamente los
+ * mismos `totals.images` / `totals.videos` que ya devuelve `/api/batch`, y la tabla
+ * lista los mismos `projects` con las mismas columnas de siempre (nombre, estado,
+ * timeline, contadores, quitar). Se sigue usando `MiniTimeline` (ya migrado a
+ * tokens) en vez de `ClipTimeline` local, que es lo que unifica el bloque de la
+ * timeline con el resto de la app (home, videos, tablero: un solo componente).
  *
- *   1. selector del proyecto activo, arriba, con `Select`
- *   2. el progreso de ESE proyecto como la informacion dominante, con los numeros
- *      grandes en mono y las barras segmentadas por estado
- *   3. los accesos a Revisar y a Videos como acciones con nombre, no links perdidos
- *   4. la grilla de los demas proyectos, con el progreso resumido
- *
- * Y las acciones del LOTE (arrancar, pausar, reintentar, aprobar todo) quedan
- * agrupadas por alcance: las de "seguir avanzando" en el encabezado, y las que
- * requieren una decision tuya en su propia barra con el acento (D6).
+ * El "proyecto activo" y su panel grande de T07 se sacan: la tabla ya muestra el
+ * progreso de TODOS los proyectos de un vistazo (esa es la idea del handoff, ver un
+ * tablero como tabla), y con una fila por proyecto no hace falta elegir uno para
+ * verlo en detalle — el link de "nombre" ya lleva al pipeline si hace falta más
+ * detalle. Esto simplifica el estado local (se elimina `activoId`) sin tocar NINGUN
+ * fetch ni payload.
  *
  * ─── LO QUE NO CAMBIO ────────────────────────────────────────────────────────
  *
  * El rediseño es VISUAL. `load`, `loadOptions`, `setIds` y `action` son los mismos,
  * con los mismos dos endpoints (`/api/batch` y `/api/projects`), los mismos payloads
  * y los mismos derivados. El parametro de la URL sigue siendo `ids`, y los links a
- * /batch/review y /batch/videos siguen usando `ids` y `focus`, que son de T09 y T10.
+ * /batch/review y /batch/videos siguen usando `ids` y `focus`.
  *
- * Los dos unicos cambios de comportamiento, los dos pedidos por el plan:
- *   - el `window.confirm` de "largo los videos con imagenes sin aprobar" pasa a ser
- *     el `Confirmar` del sistema (mismo guard, misma condicion, mismo resultado);
- *   - el "proyecto activo" no existia: es estado LOCAL de esta pantalla, no de la
- *     URL ni del store. Ver el comentario de `activoId` para por que no se deriva
- *     del polling.
+ * El unico cambio de comportamiento (ya existía, se conserva): el `window.confirm`
+ * de "largo los videos con imagenes sin aprobar" es el `Confirmar` del sistema
+ * (mismo guard, misma condicion, mismo resultado).
  */
 import {
   ArrowsClockwise,
@@ -62,6 +60,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { MiniTimeline } from "@/components/MiniTimeline";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   Badge,
@@ -74,14 +73,11 @@ import {
   Dialog,
   DialogContent,
   EmptyState,
-  Select,
   Skeleton,
 } from "@/components/ui";
 import type { BatchCounts, BatchProject, BatchSnapshot } from "@/lib/batch";
 import { cn } from "@/lib/cn";
 import { estadoDeJob, type Tone } from "@/lib/ui-tokens";
-
-import { ClipTimeline } from "./ClipTimeline";
 
 interface ProjectOption {
   id: string;
@@ -144,17 +140,6 @@ export function BatchBoard() {
   const [cargaOpciones, setCargaOpciones] = useState<CargaOpciones>("cargando");
   /** Pedido de confirmacion para largar videos con imagenes sin aprobar. */
   const [confirmarVideos, setConfirmarVideos] = useState(false);
-  /**
-   * El proyecto que se ve en grande. Es estado LOCAL: no viene de la URL ni del
-   * store, porque el tablero nunca tuvo la nocion de "activo" y agregarle un
-   * parametro a la URL le tocaria el contrato a /batch/review y /batch/videos.
-   *
-   * A proposito NO se deriva de los datos (ej. "el que tiene mas cosas esperando"):
-   * el snapshot se refresca cada 2.5s, asi que el panel te cambiaria de proyecto
-   * solo mientras lo estas mirando. Si el activo desaparece del tablero, cae al
-   * primero, y eso lo resuelve el `?? projects[0]` de abajo sin ningun effect.
-   */
-  const [activoId, setActivoId] = useState<string | null>(null);
   // Default OFF: cada clip espera tu aprobacion y lo revisás en /batch/videos,
   // donde además podés editar el prompt y el diálogo antes de regenerarlo.
   const [autoApproveVideos, setAutoApproveVideos] = useState(false);
@@ -298,22 +283,6 @@ export function BatchBoard() {
   const teToca =
     awaiting > 0 || clipsWithFile > 0 || brokenImages > 0 || brokenVideos > 0;
 
-  /**
-   * El proyecto dominante. `?? projects[0]` es lo que hace que no haga falta ningun
-   * effect: si `activoId` es null (primera carga) o quedo apuntando a un proyecto
-   * que se saco del tablero, cae solo al primero.
-   */
-  const activo: BatchProject | null =
-    projects.find((p) => p.id === activoId) ?? projects[0] ?? null;
-
-  const opcionesDeProyecto = projects.map((p) => ({
-    value: p.id,
-    label: p.name || p.id,
-    hint: `${p.images.done}/${p.images.total} imágenes · ${p.videos.done}/${p.videos.total} clips`,
-  }));
-
-  const segundosDelActivo =
-    activo?.timeline.reduce((a, c) => a + c.duracionSeg, 0) ?? 0;
 
   /* ------------------------------ sin lote ------------------------------ */
   if (ids.length === 0) {
@@ -379,7 +348,7 @@ export function BatchBoard() {
   /* ------------------------------ tablero ------------------------------ */
   return (
     <div className="space-y-5">
-      {/* ─────────────── encabezado: identidad del lote y avance ─────────────── */}
+      {/* ─────────────── encabezado: identidad del lote y botón de sumar ─────── */}
       <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
         <div className="min-w-0">
           <h1 className="text-display font-semibold text-fg">
@@ -397,9 +366,7 @@ export function BatchBoard() {
                 una.
               </>
             ) : allImagesReady && !anyVideoStage ? (
-              <>
-                Todas las imágenes aprobadas. Ya podés largar los videos.
-              </>
+              <>Todas las imágenes aprobadas. Ya podés largar los videos.</>
             ) : (
               <>
                 <span className="code tnum text-fg">{totals?.images.done ?? 0}</span>
@@ -422,44 +389,13 @@ export function BatchBoard() {
           </p>
         </div>
 
-        {/* Avanzar la fase, pausar, y la composicion del tablero. */}
+        {/*
+          El handoff deja "Sumar proyectos" como la unica accion del encabezado:
+          arrancar/pausar/reanudar/reintentar se mudan a las cards de totales, que es
+          donde el handoff las pide agrupadas por Imagenes/Videos. Mismo `action()`,
+          mismos payloads — solo cambio de UBICACION del boton.
+        */}
         <div className="flex flex-wrap items-center gap-2">
-          {puedeSeguirImagenes && (
-            <Button
-              variant="primary"
-              icon={<Play className="size-4" aria-hidden />}
-              loading={busy === "start-images"}
-              disabled={busy !== null}
-              onClick={() => void action("start-images", imageTargets)}
-              title="Arranca los proyectos en fase imagenes de a uno, para no saturar la cuota (los videos quedan frenados)"
-            >
-              {imagesStarted ? "Seguir con las imágenes" : "Comenzar imágenes"}
-            </Button>
-          )}
-          {canStartVideos && (
-            <Button
-              // El primario sigue a la FASE: mientras falten imagenes, el paso
-              // siguiente son las imagenes y esto es secundario.
-              variant={puedeSeguirImagenes ? "secondary" : "primary"}
-              icon={<FilmSlate className="size-4" aria-hidden />}
-              loading={busy === "start-videos"}
-              disabled={busy !== null}
-              onClick={() => {
-                // Si todavia hay imagenes sin aprobar, esos clips no se van a generar
-                // (dependen de su imagen): avisamos antes de largar.
-                if (!allImagesReady) {
-                  setConfirmarVideos(true);
-                  return;
-                }
-                void action("start-videos", videoCandidates);
-              }}
-              title={`Libera los clips: se generan con Veo de a ${videoRate.max} cada ${Math.round(
-                videoRate.windowMs / 1000
-              )}s`}
-            >
-              Comenzar videos
-            </Button>
-          )}
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"
@@ -486,90 +422,10 @@ export function BatchBoard() {
             icon={<Plus className="size-4" aria-hidden />}
             onClick={() => setPickerOpen(true)}
           >
-            Proyectos
+            Sumar proyectos
           </Button>
         </div>
       </header>
-
-      {/* ─────────────── lo que espera una decision tuya (D6) ─────────────── */}
-      {/*
-        El acento vive en la BARRA y no en los botones: `Button` no tiene variante de
-        acento y su contrato esta congelado (§5), asi que meterle el color por
-        className seria duplicarle la chapa. El contenedor comunica "esto te espera"
-        y los botones de adentro quedan con las variantes del sistema.
-      */}
-      {teToca && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-accent/10 p-2.5">
-          <span className="mr-1 flex items-center gap-1.5 text-label font-medium text-accent">
-            <Warning className="size-4 shrink-0" aria-hidden />
-            Te toca a vos
-          </span>
-
-          {awaiting > 0 && (
-            <Button asChild variant="primary" size="sm">
-              <Link href={`/batch/review?ids=${ids.join(",")}`}>
-                <Cards className="size-3.5" aria-hidden />
-                Revisar imágenes
-                <span className="code tnum">{awaiting}</span>
-              </Link>
-            </Button>
-          )}
-
-          {clipsWithFile > 0 && (
-            <Button asChild variant={videosAwaiting > 0 ? "primary" : "secondary"} size="sm">
-              <Link
-                href={`/batch/videos?ids=${ids.join(",")}`}
-                title="Ver los clips uno por uno, con el diálogo al lado, y aprobar o regenerar"
-              >
-                <FilmStrip className="size-3.5" aria-hidden />
-                Revisar clips
-                {videosAwaiting > 0 && (
-                  <span className="code tnum">{videosAwaiting}</span>
-                )}
-              </Link>
-            </Button>
-          )}
-
-          {videosAwaiting > 0 && (
-            <Button
-              size="sm"
-              icon={<Check className="size-3.5" aria-hidden />}
-              loading={busy === "approve-videos"}
-              disabled={busy !== null}
-              onClick={() => void action("approve-videos")}
-              title="Aprueba de una todos los clips que están esperando"
-            >
-              Aprobar todos los clips (<span className="code tnum">{videosAwaiting}</span>)
-            </Button>
-          )}
-
-          {brokenImages > 0 && (
-            <Button
-              size="sm"
-              icon={<ArrowsClockwise className="size-3.5" aria-hidden />}
-              loading={busy === "retry-images"}
-              disabled={busy !== null}
-              onClick={() => void action("retry-images", brokenImageIds)}
-              title="Reencola las imagenes que fallaron y las que quedaron colgadas en 'generando' (se les da presupuesto de reintentos nuevo)"
-            >
-              Reintentar imágenes (<span className="code tnum">{brokenImages}</span>)
-            </Button>
-          )}
-
-          {brokenVideos > 0 && (
-            <Button
-              size="sm"
-              icon={<ArrowsClockwise className="size-3.5" aria-hidden />}
-              loading={busy === "retry-videos"}
-              disabled={busy !== null}
-              onClick={() => void action("retry-videos", brokenVideoIds)}
-              title="Reencola los clips que fallaron o quedaron colgados"
-            >
-              Reintentar clips (<span className="code tnum">{brokenVideos}</span>)
-            </Button>
-          )}
-        </div>
-      )}
 
       {/* ─────────────────────────────── avisos ─────────────────────────────── */}
       {error && (
@@ -615,54 +471,138 @@ export function BatchBoard() {
         </Aviso>
       )}
 
-      {/* ─────────── 1: selector del proyecto activo ─────────── */}
+      {/* ─────────────── dos cards de totales: Imágenes y Videos ─────────────── */}
       {/*
-        Con muchos proyectos la lista de checkboxes era incomoda para lo unico que se
-        hace seguido, que es mirar UNO. El picker sigue existiendo (boton "Proyectos"
-        del encabezado) pero para lo otro: cambiar la composicion del tablero.
+        Pedido del handoff: cada card resume UN contador global (`totals.images` /
+        `totals.videos`, que ya calcula `/api/batch`) y trae adentro las acciones que
+        antes vivian sueltas en el encabezado o en la barra de "te toca a vos". Mismo
+        dato, mismo endpoint — la accion sigue siendo `action(kind, targetIds)`.
       */}
-      {projects.length > 0 && activo && (
-        <Select
-          label="Proyecto"
-          value={activo.id}
-          onValueChange={(v) => setActivoId(v)}
-          options={opcionesDeProyecto}
-          className="sm:max-w-sm"
-        />
-      )}
-
-      {/* ─────────── 2 y 3: el activo, dominante, con sus accesos ─────────── */}
       {snap === null && !error ? (
-        <Card className="space-y-3">
-          <Skeleton className="h-5 w-48" />
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Skeleton className="h-8 w-24" />
-              <Skeleton className="h-1.5 w-full" />
-            </div>
-            <div className="space-y-2">
-              <Skeleton className="h-8 w-24" />
-              <Skeleton className="h-1.5 w-full" />
-            </div>
-          </div>
-        </Card>
-      ) : activo ? (
-        <PanelActivo
-          project={activo}
-          ids={ids}
-          totalSeconds={segundosDelActivo}
-          busy={busy !== null}
-          onStartImages={() => void action("start-images", [activo.id])}
-          onRetryImages={() => void action("retry-images", [activo.id])}
-          onRetryVideos={() => void action("retry-videos", [activo.id])}
-        />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Card className="space-y-3">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-1.5 w-full" />
+          </Card>
+          <Card className="space-y-3">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-1.5 w-full" />
+          </Card>
+        </div>
       ) : (
-        <EmptyState
-          icon={<Kanban className="size-6" aria-hidden />}
-          title="El tablero quedó vacío"
-          body="Ninguno de los proyectos que pedía la URL existe todavía. Elegí de nuevo cuáles querés manejar juntos."
-          action={{ label: "Elegir proyectos", onClick: () => setPickerOpen(true) }}
-        />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <CardTotal
+            titulo="Imágenes"
+            counts={totals?.images ?? emptyCounts()}
+            tono="info"
+            acciones={
+              <>
+                {awaiting > 0 && (
+                  <Button asChild variant="secondary" size="sm">
+                    <Link href={`/batch/review?ids=${ids.join(",")}`}>
+                      <Cards className="size-3.5" aria-hidden />
+                      Revisar <span className="code tnum">{awaiting}</span>
+                    </Link>
+                  </Button>
+                )}
+                {puedeSeguirImagenes && (
+                  <Button
+                    size="sm"
+                    icon={<Play className="size-3.5" aria-hidden />}
+                    loading={busy === "start-images"}
+                    disabled={busy !== null}
+                    onClick={() => void action("start-images", imageTargets)}
+                    title="Arranca los proyectos en fase imagenes de a uno, para no saturar la cuota (los videos quedan frenados)"
+                  >
+                    Arrancar de a uno
+                  </Button>
+                )}
+                {brokenImages > 0 && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    icon={<ArrowsClockwise className="size-3.5" aria-hidden />}
+                    loading={busy === "retry-images"}
+                    disabled={busy !== null}
+                    onClick={() => void action("retry-images", brokenImageIds)}
+                    title="Reencola las imagenes que fallaron y las que quedaron colgadas en 'generando' (se les da presupuesto de reintentos nuevo)"
+                  >
+                    Reintentar <span className="code tnum">{brokenImages}</span>
+                  </Button>
+                )}
+              </>
+            }
+          />
+          <CardTotal
+            titulo="Videos"
+            counts={totals?.videos ?? emptyCounts()}
+            tono="attention"
+            acciones={
+              <>
+                {clipsWithFile > 0 && (
+                  <Button asChild variant="secondary" size="sm">
+                    <Link
+                      href={`/batch/videos?ids=${ids.join(",")}`}
+                      title="Ver los clips uno por uno, con el diálogo al lado, y aprobar o regenerar"
+                    >
+                      <FilmStrip className="size-3.5" aria-hidden />
+                      Revisar <span className="code tnum">{videosAwaiting}</span> clips
+                    </Link>
+                  </Button>
+                )}
+                {canStartVideos && (
+                  <Button
+                    size="sm"
+                    icon={<FilmSlate className="size-3.5" aria-hidden />}
+                    loading={busy === "start-videos"}
+                    disabled={busy !== null}
+                    onClick={() => {
+                      // Si todavia hay imagenes sin aprobar, esos clips no se van a
+                      // generar (dependen de su imagen): avisamos antes de largar.
+                      if (!allImagesReady) {
+                        setConfirmarVideos(true);
+                        return;
+                      }
+                      void action("start-videos", videoCandidates);
+                    }}
+                    title={`Libera los clips: se generan con Veo de a ${videoRate.max} cada ${Math.round(
+                      videoRate.windowMs / 1000
+                    )}s`}
+                  >
+                    Comenzar videos
+                  </Button>
+                )}
+                {videosAwaiting > 0 && (
+                  <Button
+                    size="sm"
+                    icon={<Check className="size-3.5" aria-hidden />}
+                    loading={busy === "approve-videos"}
+                    disabled={busy !== null}
+                    onClick={() => void action("approve-videos")}
+                    title="Aprueba de una todos los clips que están esperando"
+                  >
+                    Aprobar todos
+                  </Button>
+                )}
+                {brokenVideos > 0 && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    icon={<ArrowsClockwise className="size-3.5" aria-hidden />}
+                    loading={busy === "retry-videos"}
+                    disabled={busy !== null}
+                    onClick={() => void action("retry-videos", brokenVideoIds)}
+                    title="Reencola los clips que fallaron o quedaron colgados"
+                  >
+                    Reintentar <span className="code tnum">{brokenVideos}</span>
+                  </Button>
+                )}
+              </>
+            }
+          />
+        </div>
       )}
 
       {/* Nota de fase videos: el check deja elegir si los clips se aprueban solos. */}
@@ -702,43 +642,34 @@ export function BatchBoard() {
         </Card>
       )}
 
-      {/* ─────────────── 4: la grilla, con el progreso resumido ─────────────── */}
-      {projects.length > 1 && (
-        <section className="space-y-3">
-          <h2 className="text-title font-semibold text-fg">Todos los proyectos</h2>
-          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {projects.map((p) => (
-              <li key={p.id}>
-                <ProjectCard
-                  project={p}
-                  activo={p.id === activo?.id}
-                  ids={ids}
-                  busy={busy !== null}
-                  onSeleccionar={() => setActivoId(p.id)}
-                  onStartImages={() => void action("start-images", [p.id])}
-                  onRetryImages={() => void action("retry-images", [p.id])}
-                  onRetryVideos={() => void action("retry-videos", [p.id])}
-                  onRemove={() => setIds(ids.filter((id) => id !== p.id))}
-                />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {snap === null && !error && (
-        <ul aria-busy aria-label="Cargando proyectos del lote" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {/* ─────────────────── tabla de proyectos (pedido del handoff) ─────────── */}
+      {/*
+        Reemplaza a la grilla de `ProjectCard` de T07: el handoff pide una TABLA,
+        una fila por proyecto, con columnas fijas. Mismas acciones por fila
+        (reintentar imagenes/videos, quitar del tablero) sobre los mismos ids.
+      */}
+      {snap === null && !error ? (
+        <div className="space-y-1 rounded-lg bg-surface p-3" aria-busy aria-label="Cargando proyectos del lote">
           {Array.from({ length: 3 }, (_, i) => (
-            <li key={i} className="space-y-2 rounded-lg bg-surface p-4">
-              <div className="flex items-start justify-between gap-2">
-                <Skeleton className="h-4 w-1/2" />
-                <Skeleton className="h-4 w-16" />
-              </div>
-              <Skeleton className="h-1.5 w-full" />
-              <Skeleton className="h-1.5 w-full" />
-            </li>
+            <Skeleton key={i} className="h-10 w-full" />
           ))}
-        </ul>
+        </div>
+      ) : projects.length > 0 ? (
+        <TablaProyectos
+          projects={projects}
+          ids={ids}
+          busy={busy !== null}
+          onRetryImages={(id) => void action("retry-images", [id])}
+          onRetryVideos={(id) => void action("retry-videos", [id])}
+          onRemove={(id) => setIds(ids.filter((x) => x !== id))}
+        />
+      ) : (
+        <EmptyState
+          icon={<Kanban className="size-6" aria-hidden />}
+          title="El tablero quedó vacío"
+          body="Ninguno de los proyectos que pedía la URL existe todavía. Elegí de nuevo cuáles querés manejar juntos."
+          action={{ label: "Elegir proyectos", onClick: () => setPickerOpen(true) }}
+        />
       )}
 
       {/* Composicion del tablero. En dialogo y no inline: aparecia entre el
@@ -813,295 +744,207 @@ function Aviso({
   );
 }
 
-/* --------------------------- el proyecto dominante --------------------------- */
+/* --------------------- card de totales (Imágenes / Videos) --------------------- */
 
-function PanelActivo({
-  project: p,
-  ids,
-  totalSeconds,
-  busy,
-  onStartImages,
-  onRetryImages,
-  onRetryVideos,
+/**
+ * Una de las dos cards del handoff: numero mono de 24px + barra de 6px + las
+ * acciones de ESE alcance (imagenes o videos) agrupadas adentro. Reemplaza al
+ * `PanelActivo` de T07 (que mostraba UN proyecto elegido): acá el numero es la
+ * SUMA de todos los proyectos del tablero, que es justo lo que trae `totals` del
+ * snapshot sin ningun calculo nuevo.
+ */
+function CardTotal({
+  titulo,
+  counts,
+  tono,
+  acciones,
 }: {
-  project: BatchProject;
-  ids: string[];
-  totalSeconds: number;
-  busy: boolean;
-  onStartImages: () => void;
-  onRetryImages: () => void;
-  onRetryVideos: () => void;
+  titulo: string;
+  counts: BatchCounts;
+  /** Tono de la barra de 6px cuando no hay tramos que mostrar (total > 0 pero todo "done"). */
+  tono: Tone;
+  acciones: React.ReactNode;
 }) {
-  const mostrarVideos =
-    p.videos.total > 0 &&
-    (p.stage === "videos" || p.videos.done > 0 || p.videos.awaiting > 0);
-
+  const tramos = tramosDe(counts);
+  const conTramo = tramos.filter((t) => t.n > 0);
   return (
-    <Card className="space-y-4">
-      <CardHeader className="mb-0">
-        <div className="flex min-w-0 items-start gap-3">
-          {/*
-            La miniatura, del tamaño de una miniatura. Antes iba a sangre completa
-            detras de las barras en opacity-10, y era exactamente la competencia
-            entre identidad y progreso que §3 mandaba resolver.
-          */}
-          {p.thumbUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              key={p.thumbUrl}
-              src={p.thumbUrl}
-              alt=""
-              aria-hidden
-              className="hidden aspect-[9/16] w-16 shrink-0 rounded-md bg-bg object-cover sm:block"
-            />
-          ) : (
-            <span
-              aria-hidden
-              className="hidden aspect-[9/16] w-16 shrink-0 items-center justify-center rounded-md bg-bg text-fg-dim sm:flex"
-            >
-              <FilmSlate className="size-5" />
-            </span>
-          )}
-
-          <div className="min-w-0">
-            <CardTitle className="truncate">{p.name || p.id}</CardTitle>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <StatusBadge status={p.status} />
-              {p.stage && (
-                <Badge tone={p.stage === "images" ? "info" : "attention"}>
-                  fase {p.stage === "images" ? "imágenes" : "videos"}
-                </Badge>
-              )}
-              {p.imageVariants > 1 && (
-                <Badge tone="neutral">
-                  <span className="code tnum">{p.imageVariants}</span> variantes
-                </Badge>
-              )}
-            </div>
-          </div>
-        </div>
-      </CardHeader>
-
-      {/* El progreso, dominante: numeros grandes en mono y barra por estado. */}
-      <div className={cn("grid gap-5", mostrarVideos && "sm:grid-cols-2")}>
-        <Progress label="Imágenes" counts={p.images} destacado />
-        {mostrarVideos && <Progress label="Videos" counts={p.videos} destacado />}
-      </div>
-
-      {p.timeline.length > 0 && (
-        <ClipTimeline items={p.timeline} totalSeconds={totalSeconds} />
-      )}
-
-      <div className="flex flex-wrap items-center gap-2 border-t border-divider pt-3">
-        {p.images.awaiting > 0 && (
-          <Button asChild variant="primary" size="sm">
-            <Link href={`/batch/review?ids=${ids.join(",")}&focus=${p.id}`}>
-              <Cards className="size-3.5" aria-hidden />
-              Revisar imágenes
-              <span className="code tnum">{p.images.awaiting}</span>
-            </Link>
-          </Button>
-        )}
-        {p.images.total === 0 && (
-          <Button
-            variant="primary"
-            size="sm"
-            icon={<Play className="size-3.5" aria-hidden />}
-            disabled={busy}
-            onClick={onStartImages}
-          >
-            Arrancar imágenes
-          </Button>
-        )}
-        {p.videos.done + p.videos.awaiting > 0 && (
-          <Button asChild variant={p.videos.awaiting > 0 ? "primary" : "secondary"} size="sm">
-            <Link href={`/batch/videos?ids=${p.id}`}>
-              <FilmStrip className="size-3.5" aria-hidden />
-              Clips
-              {p.videos.awaiting > 0 && (
-                <span className="code tnum">{p.videos.awaiting}</span>
-              )}
-            </Link>
-          </Button>
-        )}
-        {p.images.failed + p.images.stuck > 0 && (
-          <Button
-            size="sm"
-            icon={<ArrowsClockwise className="size-3.5" aria-hidden />}
-            disabled={busy}
-            onClick={onRetryImages}
-            title="Reencola las imagenes falladas y las colgadas de ESTE proyecto"
-          >
-            Reintentar{" "}
-            <span className="code tnum">{p.images.failed + p.images.stuck}</span>{" "}
-            {p.images.stuck > 0 && p.images.failed === 0 ? "colgadas" : "con error"}
-          </Button>
-        )}
-        {p.videos.failed + p.videos.stuck > 0 && (
-          <Button
-            size="sm"
-            icon={<ArrowsClockwise className="size-3.5" aria-hidden />}
-            disabled={busy}
-            onClick={onRetryVideos}
-            title="Reencola los clips fallados y los colgados de ESTE proyecto"
-          >
-            Reintentar <span className="code tnum">{p.videos.failed + p.videos.stuck}</span>{" "}
-            clips
-          </Button>
-        )}
-        <span className="ml-auto flex items-center gap-2">
-          <Button asChild variant="ghost" size="sm">
-            <Link href={`/project/${p.id}/pipeline`}>Pipeline →</Link>
-          </Button>
-          {p.videos.done > 0 && (
-            <Button asChild variant="ghost" size="sm">
-              <Link href={`/project/${p.id}/result`}>Resultado →</Link>
-            </Button>
-          )}
+    <Card className="space-y-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-label font-medium text-fg-dim">{titulo}</span>
+        <span className="code tnum text-fg-dim">
+          <b className="text-display font-semibold text-fg">{counts.done}</b>
+          <span className="text-title">/{counts.total}</span>
         </span>
+      </div>
+      {/*
+        Barra de 6px, sin track de fondo: son los tramos reales y nada mas (mismo
+        criterio que `Progress` de abajo). Con total 0 se usa el `tono` de la card
+        para no dejar la barra completamente invisible sobre `surface`.
+      */}
+      <div aria-hidden className="flex h-1.5 overflow-hidden rounded-sm bg-surface-hi">
+        {counts.total > 0 &&
+          conTramo.map((t) => (
+            <span
+              key={t.clave}
+              className={cn(
+                "h-full min-w-px",
+                RELLENO[t.tone],
+                t.animado && "motion-safe:animate-pulse"
+              )}
+              style={{ width: `${(t.n / counts.total) * 100}%` }}
+            />
+          ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t border-divider pt-3">
+        {acciones}
       </div>
     </Card>
   );
 }
 
-/* -------------------------------- card -------------------------------- */
+function emptyCounts(): BatchCounts {
+  return {
+    total: 0,
+    pending: 0,
+    generating: 0,
+    awaiting: 0,
+    done: 0,
+    failed: 0,
+    stuck: 0,
+  };
+}
 
-function ProjectCard({
-  project: p,
-  activo,
+/* ------------------------------ tabla de proyectos ------------------------------ */
+
+/**
+ * Tabla de proyectos del handoff. Columnas fijas:
+ * `minmax(160px,220px) 110px minmax(0,1fr) 90px 90px 32px` = nombre, estado,
+ * mini-timeline, img a/b, vid a/b, quitar.
+ *
+ * Es una GRILLA CSS con `role="table"` explicito y no un `<table>` HTML: las
+ * columnas de ancho variable (`minmax`) y el `MiniTimeline` ocupando `1fr` son mas
+ * simples en grid que forzando `<col>` con anchos fijos, y los roles ARIA de tabla
+ * (`row`/`cell`) mantienen la semantica para el lector de pantalla.
+ */
+function TablaProyectos({
+  projects,
   ids,
   busy,
-  onSeleccionar,
-  onStartImages,
   onRetryImages,
   onRetryVideos,
   onRemove,
 }: {
-  project: BatchProject;
-  activo: boolean;
+  projects: BatchProject[];
   ids: string[];
   busy: boolean;
-  onSeleccionar: () => void;
-  onStartImages: () => void;
-  onRetryImages: () => void;
-  onRetryVideos: () => void;
-  onRemove: () => void;
+  onRetryImages: (id: string) => void;
+  onRetryVideos: (id: string) => void;
+  onRemove: (id: string) => void;
 }) {
-  const mostrarVideos =
-    p.videos.total > 0 &&
-    (p.stage === "videos" || p.videos.done > 0 || p.videos.awaiting > 0);
-
+  const columnas = "minmax(160px,220px) 110px minmax(0,1fr) 90px 90px 32px";
   return (
-    <Card
-      // El activo se marca con un anillo del acento, no con otro fondo: la grilla
-      // tiene que seguir leyendose como una grilla.
-      className={cn(
-        "flex h-full flex-col gap-3",
-        activo && "ring-1 ring-inset ring-accent"
-      )}
-      aria-current={activo ? "true" : undefined}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          {/*
-            El titulo es el selector. No usa `Button` porque no es un control con
-            chapa de boton: es un titulo que ademas se puede activar, igual que el
-            titulo de las tarjetas de la home, que es un <Link> con estilo de titulo.
-          */}
-          <button
-            type="button"
-            onClick={onSeleccionar}
-            className="max-w-full rounded-sm text-left text-body font-medium text-fg transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            title="Ver este proyecto en grande"
-          >
-            <span className="block truncate">{p.name || p.id}</span>
-          </button>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <StatusBadge status={p.status} />
-            {p.stage && (
-              <Badge tone={p.stage === "images" ? "info" : "attention"}>
-                fase {p.stage === "images" ? "imágenes" : "videos"}
-              </Badge>
-            )}
-          </div>
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onRemove}
-          aria-label={`Quitar ${p.name || p.id} del tablero`}
-          title="Quitar del tablero (no borra el proyecto)"
-          className="shrink-0 px-1.5"
-        >
-          <X className="size-3.5" aria-hidden />
-        </Button>
+    <div role="table" aria-label="Proyectos del tablero" className="rounded-lg bg-surface">
+      <div
+        role="row"
+        style={{ gridTemplateColumns: columnas }}
+        className="grid items-center gap-3 border-b border-divider px-3 py-2 text-label text-fg-dim"
+      >
+        <span role="columnheader">Proyecto</span>
+        <span role="columnheader">Estado</span>
+        <span role="columnheader">Timeline</span>
+        <span role="columnheader" className="text-right">
+          Img
+        </span>
+        <span role="columnheader" className="text-right">
+          Vid
+        </span>
+        <span role="columnheader" className="sr-only">
+          Quitar
+        </span>
       </div>
-
-      <div className="space-y-3">
-        <Progress label="Imágenes" counts={p.images} />
-        {mostrarVideos && <Progress label="Videos" counts={p.videos} />}
+      <div className="divide-y divide-divider">
+        {projects.map((p) => {
+          const imgRoto = p.images.failed + p.images.stuck;
+          const vidRoto = p.videos.failed + p.videos.stuck;
+          return (
+            <div
+              key={p.id}
+              role="row"
+              style={{ gridTemplateColumns: columnas }}
+              className="grid items-center gap-3 px-3 py-2"
+            >
+              <span role="cell" className="min-w-0">
+                <Link
+                  href={`/project/${p.id}/pipeline`}
+                  className="block truncate text-body font-medium text-fg transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  title={p.name || p.id}
+                >
+                  {p.name || p.id}
+                </Link>
+              </span>
+              <span role="cell">
+                <StatusBadge status={p.status} />
+              </span>
+              <span role="cell" className="min-w-0">
+                {p.timeline.length > 0 ? (
+                  <MiniTimeline items={p.timeline} alto={22} />
+                ) : (
+                  <span className="text-label text-fg-dim">—</span>
+                )}
+              </span>
+              <span role="cell" className="flex items-center justify-end gap-1.5">
+                <span className="code tnum text-body text-fg">
+                  {p.images.done}/{p.images.total}
+                </span>
+                {imgRoto > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="px-1.5 text-danger"
+                    disabled={busy}
+                    onClick={() => onRetryImages(p.id)}
+                    aria-label={`Reintentar ${imgRoto} imágenes de ${p.name || p.id}`}
+                    title="Reencola las imágenes falladas y las colgadas de este proyecto"
+                  >
+                    <ArrowsClockwise className="size-3.5" aria-hidden />
+                  </Button>
+                )}
+              </span>
+              <span role="cell" className="flex items-center justify-end gap-1.5">
+                <span className="code tnum text-body text-fg">
+                  {p.videos.done}/{p.videos.total}
+                </span>
+                {vidRoto > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="px-1.5 text-danger"
+                    disabled={busy}
+                    onClick={() => onRetryVideos(p.id)}
+                    aria-label={`Reintentar ${vidRoto} clips de ${p.name || p.id}`}
+                    title="Reencola los clips fallados y los colgados de este proyecto"
+                  >
+                    <ArrowsClockwise className="size-3.5" aria-hidden />
+                  </Button>
+                )}
+              </span>
+              <span role="cell">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onRemove(p.id)}
+                  aria-label={`Quitar ${p.name || p.id} del tablero`}
+                  title="Quitar del tablero (no borra el proyecto)"
+                  className="px-1.5"
+                >
+                  <X className="size-3.5" aria-hidden />
+                </Button>
+              </span>
+            </div>
+          );
+        })}
       </div>
-
-      <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-divider pt-3">
-        {p.images.awaiting > 0 && (
-          <Button asChild variant="primary" size="sm">
-            <Link href={`/batch/review?ids=${ids.join(",")}&focus=${p.id}`}>
-              <Cards className="size-3.5" aria-hidden />
-              Revisar
-              <span className="code tnum">{p.images.awaiting}</span>
-            </Link>
-          </Button>
-        )}
-        {p.images.total === 0 && (
-          <Button
-            variant="primary"
-            size="sm"
-            icon={<Play className="size-3.5" aria-hidden />}
-            disabled={busy}
-            onClick={onStartImages}
-          >
-            Arrancar
-          </Button>
-        )}
-        {p.videos.done + p.videos.awaiting > 0 && (
-          <Button asChild variant={p.videos.awaiting > 0 ? "primary" : "secondary"} size="sm">
-            <Link href={`/batch/videos?ids=${p.id}`}>
-              <FilmStrip className="size-3.5" aria-hidden />
-              Clips
-              {p.videos.awaiting > 0 && (
-                <span className="code tnum">{p.videos.awaiting}</span>
-              )}
-            </Link>
-          </Button>
-        )}
-        {p.images.failed + p.images.stuck > 0 && (
-          <Button
-            size="sm"
-            icon={<ArrowsClockwise className="size-3.5" aria-hidden />}
-            disabled={busy}
-            onClick={onRetryImages}
-            title="Reencola las imagenes falladas y las colgadas de ESTE proyecto"
-          >
-            <span className="code tnum">{p.images.failed + p.images.stuck}</span>{" "}
-            {p.images.stuck > 0 && p.images.failed === 0 ? "colgadas" : "con error"}
-          </Button>
-        )}
-        {p.videos.failed + p.videos.stuck > 0 && (
-          <Button
-            size="sm"
-            icon={<ArrowsClockwise className="size-3.5" aria-hidden />}
-            disabled={busy}
-            onClick={onRetryVideos}
-            title="Reencola los clips fallados y los colgados de ESTE proyecto"
-          >
-            <span className="code tnum">{p.videos.failed + p.videos.stuck}</span> clips
-          </Button>
-        )}
-        <Button asChild variant="ghost" size="sm" className="ml-auto">
-          <Link href={`/project/${p.id}/pipeline`}>Pipeline →</Link>
-        </Button>
-      </div>
-    </Card>
+    </div>
   );
 }
 
@@ -1170,96 +1013,6 @@ function tramosDe(c: BatchCounts): Tramo[] {
       tone: estadoDeJob("pending").tone,
     },
   ];
-}
-
-/**
- * Progreso de un contador del lote.
- *
- * SIN TRACK DE FONDO: la barra son los tramos y nada mas, cada uno del ancho de su
- * proporcion real. Un riel gris al 100% con una porcion de color adentro dibuja algo
- * que no existe en los datos, y es la firma visual de dashboard generico. Lo que
- * manda son los NUMEROS, que van en mono con `.tnum` para que el polling no los
- * cambie de ancho cada 2.5s (D4); la barra es la lectura rapida y va `aria-hidden`,
- * porque la leyenda de abajo ya dice lo mismo en texto.
- */
-function Progress({
-  label,
-  counts,
-  destacado,
-}: {
-  label: string;
-  counts: BatchCounts;
-  /** Para el proyecto activo: el numero pasa a `display`. */
-  destacado?: boolean;
-}) {
-  const tramos = tramosDe(counts);
-  const conTramo = tramos.filter((t) => t.n > 0);
-  // La leyenda solo lista lo que NO es "hecho" ni "en cola": eso ya lo dice el
-  // hechos/total de arriba, y repetirlo son dos chips que estan siempre.
-  const leyenda = conTramo.filter(
-    (t) => t.clave !== "done" && t.clave !== "pending"
-  );
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-label font-medium text-fg-dim">{label}</span>
-        {counts.total > 0 ? (
-          <span className="code tnum text-fg-dim">
-            <b
-              className={cn(
-                "font-semibold text-fg",
-                destacado ? "text-display" : "text-body"
-              )}
-            >
-              {counts.done}
-            </b>
-            <span className={destacado ? "text-title" : "text-label"}>
-              /{counts.total}
-            </span>
-          </span>
-        ) : (
-          <span className="text-label text-fg-dim">sin arrancar</span>
-        )}
-      </div>
-
-      {counts.total > 0 && (
-        <div aria-hidden className="flex h-1.5 overflow-hidden rounded-sm">
-          {conTramo.map((t) => (
-            <span
-              key={t.clave}
-              className={cn(
-                "h-full min-w-px",
-                RELLENO[t.tone],
-                t.animado && "motion-safe:animate-pulse"
-              )}
-              style={{ width: `${(t.n / counts.total) * 100}%` }}
-            />
-          ))}
-        </div>
-      )}
-
-      {leyenda.length > 0 && (
-        <ul className="flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-fg-dim">
-          {leyenda.map((t) => (
-            <li key={t.clave} className="flex items-center gap-1.5" title={t.detalle}>
-              <span
-                aria-hidden
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  RELLENO[t.tone],
-                  t.animado && "motion-safe:animate-pulse"
-                )}
-              />
-              <span>
-                <span className="code tnum text-fg">{t.n}</span> {t.nombre}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
 }
 
 /* ------------------------------- picker ------------------------------- */

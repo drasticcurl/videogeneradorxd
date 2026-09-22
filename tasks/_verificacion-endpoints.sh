@@ -31,15 +31,46 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 # Formato: archivo|endpoints separados por espacio, ordenados
+#
+# ─── ACTUALIZACION 2026-09-22: el rediseño del handoff movio fetch a proposito ──
+#
+# Cuatro movimientos, ninguno cambia un endpoint ni un payload:
+#
+#  1. `batch/review/ReviewDeck.tsx` + `batch/videos/VideoDeck.tsx` -> `batch/ReviewBoard.tsx`.
+#     El handoff unifica las DOS pantallas de revision en una sola con un selector
+#     Imagenes/Clips, asi que los dos decks pasaron a ser un componente compartido que
+#     montan las dos rutas. De paso el GET a /api/batch quedo UNO en vez de dos: era
+#     el mismo snapshot pedido dos veces.
+#
+#  2. `page.tsx` -> `HomeProyectos.tsx` + `NuevoProyectoWizard.tsx`. La home se partio
+#     en el listado y el wizard de 3 pasos, y `page.tsx` quedo como el orquestador que
+#     alterna entre los dos: no hace ni un fetch propio (por eso no figura mas abajo).
+#
+#  3. `HomeProyectos.tsx` AGREGA un GET a /api/batch?ids=. Es de SOLO LECTURA y el
+#     endpoint ya existia (lo usan /batch y las dos vistas de revision). Hace falta
+#     porque las cards nuevas muestran el mini-timeline de clips, las dos barras de
+#     progreso y "N clips esperan tu aprobacion", y `GET /api/projects` no trae nada de
+#     eso: devuelve solo id, name, status, fechas y los conteos del PLAN. Es
+#     best-effort: si falla, la card cae a su version basica y el listado no se rompe.
+#
+#  4. `project/[id]/pipeline/page.tsx` mantiene sus tres endpoints (preview del job,
+#     generate y approve-batch) y la ruta de archivos. Lo unico que cambio es que el
+#     frame inicial del editor de clip puede llegar ya resuelto desde la timeline, asi
+#     que el codigo chequea el prefijo COMPLETO de la ruta de archivos: un prefijo
+#     pelado le figura a este script como un endpoint nuevo.
+#
+# Ninguna linea de abajo se toco "para que pase": cada cambio esta arriba con su
+# motivo, y el conjunto de endpoints que la app llama es el mismo de antes mas el
+# /api/batch de lectura del punto 3.
 LINEA_BASE=$(cat <<'BASE'
+src/app/HomeProyectos.tsx|/api/batch /api/projects /api/projects/
+src/app/NuevoProyectoWizard.tsx|/api/projects /api/projects/
 src/app/SessionBar.tsx|/api/login
 src/app/batch/BatchBoard.tsx|/api/batch /api/projects
-src/app/batch/review/ReviewDeck.tsx|/api/batch /api/jobs/
-src/app/batch/videos/VideoDeck.tsx|/api/batch /api/jobs/
+src/app/batch/ReviewBoard.tsx|/api/batch /api/jobs/
 src/app/imagenes/ImagenesBoard.tsx|/api/files/ /api/imagenes /api/jobs/ /api/projects /api/projects/
 src/app/imagenes/page.tsx|/api/config
 src/app/login/LoginForm.tsx|/api/login
-src/app/page.tsx|/api/projects /api/projects/
 src/app/project/[id]/pipeline/page.tsx|/api/files/ /api/jobs/ /api/projects/
 src/app/project/[id]/result/page.tsx|/api/files/ /api/projects/
 src/components/JobCard.tsx|/api/files/ /api/prompt-template

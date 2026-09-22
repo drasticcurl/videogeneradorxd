@@ -1,26 +1,19 @@
 /**
- * /batch/videos?ids=a,b,c -> revision de los clips generados, uno por uno.
+ * /batch/videos?ids=a,b,c[&modo=img|vid] -> pantalla "Revisar", en modo Clips.
  *
- * Wrapper server-side: `useSearchParams` (en `VideoDeck`) necesita un limite de
- * Suspense para que el build no se queje. El parametro sigue llamandose `ids`, que es
- * el mismo que leen /batch y /batch/review.
+ * Monta el mismo `ReviewBoard` que /batch/review, arrancando en modo "vid". Ver el
+ * comentario grande en `ReviewBoard.tsx`.
  *
  * ─── SIN ICONOS DE PHOSPHOR EN ESTE ARCHIVO ─────────────────────────────────
  *
- * Es un Server Component y `@phosphor-icons/react` 2.1.10 no trae la directiva
- * "use client": su `IconBase` consume un `createContext`, asi que importarlo desde el
- * server rompe el build DESPUES de imprimir "Compiled successfully". Los iconos de
- * esta pantalla viven en `VideoDeck.tsx`, que si es cliente. Ver P-12 en §10 del plan.
- *
- * `Skeleton` si se puede importar aca: no declara "use client" pero tampoco toca
- * Phosphor ni contexto, y `batch/page.tsx` ya lo hace igual (verificado con build).
+ * Es un Server Component: los iconos de esta pantalla viven en `ReviewBoard.tsx`,
+ * que si es cliente (ver P-12 del plan viejo — misma razon que /batch/review).
  */
 import { Suspense } from "react";
 
-import { PantallaScroll } from "@/components/Pantalla";
 import { Skeleton } from "@/components/ui";
 
-import { VideoDeck } from "./VideoDeck";
+import { ReviewBoard } from "../ReviewBoard";
 
 export const dynamic = "force-dynamic";
 
@@ -30,50 +23,24 @@ export const metadata = {
 
 export default function BatchVideosPage() {
   return (
-    <PantallaScroll>
-      <Suspense fallback={<DeckCargando />}>
-        <VideoDeck />
-      </Suspense>
-    </PantallaScroll>
+    <Suspense fallback={<DeckCargando />}>
+      <ReviewBoard modoInicial="vid" />
+    </Suspense>
   );
 }
 
-/**
- * Esqueleto con la FORMA del deck, no un "Cargando los clips…" suelto: cuando entra
- * el contenido real no se mueve nada de lugar. Es el limite de Suspense, asi que se
- * ve una sola vez, mientras el cliente lee el `?ids=` de la URL.
- *
- * La caja grande va en 9:16 porque es el formato de todo lo que genera la app, y es
- * exactamente el hueco donde despues aparece el video.
- */
+/** Mismo esqueleto que /batch/review: las dos rutas montan la misma forma de pantalla. */
 function DeckCargando() {
   return (
-    <div className="flex flex-col gap-4" aria-busy aria-label="Cargando los clips">
-      <div className="flex flex-col gap-3 rounded-lg bg-surface p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-col gap-2">
-            <Skeleton className="h-8 w-64" />
-            <Skeleton className="h-4 w-80" />
-          </div>
-          <Skeleton className="h-9 w-40" />
-        </div>
-        <Skeleton className="h-5 w-full max-w-md" />
+    <div className="flex h-full min-h-0 flex-col" aria-busy aria-label="Cargando los clips">
+      <div className="flex flex-none items-center gap-3 px-4 py-3">
+        <Skeleton className="h-8 w-8" />
+        <Skeleton className="h-6 w-40" />
+        <Skeleton className="ml-auto h-7 w-32" />
       </div>
-
-      {/* La tira de navegacion: una fila de pastillas cuadradas. */}
-      <div className="flex flex-wrap gap-1 rounded-lg bg-surface p-2.5">
-        {Array.from({ length: 24 }, (_, i) => (
-          <Skeleton key={i} className="size-7" />
-        ))}
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="flex flex-col gap-3">
-          <Skeleton className="h-5 w-72" />
-          <Skeleton className="aspect-[9/16] w-full max-w-[min(20rem,35vh)] rounded-lg" />
-          <Skeleton className="h-9 w-full max-w-md" />
-        </div>
-        <Skeleton className="h-64 w-full rounded-lg" />
+      <div className="grid min-h-0 flex-1 gap-4 border-t border-divider p-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
+        <Skeleton className="h-full w-full rounded-lg" />
+        <Skeleton className="h-full w-full rounded-lg" />
       </div>
     </div>
   );
