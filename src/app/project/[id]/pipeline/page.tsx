@@ -1,65 +1,70 @@
 "use client";
 /**
- * Pantalla "Pipeline": el estado en vivo del proyecto, con TRES vistas.
+ * Pantalla "Pipeline": el estado en vivo del proyecto, rediseñada sobre el handoff
+ * `design_handoff_rediseno_augc` (Videos.dc.html, pantalla "project").
  *
- *   - General            progreso por etapa, los grupos de jobs y el grafo del flujo.
- *   - Revisar / Arreglar  la lista compacta que aguanta 95 clips (video on-demand).
- *   - Storyboard          los frames en orden, con las tarjetas de job editables.
+ * ─── QUE CAMBIO (visual y de layout, nada de negocio) ────────────────────────
  *
- * Adentro de "Revisar / Arreglar" vive `ReviewStoryboard`, que es el storyboard
- * EDITABLE de los clips que marcaste: prompt visual, dialogo, duracion, modelo y el
- * prompt final read-only.
+ * - El header pasa a vivir en esta pagina (antes era `ProjectTabs` + un <h1> propio
+ *   mas abajo): flecha volver, nombre en mono, badge de estado y un `Segmented`
+ *   "Pipeline / Resultado" que navega con `router.push` a la otra ruta. Las dos
+ *   rutas siguen siendo distintas — el segmented no es un tab interno.
+ * - `FlowGraph` se fue. En su lugar, `EtapasFila` (nuevo, en `@/components/Etapas`):
+ *   una fila de 5 cards con contador y barra de 4px. Es lo que escala con 95 clips;
+ *   el grafo dibujaba un nodo por job y esa columna medía ~2.700px (P-03 del plan
+ *   viejo, que ya había medido el problema).
+ * - Las tres pestañas viejas (General / Revisar-arreglar / Storyboard) se
+ *   colapsan en UN layout fijo: arriba una sección compacta y colapsable de
+ *   imágenes (base + derivadas, con `JobCard` como siempre — es donde se aprueban
+ *   variantes de imagen), abajo el pipeline de CLIPS a pantalla completa: timeline
+ *   grande + lista con scroll propio a la izquierda, editor de un clip a la derecha
+ *   en un panel redimensionable. Es exactamente lo que pide el handoff para esta
+ *   pantalla. La seleccion multiple + "regenerar todos sin editar" con confirmacion
+ *   (antes una vista aparte, `ReviewStoryboard`) vive ahora como una barra de accion
+ *   arriba de la lista de clips: mismo gate, mismo flujo, ahora sin cambiar de vista.
+ * - El panel del editor se redimensiona arrastrando su borde izquierdo (mismo
+ *   contrato que el handoff): minimo 320px, maximo `innerWidth - 360`, ancho inicial
+ *   `max(480, 42vw)`, doble click resetea, el boton de agrandar alterna con 60vw, y
+ *   el ancho se guarda en localStorage para no tener que re-ajustarlo cada visita.
  *
  * ─── LO QUE NO SE TOCO, Y ES LO QUE IMPORTA ──────────────────────────────────
  *
- * EL EXPORT A FFMPEG LEE DEL PLAN, NO DE LOS JOBS. Todo lo que se edita en el
- * storyboard de revision se persiste al plan por el mismo camino que antes:
- * `onSave` -> `changePromptJob` del store -> POST al endpoint de prompt del job ->
- * `loadProject`, que vuelve a bajar el plan. Ni el payload ni el orden de esas tres
- * cosas cambio. Si se rompe, las ediciones se pierden EN SILENCIO y recien se
- * descubren en el video final exportado.
+ * EL EXPORT A FFMPEG LEE DEL PLAN, NO DE LOS JOBS. Todo lo que se edita en el panel
+ * del clip se persiste al plan por el mismo camino que antes: `onSave` ->
+ * `changePromptJob` del store -> POST al endpoint de prompt del job -> `loadProject`,
+ * que vuelve a bajar el plan. Ni el payload ni el orden de esas tres cosas cambio.
  *
  * `SavePayload` tiene exactamente la misma forma que antes: seis campos opcionales.
  *
  * Los TRES fetch de este archivo son los mismos, con el mismo metodo y el mismo
- * body: arrancar la generacion, aprobar el lote, y el preview de un job.
+ * body: arrancar la generacion, aprobar el lote, y el preview de un job. El polling
+ * sigue con `setInterval` + `ref` cada 2000ms.
  *
- * El corte de 24 clips sigue: arriba de ese numero la pantalla arranca en la vista
- * liviana. Es lo unico que hace usable un VSL de 95 clips.
+ * El corte de 24 clips sigue existiendo, aplicado ahora a si la seccion de
+ * IMAGENES arranca abierta o colapsada (antes decidia la vista inicial entre
+ * "General"/"Storyboard" y "Revisar/Arreglar"). El pipeline de CLIPS nunca cambia
+ * de forma segun este numero: el panel del editor siempre carga el medio on-demand,
+ * asi que un VSL de 95 clips es igual de liviano que uno de 6.
  *
- * ─── QUE CAMBIO ──────────────────────────────────────────────────────────────
+ * El switch de estados sigue sin existir en este archivo: todo tono/label sale de
+ * `estadoDeJob` + `Badge`/`StatusBadge`.
  *
- * EL SWITCH DE ESTADOS LOCAL QUE TENIA ESTE ARCHIVO SE BORRO. Era una de las cuatro
- * copias divergentes que el rediseño elimina: tenia sus propios colores y su propia
- * tabla de labels, y por eso el mismo estado se veia distinto aca y en el resto de la
- * app. Ahora el tono y el label salen de `estadoDeJob` + `Badge`, que son la unica
- * fuente de verdad. El nombre viejo de esa funcion no se escribe en ningun lado del
- * archivo, justamente para que un `grep` pueda probar que se fue.
+ * "Regenerar seleccionados sin editar" sigue pidiendo confirmacion con `Confirmar` y
+ * dice cuantos jobs va a regenerar, con el mismo tono `danger`.
  *
- * El toggle de vistas ahora es `Tabs`, asi que se navega con las flechas del teclado
- * y el contenido inactivo NO queda montado. Con 95 clips eso es la diferencia entre
- * una pestaña usable y una pestaña con 95 `<video>` de fondo.
- *
- * "Regenerar todos sin editar" pide CONFIRMACION y dice cuantos jobs va a regenerar.
- * Antes era un click directo sobre algo que en un VSL cuesta decenas de dolares.
- *
- * Los callbacks que van a `JobCard` estan estabilizados con `useCallback` y los
- * objetos `meta` con `useMemo`. `JobCard` esta envuelta en `memo` y hasta ahora no
- * rendia nada, porque este archivo le pasaba arrows nuevas en cada render y la
- * comparacion shallow fallaba siempre. Con esto, escribir en el campo de numeros de
- * la vista de arreglo ya no re-renderiza las 95 tarjetas. Ojo con la expectativa: en
- * el tick del polling los objetos `job` vienen nuevos del server, asi que ahi el memo
- * sigue sin poder ahorrar nada. Lo que se gana son los renders por estado local, que
- * son los que el usuario siente mientras escribe.
+ * Los callbacks que van a `JobCard` siguen estabilizados con `useCallback` y los
+ * `meta` con `useMemo`, por el mismo motivo de siempre: no romper el `memo`.
  */
 import {
   ArrowCounterClockwise,
   ArrowLeft,
   ArrowsClockwise,
+  ArrowsInLineHorizontal,
+  ArrowsOutLineHorizontal,
   Broom,
   CaretDown,
+  CaretUp,
   Check,
-  CheckCircle,
   Coins,
   Copy,
   DownloadSimple,
@@ -67,24 +72,21 @@ import {
   EyeSlash,
   FilmSlate,
   FloppyDisk,
-  FlowArrow,
   ImageSquare,
-  Images,
-  ListChecks,
   MagnifyingGlass,
   Pause,
   Play,
   Stop,
   WarningCircle,
-  Wrench,
 } from "@phosphor-icons/react";
+import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { FlowGraph } from "@/components/FlowGraph";
+import { AvisoAprobacion, EtapasFila, type EtapaResumen } from "@/components/Etapas";
 import { JobCard } from "@/components/JobCard";
 import { LogPanel } from "@/components/LogPanel";
-import { PantallaScroll } from "@/components/Pantalla";
-import { ProjectTabs } from "@/components/ProjectTabs";
+import { estadoDeClip, formatDuration, TimelineClips } from "@/components/MiniTimeline";
+import { PantallaFija } from "@/components/Pantalla";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   Badge,
@@ -95,25 +97,20 @@ import {
   CardTitle,
   Confirmar,
   EmptyState,
-  Input,
+  Segmented,
   Select,
   Skeleton,
   SkeletonGrid,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
   Textarea,
   type SelectOption,
 } from "@/components/ui";
+import type { BatchTimelineItem } from "@/lib/batch";
 import { cn } from "@/lib/cn";
 import type { JobRecord } from "@/lib/types";
 import { estadoDeJob } from "@/lib/ui-tokens";
 import { useProjectStore } from "@/store/useProjectStore";
 
-type View = "storyboard" | "flow" | "fix";
-
-/** payload para guardar/regenerar un job desde la vista de revision. */
+/** payload para guardar/regenerar un job desde el panel del clip. Igual que antes. */
 interface SavePayload {
   prompt?: string;
   dialogue?: string;
@@ -124,11 +121,14 @@ interface SavePayload {
 }
 
 /**
- * Arriba de este numero de clips la pantalla arranca sola en la vista liviana.
+ * Umbral que decide si la seccion de imagenes arranca abierta o colapsada.
  *
- * NO SUBIRLO NI SACARLO. El storyboard monta una `JobCard` por clip y cada una monta
- * su `<video>`: con los 95 clips de un VSL real la pestaña se arrastra y la maquina
- * se cae. La vista de arreglo es una tabla y carga el video solo del que abris.
+ * NO SUBIRLO NI SACARLO: es el mismo numero que ya media P-03 del plan viejo para
+ * un VSL real de 95 clips. Arriba de este umbral, la seccion de imagenes (que
+ * puede montar hasta 95 `JobCard` mas) se colapsa por defecto para no competir por
+ * el primer scroll con el pipeline de clips, que es lo que hay que revisar. El
+ * pipeline de clips en si NUNCA monta 95 `<video>`: el panel del editor carga el
+ * medio on-demand sin importar cuantos clips tenga el proyecto.
  */
 const UMBRAL_VISTA_LIVIANA = 24;
 
@@ -138,26 +138,26 @@ const DURACION_OPCIONES: ReadonlyArray<SelectOption<string>> = [4, 6, 8].map((d)
   label: `${d}s`,
 }));
 
-/**
- * Sustantivo de BOLSA para los contadores del resumen por etapa.
- *
- * Los labels de `estadoDeJob` estan escritos para el badge de UN job y en singular
- * imperativo ("Elegí variante"), asi que como contador no sirven: saldria
- * "4 Elegí variante". Ver P-18 en §10 del plan, que es donde tiene que vivir esto.
- *
- * El TONO igual sale de `estadoDeJob`, asi que no hay ni un color en este archivo y
- * el mismo estado no puede cambiar de color entre pantallas. Los nombres son
- * invariantes en genero a proposito: el mismo resumen cuenta imagenes y videos.
- */
-const BOLSAS: ReadonlyArray<{ status: JobRecord["status"]; nombre: string }> = [
-  { status: "generating", nombre: "generando" },
-  { status: "awaiting_approval", nombre: "por aprobar" },
-  { status: "failed", nombre: "con error" },
-  { status: "pending", nombre: "en cola" },
-];
+/** Clave de localStorage para el ancho del panel del editor. Un solo valor global:
+ * el handoff no pide que sea por-proyecto, y compartirlo evita que cada proyecto
+ * nuevo te obligue a re-ajustar el panel. */
+const LS_ASIDE_W = "pipeline_aside_w";
+const ASIDE_MIN = 320;
+const ASIDE_WIDE = 700; // umbral: por encima de esto, "achicar" vuelve al ancho inicial
+
+function anchoInicial(): number {
+  if (typeof window === "undefined") return 480;
+  return Math.max(480, Math.round(window.innerWidth * 0.42));
+}
+
+function anchoMaximo(): number {
+  if (typeof window === "undefined") return 1200;
+  return Math.max(ASIDE_MIN, window.innerWidth - 360);
+}
 
 export default function PipelinePage({ params }: { params: { id: string } }) {
   const projectId = params.id;
+  const router = useRouter();
   const {
     project,
     jobs,
@@ -176,8 +176,10 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     regenerateMany,
   } = useProjectStore();
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [manualView, setManualView] = useState<View | null>(null);
-  const [verGrafo, setVerGrafo] = useState<boolean | null>(null);
+  // El clip abierto en el panel editor vive ACA y no dentro de `PipelineClips`
+  // porque el aviso de aprobacion ("Revisar uno por uno", justo arriba) necesita
+  // poder cambiarlo sin pasar por un ref: son hermanos en el arbol, no padre-hijo.
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -309,11 +311,6 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     return { t2i, i2i, vids };
   }, [jobs, imageModoById, ordenByClip]);
 
-  // Vista efectiva: si el usuario eligio una, se respeta; si no, con muchos clips
-  // arrancamos en la vista liviana "fix" (no monta 95 <video> -> no lagea la PC).
-  const view: View =
-    manualView ?? (groups.vids.length > UMBRAL_VISTA_LIVIANA ? "fix" : "storyboard");
-
   const progress = useMemo(() => {
     if (jobs.length === 0) return { done: 0, total: 0, pct: 0, awaiting: 0 };
     const done = jobs.filter((j) => j.status === "done").length;
@@ -324,9 +321,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
   /*
     ─── LOS CALLBACKS ESTABLES QUE EL `memo` DE JobCard NECESITABA ─────────────
     Las acciones del store son estables (zustand las crea una sola vez), asi que
-    estos `useCallback` no se invalidan nunca. Antes eran arrows nuevas en cada
-    render dentro de un objeto literal, y por eso las 95 tarjetas se volvian a
-    renderizar aunque no hubiera cambiado ni una.
+    estos `useCallback` no se invalidan nunca.
   */
   const onApprove = useCallback(
     (id: string, index?: number) => void approveJob(id, index),
@@ -366,7 +361,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     [onApprove, onRegenerate, onChangePrompt, onExtend]
   );
 
-  // Datos para precargar prompt + selector de modelo en cada tarjeta.
+  // Datos para precargar prompt + selector de modelo en cada tarjeta de imagen.
   const imageMeta = useMemo<JobMeta>(
     () => ({
       promptByRef,
@@ -387,152 +382,153 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
       formato,
     ]
   );
-  const videoMeta = useMemo<JobMeta>(
-    () => ({
-      promptByRef,
-      dialogueByRef,
-      durationByRef,
-      finalPromptByRef,
-      assetTypeByRef,
-      modelOptions: videoModels,
-      projectModel: projectVideoModel,
-      formato,
-    }),
-    [
-      promptByRef,
-      dialogueByRef,
-      durationByRef,
-      finalPromptByRef,
-      assetTypeByRef,
-      videoModels,
-      projectVideoModel,
-      formato,
-    ]
-  );
-
-  // Props extra para videos (selector de resolucion por clip).
-  const videoExtra = useMemo<VideoExtra>(
-    () => ({ resByClip, resolutionOptions, onChangeResolution }),
-    [resByClip, resolutionOptions, onChangeResolution]
-  );
-
-  const etapas = useMemo(
-    () => [
-      { titulo: "Imágenes base", jobs: groups.t2i },
-      { titulo: "Imágenes derivadas", jobs: groups.i2i },
-      { titulo: "Videos", jobs: groups.vids },
-    ],
-    [groups]
-  );
 
   const cargando = project === null && loadError === null;
   const sinJobs = project !== null && jobs.length === 0;
 
-  /*
-    El grafo arranca abierto solo cuando cabe. Usa el MISMO umbral que la vista
-    liviana y por el mismo motivo: P-03 midio que con 95 clips la columna de videos
-    mide ~2.700px, y arriba de eso el grafo enterraba todo lo que sigue. Con pocos
-    clips es util y se ve entero, asi que se muestra como siempre.
-  */
-  const grafoAbierto = verGrafo ?? groups.vids.length <= UMBRAL_VISTA_LIVIANA;
+  // Items de timeline para TimelineClips/estadoDeClip: mismo shape que BatchTimelineItem
+  // (@/lib/batch), armado desde el plan + los jobs de video de ESTE proyecto. No se
+  // importa `buildBatchSnapshot` acá porque ese modulo lee de la DB directo (es del
+  // backend); esta pantalla ya tiene el plan y los jobs en el store via polling.
+  const timelineItems = useMemo<BatchTimelineItem[]>(() => {
+    if (!project) return [];
+    const videoJobByClip = new Map(groups.vids.map((j) => [j.refId, j]));
+    const imageJobByRef = new Map(groups.t2i.concat(groups.i2i).map((j) => [j.refId, j]));
+    return project.plan.clips
+      .slice()
+      .sort((a, b) => a.orden - b.orden)
+      .map((clip) => {
+        const job = videoJobByClip.get(clip.id) ?? null;
+        const imgJob = imageJobByRef.get(clip.image_id);
+        return {
+          clipId: clip.id,
+          videoJobId: job?.id ?? null,
+          orden: clip.orden,
+          label: `${String(clip.orden).padStart(2, "0")}_${clip.id}`,
+          dialogo: clip.dialogo ?? "",
+          duracionSeg: clip.duracion_seg,
+          etiqueta: clip.etiqueta,
+          videoPrompt: clip.video_prompt,
+          finalPrompt: clip.final_prompt ?? "",
+          resolucion: clip.resolucion ?? project.defaultResolution ?? defaultResolution,
+          status:
+            clip.etiqueta === "FILMAR_REAL" ? "placeholder" : job?.status ?? "pending",
+          error: job?.error ?? null,
+          videoUrl: job?.outputPath
+            ? `/api/files/${projectId}/${job.outputPath}?v=${encodeURIComponent(job.updatedAt)}`
+            : null,
+          imageUrl: imgJob?.outputPath
+            ? `/api/files/${projectId}/${imgJob.outputPath}?v=${encodeURIComponent(imgJob.updatedAt)}`
+            : null,
+        } satisfies BatchTimelineItem;
+      });
+  }, [project, groups, projectId, defaultResolution]);
+
+  // Las 5 etapas del handoff: Brief->Plan y Unir/exportar son "listo/no listo" (1/1),
+  // las otras tres son las mismas cuentas que ya se calculaban antes.
+  const etapas = useMemo<EtapaResumen[]>(() => {
+    const t2iDone = groups.t2i.filter((j) => j.status === "done").length;
+    const i2iDone = groups.i2i.filter((j) => j.status === "done").length;
+    const vidsDone = groups.vids.filter((j) => j.status === "done").length;
+    const hayPlan = Boolean(project);
+    const listoExport =
+      groups.vids.length > 0 && vidsDone === groups.vids.length ? 1 : 0;
+    return [
+      { label: "Brief → Plan", hechos: hayPlan ? 1 : 0, total: 1 },
+      { label: "Imágenes base", hechos: t2iDone, total: groups.t2i.length },
+      { label: "Imágenes derivadas", hechos: i2iDone, total: groups.i2i.length },
+      { label: "Videos", hechos: vidsDone, total: groups.vids.length },
+      { label: "Unir y exportar", hechos: listoExport, total: 1 },
+    ];
+  }, [project, groups]);
 
   return (
-    <PantallaScroll>
-    <div className="flex flex-col gap-5">
-      <ProjectTabs projectId={projectId} />
-
-      {/* ─── 1. Cabecera: que proyecto es, como va, y los controles de la cola ─ */}
-      <Card className="flex flex-col gap-4">
-        <CardHeader className="mb-0 flex-wrap">
-          <div className="min-w-0">
-            {/*
-              <h1> a mano y no `CardTitle`: esta tarjeta encabeza la pantalla y
-              CardTitle renderiza un <h2> fijo (P-13), asi que el documento quedaria
-              sin nivel 1. El tamaño tambien es distinto a proposito.
-            */}
-            <h1 className="truncate text-display font-semibold text-fg">
-              {project?.name ?? "Pipeline"}
-            </h1>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              {project ? (
-                <StatusBadge status={project.status} />
-              ) : (
-                <Skeleton className="h-5 w-24" />
-              )}
-              <p className="text-body text-fg-dim">
-                <span className="font-mono tnum text-fg">
-                  {progress.done}/{progress.total}
-                </span>{" "}
-                aprobados{" "}
-                <span className="font-mono tnum">({progress.pct}%)</span>
-              </p>
-              {progress.awaiting > 0 && (
-                <Badge tone="attention" punto>
-                  <span className="tnum">{progress.awaiting}</span> esperando que
-                  aprobés
-                </Badge>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {progress.awaiting > 0 && (
-              <Button
-                variant="primary"
-                onClick={() => void approveBatch()}
-                title="Aprueba todo el lote que está esperando y deja que se genere el próximo"
-                icon={<CheckCircle aria-hidden className="size-4" />}
-              >
-                Aprobar lote (<span className="tnum">{progress.awaiting}</span>)
-              </Button>
-            )}
-            {/*
-              Mismo endpoint para los dos casos: si el proyecto todavia no tiene jobs
-              (recien importado en lote) arranca todo; si ya tiene, el armado de jobs
-              es idempotente y solo reencola lo que quedo pendiente.
-            */}
-            <Button
-              variant={sinJobs ? "primary" : "secondary"}
-              onClick={() => void handleGenerateAll()}
-              title={
-                jobs.length === 0
-                  ? "Arma los jobs y arranca la generación de este proyecto"
-                  : "Reencola los jobs pendientes sin tocar lo ya aprobado"
-              }
-              icon={
-                jobs.length === 0 ? (
-                  <Play aria-hidden className="size-4" />
-                ) : (
-                  <ArrowsClockwise aria-hidden className="size-4" />
-                )
-              }
-            >
-              {jobs.length === 0 ? "Generar todo" : "Reintentar pendientes"}
-            </Button>
-          </div>
-        </CardHeader>
-
-        {/* La barra de progreso global. `role=progressbar` para que se anuncie. */}
-        <div
-          role="progressbar"
-          aria-valuenow={progress.pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label="Jobs aprobados"
-          className="h-1.5 w-full overflow-hidden rounded-sm bg-surface-hi"
-        >
-          <div
-            className="h-full rounded-sm bg-ok transition-all"
-            style={{ width: `${progress.pct}%` }}
+    <PantallaFija>
+      {/* ─── Header: volver, nombre, estado y el segmented Pipeline/Resultado ── */}
+      <div className="flex flex-none flex-col gap-3 px-4 pt-4 sm:px-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push("/")}
+            title="Volver a proyectos"
+            icon={<ArrowLeft aria-hidden className="size-4" />}
+          />
+          <h1 className="min-w-0 truncate font-mono text-display font-semibold text-fg">
+            {project?.name ?? "Pipeline"}
+          </h1>
+          {project ? (
+            <StatusBadge status={project.status} />
+          ) : (
+            <Skeleton className="h-5 w-24" />
+          )}
+          <span className="flex-1" />
+          <Segmented
+            value="pipeline"
+            onChange={(v) => {
+              if (v === "resultado") router.push(`/project/${projectId}/result`);
+            }}
+            etiqueta="Vista del proyecto"
+            options={[
+              { value: "pipeline", label: "Pipeline" },
+              { value: "resultado", label: "Resultado" },
+            ]}
           />
         </div>
 
+        {loadError && (
+          <p
+            role="alert"
+            className="flex items-start gap-2 rounded-lg bg-danger/10 px-3 py-2.5 text-body text-danger"
+          >
+            <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+            {loadError}
+          </p>
+        )}
+
+        {!cargando && !sinJobs && (
+          <>
+            <EtapasFila etapas={etapas} />
+            <AvisoAprobacion
+              cantidad={progress.awaiting}
+              onRevisar={() => {
+                // "Revisar uno por uno" selecciona el primer clip que espera
+                // aprobacion y deja que el panel (mas abajo) lo abra: no hace
+                // falta cambiar de vista, porque ya no hay una vista separada.
+                const primero = timelineItems.find((it) => it.status === "awaiting_approval");
+                if (primero) setSelectedClipId(primero.clipId);
+              }}
+              onAprobarTodos={() => void approveBatch()}
+            />
+          </>
+        )}
+
         {/*
-          Pausar / Reanudar / Cancelar viven abajo y en `ghost`: son controles de la
-          cola, no lo que venis a hacer. Antes tenian el mismo peso visual que
-          "Generar todo", que es el que cuesta plata.
+          Controles de la cola: generar/reintentar y pausar/reanudar/cancelar. Antes
+          vivian en una Card de cabecera propia; se comparten la misma fila para no
+          empujar el pipeline de clips mas abajo, que es lo que hay que ver primero.
         */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-divider pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-b border-divider pb-3">
+          <Button
+            variant={sinJobs ? "primary" : "secondary"}
+            size="sm"
+            onClick={() => void handleGenerateAll()}
+            title={
+              jobs.length === 0
+                ? "Arma los jobs y arranca la generación de este proyecto"
+                : "Reencola los jobs pendientes sin tocar lo ya aprobado"
+            }
+            icon={
+              jobs.length === 0 ? (
+                <Play aria-hidden className="size-4" />
+              ) : (
+                <ArrowsClockwise aria-hidden className="size-4" />
+              )
+            }
+          >
+            {jobs.length === 0 ? "Generar todo" : "Reintentar pendientes"}
+          </Button>
+          <span className="mx-1 h-4 w-px bg-divider" aria-hidden />
           <span className="text-label font-medium uppercase tracking-wide text-fg-dim">
             Cola
           </span>
@@ -560,177 +556,56 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           >
             Cancelar
           </Button>
+          <span className="flex-1" />
+          <p className="text-body text-fg-dim">
+            <span className="font-mono tnum text-fg">
+              {progress.done}/{progress.total}
+            </span>{" "}
+            aprobados <span className="font-mono tnum">({progress.pct}%)</span>
+          </p>
         </div>
-      </Card>
+      </div>
 
-      {loadError && (
-        <p
-          role="alert"
-          className="flex items-start gap-2 rounded-lg bg-danger/10 px-3 py-2.5 text-body text-danger"
-        >
-          <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
-          {loadError}
-        </p>
-      )}
-
-      {/* ─── 2. Las tres vistas ────────────────────────────────────────────── */}
       {cargando ? (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 px-4 py-6 sm:px-6">
           <Skeleton className="h-9 w-full max-w-md" />
           <SkeletonGrid items={8} />
         </div>
       ) : sinJobs ? (
-        <EmptyState
-          icon={<FilmSlate aria-hidden className="size-6" />}
-          title="Todavía no hay jobs"
-          body="Este proyecto tiene el plan cargado pero la cola nunca arrancó. Al generar se arma un job por imagen y uno por clip, y podés aprobar de a lotes."
-          action={{ label: "Generar todo", onClick: () => void handleGenerateAll() }}
-        />
+        <div className="px-4 py-6 sm:px-6">
+          <EmptyState
+            icon={<FilmSlate aria-hidden className="size-6" />}
+            title="Todavía no hay jobs"
+            body="Este proyecto tiene el plan cargado pero la cola nunca arrancó. Al generar se arma un job por imagen y uno por clip, y podés aprobar de a lotes."
+            action={{ label: "Generar todo", onClick: () => void handleGenerateAll() }}
+          />
+        </div>
       ) : (
-        <Tabs value={view} onValueChange={(v) => setManualView(v as View)}>
-          <TabsList>
-            {/* inline-flex: el <button> de Radix no lo es, y sin esto el icono
-                queda hundido respecto del texto. */}
-            <TabsTrigger value="flow" className="inline-flex items-center gap-1.5">
-              <ListChecks aria-hidden className="size-4" />
-              General
-            </TabsTrigger>
-            <TabsTrigger
-              value="fix"
-              className="inline-flex items-center gap-1.5"
-              title="Vista liviana: no carga los videos. Marcá los que están mal, editalos y regeneralos"
-            >
-              <Wrench aria-hidden className="size-4" />
-              Revisar / Arreglar
-            </TabsTrigger>
-            <TabsTrigger
-              value="storyboard"
-              className="inline-flex items-center gap-1.5"
-            >
-              <FilmSlate aria-hidden className="size-4" />
-              Storyboard
-            </TabsTrigger>
-          </TabsList>
-
-          {/* ── General: el resumen por etapa primero, que es lo que se lee de un
-                 vistazo, despues los grupos, y el grafo al final. ── */}
-          <TabsContent value="flow" className="flex flex-col gap-5">
-            <ProgresoPorEtapa etapas={etapas} />
-            <Group
-              title="1 · Imágenes base"
-              jobs={groups.t2i}
-              projectId={projectId}
-              handlers={handlers}
-              meta={imageMeta}
-            />
-            <Group
-              title="2 · Imágenes derivadas"
-              jobs={groups.i2i}
-              projectId={projectId}
-              handlers={handlers}
-              meta={imageMeta}
-            />
-            <Group
-              title="3 · Videos"
-              jobs={groups.vids}
-              projectId={projectId}
-              handlers={handlers}
-              meta={videoMeta}
-              videoExtra={videoExtra}
-            />
-            {/*
-              El grafo va ULTIMO y detras de un toggle. Ver P-03 del plan: con 95
-              clips la columna de videos mide ~2.700px, asi que arriba enterraba todo
-              lo demas. No se cambio el componente: la decision de reemplazarlo por
-              barras por etapa sigue abierta y no es de esta task. El resumen de
-              arriba es justamente lo que P-03 recomienda, y por eso el grafo ya no
-              es lo primero que ves.
-            */}
-            <section className="flex flex-col gap-3">
-              <CardHeader className="mb-0 items-baseline">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <FlowArrow aria-hidden className="size-4 text-fg-dim" />
-                    Grafo del flujo
-                  </CardTitle>
-                  <CardDescription>
-                    Un nodo por job, en columnas por etapa. Con muchos clips es una
-                    columna muy larga: el resumen de arriba se lee mejor.
-                  </CardDescription>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setVerGrafo(!grafoAbierto)}
-                  aria-expanded={grafoAbierto}
-                  icon={
-                    grafoAbierto ? (
-                      <EyeSlash aria-hidden className="size-3.5" />
-                    ) : (
-                      <Eye aria-hidden className="size-3.5" />
-                    )
-                  }
-                >
-                  {grafoAbierto ? "Ocultar" : "Ver"}
-                </Button>
-              </CardHeader>
-              {grafoAbierto && (
-                <FlowGraph
-                  stages={[
-                    { title: "Imagenes base", jobs: groups.t2i },
-                    { title: "Imagenes derivadas", jobs: groups.i2i },
-                    { title: "Videos", jobs: groups.vids },
-                  ]}
-                />
-              )}
-            </section>
-          </TabsContent>
-
-          {/* ── Revisar / Arreglar: la que aguanta 95 clips ── */}
-          <TabsContent value="fix">
-            <FixView
-              jobs={groups.vids}
-              projectId={projectId}
-              ordenByClip={ordenByClip}
-              dialogueByRef={dialogueByRef}
-              videoModels={videoModels}
-              onRegenerateMany={onRegenerateMany}
-              onRegenerate={onRegenerate}
-              onSave={onChangePrompt}
-            />
-          </TabsContent>
-
-          {/* ── Storyboard: los frames en orden ── */}
-          <TabsContent value="storyboard" className="flex flex-col gap-5">
-            <Group
-              title="Imágenes base (text2image)"
-              jobs={groups.t2i}
-              projectId={projectId}
-              handlers={handlers}
-              meta={imageMeta}
-            />
-            <Group
-              title="Imágenes derivadas (image2image · misma identidad)"
-              jobs={groups.i2i}
-              projectId={projectId}
-              handlers={handlers}
-              meta={imageMeta}
-            />
-            <Filmstrip
-              title="Clips en orden"
-              jobs={groups.vids}
-              projectId={projectId}
-              handlers={handlers}
-              meta={videoMeta}
-              videoExtra={videoExtra}
-            />
-          </TabsContent>
-        </Tabs>
+        <ImagenesYClips
+          groups={groups}
+          projectId={projectId}
+          handlers={handlers}
+          imageMeta={imageMeta}
+          timelineItems={timelineItems}
+          videoModels={videoModels}
+          projectVideoModel={projectVideoModel}
+          assetTypeByRef={assetTypeByRef}
+          ordenByClip={ordenByClip}
+          resByClip={resByClip}
+          resolutionOptions={resolutionOptions}
+          selectedClipId={selectedClipId}
+          onSelectClip={setSelectedClipId}
+          onSave={onChangePrompt}
+          onRegenerate={onRegenerate}
+          onRegenerateMany={onRegenerateMany}
+          onChangeResolution={onChangeResolution}
+        />
       )}
 
-      <LogPanel logs={logs} />
-    </div>
-    </PantallaScroll>
+      <div className="flex-none px-4 pb-4 sm:px-6">
+        <LogPanel logs={logs} />
+      </div>
+    </PantallaFija>
   );
 }
 
@@ -757,610 +632,583 @@ interface JobMeta {
   dialogueByRef: Map<string, string>;
   durationByRef: Map<string, number>;
   finalPromptByRef: Map<string, string>;
-  assetTypeByRef?: Map<string, "avatar" | "broll">;
   modelOptions: { id: string; label: string }[];
   projectModel: string;
-  /** Formato del proyecto, para que la tarjeta no recorte lo que no sea 9:16. */
   formato: string;
 }
 
-interface VideoExtra {
+/* ------------------------------------------------------------------------- */
+/* Seccion de imagenes (colapsable) + pipeline de clips a pantalla completa. */
+/* ------------------------------------------------------------------------- */
+
+function ImagenesYClips({
+  groups,
+  projectId,
+  handlers,
+  imageMeta,
+  timelineItems,
+  videoModels,
+  projectVideoModel,
+  assetTypeByRef,
+  ordenByClip,
+  resByClip,
+  resolutionOptions,
+  selectedClipId,
+  onSelectClip,
+  onSave,
+  onRegenerate,
+  onRegenerateMany,
+  onChangeResolution,
+}: {
+  groups: { t2i: JobRecord[]; i2i: JobRecord[]; vids: JobRecord[] };
+  projectId: string;
+  handlers: GroupHandlers;
+  imageMeta: JobMeta;
+  timelineItems: BatchTimelineItem[];
+  videoModels: { id: string; label: string }[];
+  projectVideoModel: string;
+  assetTypeByRef: Map<string, "avatar" | "broll">;
+  ordenByClip: Map<string, number>;
   resByClip: Map<string, string>;
   resolutionOptions: string[];
+  selectedClipId: string | null;
+  onSelectClip: (clipId: string | null) => void;
+  onSave: (jobId: string, payload: SavePayload) => void;
+  onRegenerate: (jobId: string) => void;
+  onRegenerateMany: (jobIds: string[]) => void;
   onChangeResolution: (clipId: string, r: string) => void;
-}
-
-/* ------------------------- Resumen por etapa ----------------------------- */
-/**
- * Las tres etapas con hechos/total y los contadores de lo que no esta hecho.
- *
- * Es lo unico que se agrego a la vista general, y es lo que P-03 recomienda en lugar
- * del grafo: con 95 clips, "78/95 hechos, 4 con error, 2 por aprobar" se lee en un
- * segundo y el grafo pide 2.700px de scroll para decir lo mismo.
- */
-function ProgresoPorEtapa({
-  etapas,
-}: {
-  etapas: { titulo: string; jobs: JobRecord[] }[];
 }) {
+  // Colapsada por defecto arriba de UMBRAL_VISTA_LIVIANA: con 95 clips, la seccion
+  // de imagenes (hasta 95 tarjetas mas) no puede competir por el primer scroll con
+  // el pipeline de clips, que es lo que hay que revisar. Con pocos clips se ve
+  // abierta, que es el caso donde de verdad ayuda ver las imagenes de un vistazo.
+  const [imagenesAbiertas, setImagenesAbiertas] = useState(
+    groups.t2i.length + groups.i2i.length <= UMBRAL_VISTA_LIVIANA
+  );
+  const totalImagenes = groups.t2i.length + groups.i2i.length;
+
   return (
-    <Card className="flex flex-col gap-4">
-      <CardHeader className="mb-0 items-baseline">
-        <div>
-          <CardTitle>Progreso por etapa</CardTitle>
-          <CardDescription>
-            Las imágenes se generan antes que los videos: un clip no arranca hasta que
-            su frame inicial esté aprobado.
-          </CardDescription>
-        </div>
-      </CardHeader>
-      <div className="flex flex-col gap-3">
-        {etapas.map((e) => (
-          <EtapaFila key={e.titulo} titulo={e.titulo} jobs={e.jobs} />
-        ))}
-      </div>
-    </Card>
+    <div className="flex min-h-0 flex-1 flex-col">
+      {totalImagenes > 0 && (
+        <section className="flex-none border-b border-divider px-4 py-3 sm:px-6">
+          <button
+            type="button"
+            onClick={() => setImagenesAbiertas((v) => !v)}
+            aria-expanded={imagenesAbiertas}
+            aria-controls="seccion-imagenes"
+            className="flex w-full items-center gap-2 text-left"
+          >
+            <ImageSquare aria-hidden className="size-4 text-fg-dim" />
+            <span className="text-body font-medium text-fg">Imágenes</span>
+            <span className="font-mono tnum text-label text-fg-dim">
+              {totalImagenes}
+            </span>
+            <span className="flex-1" />
+            <CaretDown
+              aria-hidden
+              className={cn(
+                "size-4 text-fg-dim transition-transform",
+                imagenesAbiertas && "rotate-180"
+              )}
+            />
+          </button>
+          {imagenesAbiertas && (
+            <div id="seccion-imagenes" className="mt-3 flex flex-col gap-4">
+              <GrupoImagenes
+                title="Imágenes base (text2image)"
+                jobs={groups.t2i}
+                projectId={projectId}
+                handlers={handlers}
+                meta={imageMeta}
+              />
+              <GrupoImagenes
+                title="Imágenes derivadas (image2image · misma identidad)"
+                jobs={groups.i2i}
+                projectId={projectId}
+                handlers={handlers}
+                meta={imageMeta}
+              />
+            </div>
+          )}
+        </section>
+      )}
+
+      <PipelineClips
+        vids={groups.vids}
+        projectId={projectId}
+        timelineItems={timelineItems}
+        videoModels={videoModels}
+        projectVideoModel={projectVideoModel}
+        assetTypeByRef={assetTypeByRef}
+        ordenByClip={ordenByClip}
+        resByClip={resByClip}
+        resolutionOptions={resolutionOptions}
+        selectedClipId={selectedClipId}
+        onSelectClip={onSelectClip}
+        onSave={onSave}
+        onRegenerate={onRegenerate}
+        onRegenerateMany={onRegenerateMany}
+        onChangeResolution={onChangeResolution}
+      />
+    </div>
   );
 }
 
-function EtapaFila({ titulo, jobs }: { titulo: string; jobs: JobRecord[] }) {
-  const total = jobs.length;
-  const hechos = jobs.filter((j) => j.status === "done").length;
-  const pct = total === 0 ? 0 : Math.round((hechos / total) * 100);
-
+function GrupoImagenes({
+  title,
+  jobs,
+  projectId,
+  handlers,
+  meta,
+}: {
+  title: string;
+  jobs: JobRecord[];
+  projectId: string;
+  handlers: GroupHandlers;
+  meta: JobMeta;
+}) {
+  if (jobs.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
-        <h3 className="text-body font-medium text-fg">{titulo}</h3>
-        <p className="font-mono tnum text-label text-fg-dim">
-          <span className={total > 0 && hechos === total ? "text-ok" : "text-fg"}>
-            {hechos}/{total}
-          </span>{" "}
-          hechos
-        </p>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {BOLSAS.map(({ status, nombre }) => {
-            const n = jobs.filter((j) => j.status === status).length;
-            if (n === 0) return null;
-            const estado = estadoDeJob(status);
-            return (
-              <Badge
-                key={status}
-                tone={estado.tone}
-                punto
-                animado={estado.animado}
-              >
-                <span className="tnum">{n}</span> {nombre}
-              </Badge>
-            );
-          })}
-        </div>
-      </div>
-      <div
-        role="progressbar"
-        aria-valuenow={pct}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label={`${titulo}: ${hechos} de ${total}`}
-        className="h-1 w-full overflow-hidden rounded-sm bg-surface-hi"
-      >
-        <div
-          className="h-full rounded-sm bg-ok transition-all"
-          style={{ width: `${pct}%` }}
-        />
+    <div className="flex flex-col gap-2">
+      <h3 className="text-label font-medium uppercase tracking-wide text-fg-dim">
+        {title} <span className="font-mono tnum">({jobs.length})</span>
+      </h3>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+        {jobs.map((j) => (
+          <JobCard
+            key={j.id}
+            job={j}
+            projectId={projectId}
+            currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
+            currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
+            currentDuration={meta.durationByRef.get(j.refId)}
+            currentFinalPrompt={meta.finalPromptByRef.get(j.refId) ?? ""}
+            modelOptions={meta.modelOptions}
+            projectModel={meta.projectModel}
+            formato={meta.formato}
+            {...handlers}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-/* --------------------------- Grupos de tarjetas -------------------------- */
+/* ------------------------------------------------------------------------- */
+/* El pipeline de clips: timeline grande + lista con scroll + panel editor.  */
+/* ------------------------------------------------------------------------- */
 
-/** Encabezado de seccion con el conteo. Igual en Group y en Filmstrip. */
-function TituloDeGrupo({
-  title,
-  cantidad,
-  icono,
-}: {
-  title: string;
-  cantidad: number;
-  icono: React.ReactNode;
-}) {
-  return (
-    <CardHeader className="mb-0 items-baseline">
-      <CardTitle className="flex flex-wrap items-center gap-2">
-        <span className="text-fg-dim">{icono}</span>
-        {title}
-        <span className="font-mono tnum text-label font-normal text-fg-dim">
-          {cantidad}
-        </span>
-      </CardTitle>
-    </CardHeader>
-  );
-}
-
-function Group({
-  title,
-  jobs,
+function PipelineClips({
+  vids,
   projectId,
-  handlers,
-  meta,
-  videoExtra,
-}: {
-  title: string;
-  jobs: JobRecord[];
-  projectId: string;
-  handlers: GroupHandlers;
-  meta: JobMeta;
-  videoExtra?: VideoExtra;
-}) {
-  return (
-    <section className="flex flex-col gap-3">
-      <TituloDeGrupo
-        title={title}
-        cantidad={jobs.length}
-        icono={
-          videoExtra ? (
-            <FilmSlate aria-hidden className="size-4" />
-          ) : (
-            <ImageSquare aria-hidden className="size-4" />
-          )
-        }
-      />
-      {jobs.length === 0 ? (
-        <p className="text-body text-fg-dim">Sin items en esta etapa.</p>
-      ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {jobs.map((j) => (
-            <JobCard
-              key={j.id}
-              job={j}
-              projectId={projectId}
-              currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
-              currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
-              currentDuration={meta.durationByRef.get(j.refId)}
-              currentFinalPrompt={meta.finalPromptByRef.get(j.refId) ?? ""}
-              assetType={meta.assetTypeByRef?.get(j.refId)}
-              modelOptions={meta.modelOptions}
-              projectModel={meta.projectModel}
-              formato={meta.formato}
-              {...handlers}
-              resolution={videoExtra?.resByClip.get(j.refId)}
-              resolutionOptions={videoExtra?.resolutionOptions}
-              onChangeResolution={videoExtra?.onChangeResolution}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function Filmstrip({
-  title,
-  jobs,
-  projectId,
-  handlers,
-  meta,
-  videoExtra,
-}: {
-  title: string;
-  jobs: JobRecord[];
-  projectId: string;
-  handlers: GroupHandlers;
-  meta: JobMeta;
-  videoExtra?: VideoExtra;
-}) {
-  return (
-    <section className="flex flex-col gap-3">
-      <TituloDeGrupo
-        title={title}
-        cantidad={jobs.length}
-        icono={<Images aria-hidden className="size-4" />}
-      />
-      {jobs.length === 0 ? (
-        <p className="text-body text-fg-dim">Todavía no hay clips en el plan.</p>
-      ) : (
-        // La tira scrollea sola y es alcanzable con teclado: `tabIndex` + `role` para
-        // que se pueda mover con las flechas sin tener que caer en un link de adentro.
-        <ol
-          tabIndex={0}
-          aria-label={title}
-          className="flex list-none gap-3 overflow-x-auto pb-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          {jobs.map((j) => (
-            <li key={j.id} className="w-56 shrink-0">
-              <JobCard
-                job={j}
-                projectId={projectId}
-                currentPrompt={meta.promptByRef.get(j.refId) ?? ""}
-                currentDialogue={meta.dialogueByRef.get(j.refId) ?? ""}
-                currentDuration={meta.durationByRef.get(j.refId)}
-                currentFinalPrompt={meta.finalPromptByRef.get(j.refId) ?? ""}
-                // `assetType` ANTES NO SE PASABA ACA y si en la otra vista, con el
-                // mismo `meta`. Es lo que le dice a la tarjeta si el dialogo se arma
-                // como selfie o como voz en off, asi que sin el, activar el override
-                // del prompt final en esta vista precargaba un prompt de avatar para
-                // un b-roll. La misma tarjeta daba dos resultados distintos segun la
-                // pestaña. Ver P-23 en §10 del plan.
-                assetType={meta.assetTypeByRef?.get(j.refId)}
-                modelOptions={meta.modelOptions}
-                projectModel={meta.projectModel}
-                formato={meta.formato}
-                {...handlers}
-                resolution={videoExtra?.resByClip.get(j.refId)}
-                resolutionOptions={videoExtra?.resolutionOptions}
-                onChangeResolution={videoExtra?.onChangeResolution}
-              />
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-/* ----------------------- Vista "Revisar / Arreglar" ---------------------- */
-/**
- * Vista LIVIANA: tabla compacta de clips. NO monta los `<video>`, y por eso es la
- * unica que aguanta los 95 clips de un VSL. El video se carga solo del clip que
- * abris con "Ver", y con `preload="none"`.
- *
- * Marcás los que estan mal (o pegás sus numeros) y "Revisar seleccionados" abre un
- * storyboard SOLO con esos, donde podés EDITAR el prompt/dialogo y "Guardar y
- * regenerar". Todo lo editado se persiste al plan, que es de donde lee el export.
- */
-function FixView({
-  jobs,
-  projectId,
-  ordenByClip,
-  dialogueByRef,
+  timelineItems,
   videoModels,
-  onRegenerateMany,
-  onRegenerate,
+  projectVideoModel,
+  assetTypeByRef,
+  ordenByClip,
+  resByClip,
+  resolutionOptions,
+  selectedClipId,
+  onSelectClip,
   onSave,
+  onRegenerate,
+  onRegenerateMany,
+  onChangeResolution,
 }: {
-  jobs: JobRecord[];
+  vids: JobRecord[];
   projectId: string;
-  ordenByClip: Map<string, number>;
-  dialogueByRef: Map<string, string>;
+  timelineItems: BatchTimelineItem[];
   videoModels: { id: string; label: string }[];
-  onRegenerateMany: (jobIds: string[]) => void;
-  onRegenerate: (jobId: string) => void;
+  projectVideoModel: string;
+  assetTypeByRef: Map<string, "avatar" | "broll">;
+  ordenByClip: Map<string, number>;
+  resByClip: Map<string, string>;
+  resolutionOptions: string[];
+  selectedClipId: string | null;
+  onSelectClip: (clipId: string | null) => void;
   onSave: (jobId: string, payload: SavePayload) => void;
+  onRegenerate: (jobId: string) => void;
+  onRegenerateMany: (jobIds: string[]) => void;
+  onChangeResolution: (clipId: string, r: string) => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [numbersText, setNumbersText] = useState("");
-  const [reviewing, setReviewing] = useState(false);
+  const [confirmarLote, setConfirmarLote] = useState(false);
 
-  const rows = useMemo(
-    () =>
-      [...jobs].sort(
-        (a, b) => (ordenByClip.get(a.refId) ?? 0) - (ordenByClip.get(b.refId) ?? 0)
-      ),
-    [jobs, ordenByClip]
+  // Si el proyecto cambia de tener 0 clips a tenerlos (primer load), o si el
+  // seleccionado ya no existe (se borro/regenero con otro id), cae al primero.
+  // La selección la controla `PipelinePage` (ver comentario ahí sobre por qué).
+  useEffect(() => {
+    if (timelineItems.length === 0) {
+      if (selectedClipId !== null) onSelectClip(null);
+      return;
+    }
+    if (!selectedClipId || !timelineItems.some((it) => it.clipId === selectedClipId)) {
+      onSelectClip(timelineItems[0].clipId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timelineItems, selectedClipId]);
+
+  // ─── El ancho del panel: localStorage + limites + doble-click reset ────────
+  const [asideW, setAsideW] = useState<number>(anchoInicial);
+  const [dragging, setDragging] = useState(false);
+  const arrastreRef = useRef<{ x0: number; w0: number } | null>(null);
+
+  useEffect(() => {
+    const guardado = window.localStorage.getItem(LS_ASIDE_W);
+    if (guardado) {
+      const n = Number(guardado);
+      if (Number.isFinite(n)) setAsideW(Math.min(anchoMaximo(), Math.max(ASIDE_MIN, n)));
+    }
+  }, []);
+
+  const persistAncho = useCallback((w: number) => {
+    setAsideW(w);
+    window.localStorage.setItem(LS_ASIDE_W, String(w));
+  }, []);
+
+  const startDrag = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      arrastreRef.current = { x0: e.clientX, w0: asideW };
+      setDragging(true);
+      const max = anchoMaximo();
+      function move(ev: MouseEvent) {
+        const st = arrastreRef.current;
+        if (!st) return;
+        const next = Math.min(max, Math.max(ASIDE_MIN, st.w0 + (st.x0 - ev.clientX)));
+        setAsideW(next);
+      }
+      function up() {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+        setDragging(false);
+        setAsideW((w) => {
+          window.localStorage.setItem(LS_ASIDE_W, String(w));
+          return w;
+        });
+      }
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    },
+    [asideW]
   );
 
-  function selectByNumbers() {
-    const nums = new Set(
-      numbersText
-        .split(/[^0-9]+/)
-        .filter(Boolean)
-        .map((n) => Number(n))
+  const resetAncho = useCallback(() => persistAncho(anchoInicial()), [persistAncho]);
+  const toggleAncho = useCallback(() => {
+    persistAncho(
+      asideW > ASIDE_WIDE
+        ? anchoInicial()
+        : Math.max(ASIDE_MIN, Math.round(window.innerWidth * 0.6))
     );
-    if (nums.size === 0) return;
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const j of rows) {
-        const o = ordenByClip.get(j.refId);
-        if (o != null && nums.has(o)) next.add(j.id);
-      }
+  }, [asideW, persistAncho]);
+
+  // ─── Teclado: flechas arriba/abajo cambian de clip ──────────────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === "textarea" || tag === "input") return;
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      const idx = timelineItems.findIndex((it) => it.clipId === selectedClipId);
+      if (idx === -1) return;
+      e.preventDefault();
+      const next =
+        e.key === "ArrowDown"
+          ? Math.min(timelineItems.length - 1, idx + 1)
+          : Math.max(0, idx - 1);
+      const nextId = timelineItems[next]?.clipId;
+      if (nextId) onSelectClip(nextId);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [timelineItems, selectedClipId, onSelectClip]);
+
+  const totalDur = useMemo(
+    () => timelineItems.reduce((acc, it) => acc + it.duracionSeg, 0),
+    [timelineItems]
+  );
+
+  const selectedItem =
+    timelineItems.find((it) => it.clipId === selectedClipId) ?? null;
+  const selectedJob = selectedItem
+    ? vids.find((j) => j.refId === selectedItem.clipId) ?? null
+    : null;
+
+  const toggleSel = useCallback((clipId: string) => {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(clipId)) next.delete(clipId);
+      else next.add(clipId);
       return next;
     });
-  }
-
-  /*
-    Estos tres reciben el id en vez de cerrar sobre el: asi son estables y el `memo`
-    de `FixRow` puede ahorrar el render de las 94 filas que no cambiaron cuando tocás
-    un checkbox o escribis en el campo de numeros.
-  */
-  const toggleSel = useCallback((id: string) => {
-    setSelected((s) => alternar(s, id));
-  }, []);
-  const toggleExp = useCallback((id: string) => {
-    setExpanded((s) => alternar(s, id));
   }, []);
 
-  const sel = selected.size;
-  const selectedJobs = rows.filter((j) => selected.has(j.id));
-  const fallidos = rows.filter((j) => j.status === "failed").length;
+  const selectedJobIds = useMemo(
+    () =>
+      vids.filter((j) => selected.has(j.refId)).map((j) => j.id),
+    [vids, selected]
+  );
+  const fallidos = timelineItems.filter((it) => it.status === "failed").length;
 
-  // Storyboard de revision: solo los seleccionados, con prompt EDITABLE + imagen input + JSON.
-  if (reviewing && selectedJobs.length > 0) {
+  if (timelineItems.length === 0) {
     return (
-      <ReviewStoryboard
-        jobs={selectedJobs}
-        projectId={projectId}
-        ordenByClip={ordenByClip}
-        videoModels={videoModels}
-        onRegenerateAll={(ids) => onRegenerateMany(ids)}
-        onSave={onSave}
-        onClose={() => setReviewing(false)}
-      />
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <Card className="flex flex-wrap items-end gap-3">
-        <div className="min-w-[240px] flex-1">
-          {/*
-            Sin `hint`: el bloque del campo tiene que terminar en el input para que
-            `items-end` alinee los botones con el borde de abajo del input y no con el
-            de un texto de ayuda. La explicacion esta en el parrafo del final.
-          */}
-          <Input
-            label="Números de los clips que están mal"
-            placeholder="12, 45, 78…"
-            value={numbersText}
-            onChange={(e) => setNumbersText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                selectByNumbers();
-              }
-            }}
-            className="font-mono tnum"
-          />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={selectByNumbers} disabled={numbersText.trim() === ""}>
-            Marcar
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() =>
-              setSelected(
-                new Set(rows.filter((j) => j.status === "failed").map((j) => j.id))
-              )
-            }
-            disabled={fallidos === 0}
-            icon={<WarningCircle aria-hidden className="size-4" />}
-            title="Marca todos los clips que fallaron"
-          >
-            Marcar fallidos (<span className="tnum">{fallidos}</span>)
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={() => setSelected(new Set())}
-            disabled={sel === 0}
-            icon={<Broom aria-hidden className="size-4" />}
-          >
-            Limpiar
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => setReviewing(true)}
-            disabled={sel === 0}
-            icon={<MagnifyingGlass aria-hidden className="size-4" />}
-          >
-            Revisar / editar (<span className="tnum">{sel}</span>)
-          </Button>
-        </div>
-      </Card>
-
-      {rows.length === 0 ? (
+      <div className="flex min-h-0 flex-1 items-center justify-center px-4 sm:px-6">
         <EmptyState
           icon={<FilmSlate aria-hidden className="size-6" />}
           title="No hay clips de video"
           body="Este proyecto no tiene clips generados por IA en el plan, así que no hay nada que revisar acá."
         />
-      ) : (
-        <div className="overflow-x-auto rounded-lg bg-surface">
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="grid min-h-0 flex-1 border-t border-divider"
+      style={{
+        gridTemplateColumns: `minmax(0,1fr) ${asideW}px`,
+        userSelect: dragging ? "none" : "auto",
+      }}
+    >
+      {/* ─── Columna izquierda: timeline grande + lista con scroll propio ──── */}
+      <div className="flex min-h-0 flex-col">
+        <div className="flex flex-none flex-col gap-1.5 border-b border-divider px-4 py-3 sm:px-6">
+          <div className="flex items-center justify-between text-label text-fg-dim">
+            <span>
+              Línea de tiempo ·{" "}
+              <span className="font-mono tnum text-fg">{timelineItems.length}</span> clips
+            </span>
+            <span className="font-mono tnum">{formatDuration(totalDur)}</span>
+          </div>
+          <TimelineClips
+            items={timelineItems}
+            seleccionado={selectedClipId}
+            onSeleccionar={onSelectClip}
+            alto={44}
+          />
+        </div>
+
+        {/* Barra de seleccion multiple / regenerar en lote: reemplaza a la vieja
+            vista "Revisar/Arreglar" con checkboxes, ahora integrada arriba de la
+            lista en vez de en una pestaña separada. */}
+        <div className="flex flex-none flex-wrap items-center gap-2 border-b border-divider px-4 py-2 sm:px-6">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setSelected(new Set(timelineItems.filter((it) => it.status === "failed").map((it) => it.clipId)))}
+            disabled={fallidos === 0}
+            icon={<WarningCircle aria-hidden className="size-3.5" />}
+            title="Marca todos los clips que fallaron"
+          >
+            Marcar fallidos (<span className="tnum">{fallidos}</span>)
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setSelected(new Set())}
+            disabled={selected.size === 0}
+            icon={<Broom aria-hidden className="size-3.5" />}
+          >
+            Limpiar
+          </Button>
+          <span className="flex-1" />
+          {selected.size > 0 && (
+            <>
+              <span className="text-label text-fg-dim">
+                <span className="font-mono tnum text-fg">{selected.size}</span>{" "}
+                seleccionados
+              </span>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => setConfirmarLote(true)}
+                icon={<Coins aria-hidden className="size-3.5" />}
+                title="Vuelve a generar todos los seleccionados con lo que ya está guardado en el plan"
+              >
+                Regenerar sin editar
+              </Button>
+            </>
+          )}
+        </div>
+        <Confirmar
+          abierto={confirmarLote}
+          onCambio={setConfirmarLote}
+          title="¿Regenerar todos sin editar?"
+          detalle={`Se vuelven a generar ${selectedJobIds.length} ${
+            selectedJobIds.length === 1 ? "job" : "jobs"
+          } con lo que ya está guardado en el plan. Cada video se cobra aparte y no hay forma de cancelar lo que ya salió.`}
+          labelConfirmar={`Regenerar ${selectedJobIds.length}`}
+          peligroso
+          onConfirmar={() => onRegenerateMany(selectedJobIds)}
+        />
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2 sm:px-4">
           <table className="w-full text-body">
-            <caption className="sr-only">
-              Clips del proyecto, en orden de timeline
-            </caption>
+            <caption className="sr-only">Clips del proyecto, en orden de timeline</caption>
             <thead>
               <tr className="border-b border-divider text-left text-label uppercase tracking-wide text-fg-dim">
-                <th scope="col" className="w-10 px-2 py-2">
+                <th scope="col" className="w-8 px-2 py-2">
                   <span className="sr-only">Marcar</span>
                 </th>
-                <th scope="col" className="w-12 px-2 py-2">
+                <th scope="col" className="w-10 px-2 py-2">
                   #
+                </th>
+                <th scope="col" className="w-12 px-2 py-2">
+                  <span className="sr-only">Miniatura</span>
                 </th>
                 <th scope="col" className="px-2 py-2">
                   Clip
                 </th>
-                <th scope="col" className="w-32 px-2 py-2">
-                  Estado
+                <th scope="col" className="w-14 px-2 py-2">
+                  Dur.
                 </th>
                 <th scope="col" className="px-2 py-2">
                   Diálogo
                 </th>
-                <th scope="col" className="w-28 px-2 py-2">
-                  <span className="sr-only">Acciones</span>
+                <th scope="col" className="w-32 px-2 py-2">
+                  Estado
                 </th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((j) => (
-                <FixRow
-                  key={j.id}
-                  job={j}
-                  orden={ordenByClip.get(j.refId) ?? 0}
-                  dialogo={dialogueByRef.get(j.refId) ?? ""}
-                  selected={selected.has(j.id)}
-                  expanded={expanded.has(j.id)}
-                  projectId={projectId}
-                  onToggleSel={toggleSel}
-                  onToggleExp={toggleExp}
-                  onRegenerate={onRegenerate}
+              {timelineItems.map((it) => (
+                <FilaClip
+                  key={it.clipId}
+                  item={it}
+                  activo={it.clipId === selectedClipId}
+                  marcado={selected.has(it.clipId)}
+                  onSelect={onSelectClip}
+                  onToggleMarcado={toggleSel}
                 />
               ))}
             </tbody>
           </table>
         </div>
-      )}
+      </div>
 
-      <p className="max-w-prose text-label text-fg-dim">
-        <b className="font-medium text-fg">Ver</b> carga solo ese video: los demás no
-        se bajan, y por eso la lista no se arrastra con 95 clips. Marcá los malos y{" "}
-        <b className="font-medium text-fg">Revisar / editar</b> abre un storyboard solo
-        con esos, donde podés editar el prompt y el diálogo. Lo que guardás queda en el
-        plan, que es de donde lee el export a ffmpeg.
-      </p>
+      {/* ─── Manija de resize + panel editor ──────────────────────────────── */}
+      <aside className="relative flex min-h-0 flex-col gap-3.5 overflow-y-auto border-l border-divider px-5 py-4">
+        {/*
+          Manija de 8px sobre el borde izquierdo, mitad afuera (`-left-1`) para que
+          el area de agarre no le robe 8px al contenido del panel. `col-resize` +
+          doble click reset, igual que el handoff.
+        */}
+        <div
+          onMouseDown={startDrag}
+          onDoubleClick={resetAncho}
+          title="Arrastrá para ajustar · doble click para volver al ancho inicial"
+          className="absolute -left-1 top-0 bottom-0 z-10 flex w-2 cursor-col-resize items-center justify-center hover:bg-accent/15"
+        >
+          <span className="h-8 w-0.5 rounded-sm bg-border" aria-hidden />
+        </div>
+
+        {selectedItem && (
+          <ClipEditor
+            key={selectedItem.clipId}
+            item={selectedItem}
+            job={selectedJob}
+            projectId={projectId}
+            videoModels={videoModels}
+            projectVideoModel={projectVideoModel}
+            assetType={assetTypeByRef.get(selectedItem.clipId)}
+            orden={ordenByClip.get(selectedItem.clipId) ?? selectedItem.orden}
+            resolution={resByClip.get(selectedItem.clipId)}
+            resolutionOptions={resolutionOptions}
+            asideW={asideW}
+            onToggleWide={toggleAncho}
+            onPrev={() => {
+              const idx = timelineItems.findIndex((it) => it.clipId === selectedClipId);
+              const prevId = timelineItems[Math.max(0, idx - 1)]?.clipId;
+              if (prevId) onSelectClip(prevId);
+            }}
+            onNext={() => {
+              const idx = timelineItems.findIndex((it) => it.clipId === selectedClipId);
+              const nextId =
+                timelineItems[Math.min(timelineItems.length - 1, idx + 1)]?.clipId;
+              if (nextId) onSelectClip(nextId);
+            }}
+            onSave={onSave}
+            onRegenerate={onRegenerate}
+            onChangeResolution={onChangeResolution}
+          />
+        )}
+      </aside>
     </div>
   );
 }
 
-/** Agrega o saca un id de un Set, sin mutar el original. */
-function alternar(set: Set<string>, id: string): Set<string> {
-  const next = new Set(set);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  return next;
-}
-
-/**
- * Una fila de la tabla. Va en `memo` con callbacks que reciben el id, para que tocar
- * un checkbox no re-renderice las otras 94.
- */
-const FixRow = memo(function FixRow({
-  job,
-  orden,
-  dialogo,
-  selected,
-  expanded,
-  projectId,
-  onToggleSel,
-  onToggleExp,
-  onRegenerate,
+/** Una fila de la lista de clips. `memo` porque tocar un checkbox no debe re-renderizar
+ * las otras N filas — mismo motivo que `FixRow` tenia en la version anterior. */
+const FilaClip = memo(function FilaClip({
+  item,
+  activo,
+  marcado,
+  onSelect,
+  onToggleMarcado,
 }: {
-  job: JobRecord;
-  orden: number;
-  dialogo: string;
-  selected: boolean;
-  expanded: boolean;
-  projectId: string;
-  onToggleSel: (jobId: string) => void;
-  onToggleExp: (jobId: string) => void;
-  onRegenerate: (jobId: string) => void;
+  item: BatchTimelineItem;
+  activo: boolean;
+  marcado: boolean;
+  onSelect: (clipId: string) => void;
+  onToggleMarcado: (clipId: string) => void;
 }) {
-  const estado = estadoDeJob(job.status);
-  const ver = encodeURIComponent(job.updatedAt ?? "");
-  const videoUrl = job.outputPath
-    ? `/api/files/${projectId}/${job.outputPath}?v=${ver}`
-    : null;
+  const estado = estadoDeClip(item);
   return (
-    <>
-      <tr
-        className={cn(
-          "border-b border-divider transition-colors",
-          selected ? "bg-accent/5" : "hover:bg-surface-hi/50"
-        )}
-      >
-        <td className="px-2 py-2 align-top">
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={() => onToggleSel(job.id)}
-            aria-label={`Marcar el clip ${orden}, ${job.label}`}
-            className="size-4 accent-accent"
-          />
-        </td>
-        <td className="px-2 py-2 align-top font-mono tnum text-fg-dim">{orden}</td>
-        <td className="px-2 py-2 align-top">
-          <div className="font-medium text-fg">{job.label}</div>
-          {/*
-            `job.error` puede estar poblado en un job que NO fallo (se usa como nota:
-            "salieron 1/2 variantes"). Por eso el color sale del ESTADO del job y no
-            de que exista el texto: el estado es `job.status` y nada mas.
-          */}
-          {job.error && (
-            <div
-              className={cn(
-                "mt-0.5 text-label",
-                estado.tone === "danger" ? "text-danger" : "text-fg-dim"
-              )}
-            >
-              {job.error}
-            </div>
-          )}
-        </td>
-        <td className="px-2 py-2 align-top">
-          <Badge tone={estado.tone} punto animado={estado.animado}>
-            {estado.label}
-          </Badge>
-        </td>
-        <td className="px-2 py-2 align-top text-label text-fg-dim">{dialogo}</td>
-        <td className="px-2 py-2 align-top">
-          <div className="flex gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onToggleExp(job.id)}
-              aria-expanded={expanded}
-              icon={
-                expanded ? (
-                  <EyeSlash aria-hidden className="size-3.5" />
-                ) : (
-                  <Eye aria-hidden className="size-3.5" />
-                )
-              }
-            >
-              {expanded ? "Ocultar" : "Ver"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onRegenerate(job.id)}
-              title="Regenerar solo este clip, sin editar. Cuesta plata."
-              aria-label={`Regenerar el clip ${orden} sin editar`}
-            >
-              <ArrowCounterClockwise aria-hidden className="size-3.5" />
-            </Button>
-          </div>
-        </td>
-      </tr>
-      {expanded && (
-        <tr className="border-b border-divider bg-bg/40">
-          <td />
-          <td colSpan={5} className="px-2 pb-3">
-            {videoUrl ? (
-              <div className="flex flex-col items-start gap-1.5">
-                <video
-                  key={videoUrl}
-                  src={videoUrl}
-                  controls
-                  preload="none"
-                  playsInline
-                  aria-label={`Video del clip ${orden}`}
-                  className="max-h-[70vh] w-auto max-w-full rounded-lg bg-bg"
-                />
-                <a
-                  href={`${videoUrl}${videoUrl.includes("?") ? "&" : "?"}dl=1`}
-                  download
-                  className="inline-flex items-center gap-1.5 rounded-sm text-label text-accent transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  title="Baja este clip solo, sin el zip del proyecto entero"
-                >
-                  <DownloadSimple aria-hidden className="size-3.5" />
-                  Descargar este clip
-                </a>
-              </div>
-            ) : (
-              <span className="text-label text-fg-dim">
-                {estado.animado ? "Todavía se está generando." : "Sin video todavía."}
-              </span>
-            )}
-          </td>
-        </tr>
+    <tr
+      className={cn(
+        "cursor-pointer border-b border-divider transition-colors",
+        activo ? "bg-accent/5" : "hover:bg-surface-hi/50"
       )}
-    </>
+      onClick={() => onSelect(item.clipId)}
+    >
+      <td className="px-2 py-1.5 align-middle" onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          checked={marcado}
+          onChange={() => onToggleMarcado(item.clipId)}
+          aria-label={`Marcar el clip ${item.orden}`}
+          className="size-4 accent-accent"
+        />
+      </td>
+      <td className="px-2 py-1.5 align-middle font-mono tnum text-fg-dim">{item.orden}</td>
+      <td className="px-2 py-1.5 align-middle">
+        {item.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={item.imageUrl}
+            alt=""
+            aria-hidden
+            className="h-12 w-9 rounded-sm bg-bg object-cover"
+          />
+        ) : (
+          <span
+            aria-hidden
+            className="block h-12 w-9 rounded-sm bg-surface-hi"
+          />
+        )}
+      </td>
+      <td className="max-w-0 px-2 py-1.5 align-middle">
+        <span className="block truncate font-mono text-label text-fg">{item.label}</span>
+      </td>
+      <td className="px-2 py-1.5 align-middle font-mono tnum text-label text-fg-dim">
+        {item.duracionSeg}s
+      </td>
+      <td className="max-w-0 px-2 py-1.5 align-middle">
+        <span className="block truncate text-label text-fg-dim" title={item.dialogo}>
+          {item.dialogo}
+        </span>
+      </td>
+      <td className="px-2 py-1.5 align-middle">
+        <Badge tone={estado.tone} punto animado={estado.animado}>
+          {estado.label}
+        </Badge>
+      </td>
+    </tr>
   );
 });
 
-/* --------------------- Storyboard de revisión (editable) --------------------- */
+/* ------------------------------------------------------------------------- */
+/* El panel editor de un clip: header + medios + campos + acciones.          */
+/* ------------------------------------------------------------------------- */
 
 interface PreviewData {
   type: "image" | "video";
@@ -1369,11 +1217,9 @@ interface PreviewData {
   model?: string;
   durationSec?: number;
   resolution?: string;
-  modo?: string;
   executedPrompt: string;
   autoPrompt?: string;
   promptOverride?: string | null;
-  hasPromptOverride?: boolean;
   json: unknown;
   updatedAt?: string;
   outputPath?: string | null;
@@ -1381,167 +1227,54 @@ interface PreviewData {
   refs?: { id: string; kind: string; file: string | null }[];
 }
 
-function ReviewStoryboard({
-  jobs,
-  projectId,
-  ordenByClip,
-  videoModels,
-  onRegenerateAll,
-  onSave,
-  onClose,
-}: {
-  jobs: JobRecord[];
-  projectId: string;
-  ordenByClip: Map<string, number>;
-  videoModels: { id: string; label: string }[];
-  onRegenerateAll: (ids: string[]) => void;
-  onSave: (jobId: string, payload: SavePayload) => void;
-  onClose: () => void;
-}) {
-  const [confirmar, setConfirmar] = useState(false);
-
-  return (
-    <div className="flex flex-col gap-3">
-      <Card className="flex flex-wrap items-center gap-3">
-        <Button
-          variant="ghost"
-          onClick={onClose}
-          icon={<ArrowLeft aria-hidden className="size-4" />}
-        >
-          Volver a la lista
-        </Button>
-        <p className="text-body text-fg-dim">
-          <span className="font-mono tnum text-fg">{jobs.length}</span>{" "}
-          {jobs.length === 1 ? "clip" : "clips"} para revisar
-        </p>
-        {/*
-          ─── EL BOTON MAS CARO DE LA APP ─────────────────────────────────────
-          `danger` y con confirmacion que dice el numero. Regenera TODOS los
-          seleccionados de una: en un VSL son decenas de dolares, y hasta ahora era un
-          click directo sin vuelta atras. Los otros dos botones de guardado viven en
-          cada tarjeta y son `secondary`, porque uno no gasta nada y el otro gasta
-          por UN clip.
-        */}
-        <Button
-          variant="danger"
-          className="ml-auto"
-          onClick={() => setConfirmar(true)}
-          icon={<Coins aria-hidden className="size-4" />}
-          title="Vuelve a generar todos los seleccionados con lo que ya está guardado en el plan"
-        >
-          Regenerar todos sin editar (<span className="tnum">{jobs.length}</span>)
-        </Button>
-        <Confirmar
-          abierto={confirmar}
-          onCambio={setConfirmar}
-          title="¿Regenerar todos sin editar?"
-          detalle={`Se vuelven a generar ${jobs.length} ${
-            jobs.length === 1 ? "job" : "jobs"
-          } con lo que ya está guardado en el plan. Cada video se cobra aparte y no hay forma de cancelar lo que ya salió.`}
-          labelConfirmar={`Regenerar ${jobs.length}`}
-          peligroso
-          onConfirmar={() => onRegenerateAll(jobs.map((j) => j.id))}
-        />
-      </Card>
-      <div className="flex flex-col gap-4">
-        {jobs.map((j) => (
-          <ReviewCard
-            key={j.id}
-            job={j}
-            projectId={projectId}
-            orden={ordenByClip.get(j.refId) ?? 0}
-            videoModels={videoModels}
-            onSave={onSave}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 }
 
-/**
- * Bloque colapsable para el prompt final y el JSON.
- *
- * No es un `<details>` con un `<button>` adentro del `<summary>`, que es lo que tenia
- * antes: un control interactivo dentro de un summary es HTML invalido y el click se
- * pelea con el toggle. Y el contenido se renderiza SIEMPRE con `hidden`, para que el
- * `aria-controls` del boton no apunte a un id que no existe cuando esta cerrado.
- */
-function Colapsable({
-  id,
-  titulo,
-  abierto,
-  onToggle,
-  accion,
-  nota,
-  children,
-}: {
-  id: string;
-  titulo: string;
-  abierto: boolean;
-  onToggle: () => void;
-  accion?: React.ReactNode;
-  nota?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-sm bg-bg">
-      <div className="flex flex-wrap items-center gap-2 px-2 py-1.5">
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onToggle}
-          aria-expanded={abierto}
-          aria-controls={id}
-          icon={
-            <CaretDown
-              aria-hidden
-              className={cn("size-3.5 transition-transform", abierto && "rotate-180")}
-            />
-          }
-        >
-          {titulo}
-        </Button>
-        {accion}
-      </div>
-      <div id={id} hidden={!abierto}>
-        {children}
-        {nota && <p className="px-2 pb-2 text-label text-fg-dim">{nota}</p>}
-      </div>
-    </div>
-  );
-}
-
-function ReviewCard({
+function ClipEditor({
+  item,
   job,
   projectId,
-  orden,
   videoModels,
+  projectVideoModel,
+  orden,
+  resolution,
+  resolutionOptions,
+  asideW,
+  onToggleWide,
+  onPrev,
+  onNext,
   onSave,
+  onRegenerate,
+  onChangeResolution,
 }: {
-  job: JobRecord;
+  item: BatchTimelineItem;
+  job: JobRecord | null;
   projectId: string;
-  orden: number;
   videoModels: { id: string; label: string }[];
+  projectVideoModel: string;
+  assetType?: "avatar" | "broll";
+  orden: number;
+  resolution?: string;
+  resolutionOptions: string[];
+  asideW: number;
+  onToggleWide: () => void;
+  onPrev: () => void;
+  onNext: () => void;
   onSave: (jobId: string, payload: SavePayload) => void;
+  onRegenerate: (jobId: string) => void;
+  onChangeResolution: (clipId: string, r: string) => void;
 }) {
   const [data, setData] = useState<PreviewData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showVideo, setShowVideo] = useState(false);
   const [copiado, setCopiado] = useState<boolean | null>(null);
   const [verPrompt, setVerPrompt] = useState(false);
-  const [verJson, setVerJson] = useState(false);
 
-  // Campos editables (se inicializan desde el JSON del plan al cargar el preview).
   const [vprompt, setVprompt] = useState("");
   const [dialog, setDialog] = useState("");
   const [duration, setDuration] = useState<number>(8);
   const [selectedModel, setSelectedModel] = useState("");
-  // Override del prompt final (avanzado).
   const [overrideOn, setOverrideOn] = useState(false);
   const [finalPromptText, setFinalPromptText] = useState("");
 
@@ -1549,13 +1282,16 @@ function ReviewCard({
 
   /*
     ─── LA PRECARGA DE LOS CAMPOS. NO TOCAR EL ORDEN NI LAS DEPS ──────────────
-    Depende de `job.updatedAt`, y eso es lo que hace que al guardar los campos
-    vuelvan a leerse del PLAN ya persistido y que el prompt final read-only se
-    recalcule. Si se saca esa dependencia, la tarjeta sigue mostrando lo que
-    escribiste aunque el guardado haya fallado, y el error no se ve hasta el video
-    final exportado.
+    Depende de `job.id` y `job.updatedAt` (no de `item`, que se reconstruye en cada
+    poll): si se saca esa dependencia, el editor sigue mostrando lo que escribiste
+    aunque el guardado haya fallado, y el error no se ve hasta el video final
+    exportado. Sin job (clip FILMAR_REAL) no hay preview que pedir.
   */
   useEffect(() => {
+    if (!job) {
+      setData(null);
+      return;
+    }
     let alive = true;
     fetch(`/api/jobs/${job.id}/preview`)
       .then((r) => r.json())
@@ -1564,18 +1300,13 @@ function ReviewCard({
         const pd = d as PreviewData;
         setData(pd);
         const j = asRecord(pd.json);
-        if (pd.type === "video") {
-          setVprompt(String(j.video_prompt ?? ""));
-          setDialog(String(j.dialogo ?? ""));
-          setDuration(Number(j.duracion_seg ?? 8) || 8);
-          setSelectedModel(pd.model ?? "");
-          // Si el clip ya tiene override del prompt final, lo precargamos activo.
-          const ov = (pd.promptOverride ?? "").trim();
-          setOverrideOn(Boolean(ov));
-          setFinalPromptText(ov || pd.autoPrompt || pd.executedPrompt || "");
-        } else {
-          setVprompt(String(j.prompt ?? ""));
-        }
+        setVprompt(String(j.video_prompt ?? ""));
+        setDialog(String(j.dialogo ?? ""));
+        setDuration(Number(j.duracion_seg ?? 8) || 8);
+        setSelectedModel(pd.model ?? "");
+        const ov = (pd.promptOverride ?? "").trim();
+        setOverrideOn(Boolean(ov));
+        setFinalPromptText(ov || pd.autoPrompt || pd.executedPrompt || "");
       })
       .catch((e) => {
         if (alive) setErr(e instanceof Error ? e.message : String(e));
@@ -1583,8 +1314,9 @@ function ReviewCard({
     return () => {
       alive = false;
     };
-  }, [job.id, job.updatedAt]);
+  }, [job?.id, job?.updatedAt]);
 
+  useEffect(() => setShowVideo(false), [job?.id]);
   useEffect(
     () => () => {
       if (timerCopia.current) clearTimeout(timerCopia.current);
@@ -1592,32 +1324,21 @@ function ReviewCard({
     []
   );
 
-  const estado = estadoDeJob(job.status);
-  const ver = encodeURIComponent(job.updatedAt ?? "");
+  const estado = estadoDeClip(item);
+  const ver = job ? encodeURIComponent(job.updatedAt ?? "") : "";
   const fileUrl = (p: string) => `/api/files/${projectId}/${p}?v=${ver}`;
-  const inputImg = data?.inputImage?.file ?? null;
-  const outUrl = job.outputPath ? fileUrl(job.outputPath) : null;
-  const isVideo = data?.type === "video";
+  const inputImg = data?.inputImage?.file ?? item.imageUrl ?? null;
+  const outUrl = job?.outputPath ? fileUrl(job.outputPath) : item.videoUrl;
 
-  // Si el modelo guardado no esta en el catalogo, se agrega como opcion: sin esto el
-  // selector arranca en blanco y guardar pisaria el modelo sin que nadie lo eligiera.
   const opcionesModelo = useMemo<ReadonlyArray<SelectOption<string>>>(() => {
     const base = videoModels.map((m) => ({ value: m.id, label: m.label }));
-    if (selectedModel && !base.some((o) => o.value === selectedModel)) {
-      base.push({ value: selectedModel, label: selectedModel });
+    const actual = selectedModel || projectVideoModel;
+    if (actual && !base.some((o) => o.value === actual)) {
+      base.push({ value: actual, label: actual });
     }
     return base;
-  }, [videoModels, selectedModel]);
+  }, [videoModels, selectedModel, projectVideoModel]);
 
-  /**
-   * Copia el prompt final y dice la verdad sobre el resultado.
-   *
-   * `writeText` RECHAZA cuando la pestaña no tiene foco, cuando el permiso esta
-   * denegado o cuando el contexto no es seguro, y `navigator.clipboard` puede no
-   * existir. Antes no se esperaba ni se atajaba: quedaba una promesa rechazada sin
-   * dueño y el boton decia "copiado" igual. Mismo arreglo que la pantalla de
-   * resultado (P-20 del plan).
-   */
   async function copyPrompt() {
     if (!data?.executedPrompt) return;
     let ok = true;
@@ -1629,330 +1350,289 @@ function ReviewCard({
     }
     setCopiado(ok);
     if (timerCopia.current) clearTimeout(timerCopia.current);
-    // El fallo se queda mas tiempo: hay que leerlo y hacer algo al respecto.
     timerCopia.current = setTimeout(() => setCopiado(null), ok ? 1500 : 5000);
   }
 
   /*
     ─── EL GUARDADO. ES EL CAMINO CRITICO DE LA PANTALLA ──────────────────────
-    Arma el MISMO payload que antes, campo por campo, y lo manda por `onSave`, que es
-    `changePromptJob` del store. Ese es el unico camino que persiste al PLAN, y el
-    plan es de donde lee el export a ffmpeg: si esto se rompe, la edicion se pierde en
-    silencio y aparece recien en el video final.
-
-    `finalPrompt`: si el override esta activo se manda su contenido; si no, "" lo
-    BORRA en el backend y vuelve al armado automatico. Los dos casos son
-    intencionales y no se pueden colapsar en `undefined`.
+    Mismo payload que antes, mismo unico camino al plan (`onSave` -> `changePromptJob`).
   */
   function save(regenerate: boolean) {
-    const payload: SavePayload = { prompt: vprompt, regenerate };
-    if (isVideo) {
-      payload.dialogue = dialog;
-      payload.durationSec = duration;
-      if (selectedModel) payload.model = selectedModel;
-      payload.finalPrompt = overrideOn ? finalPromptText : "";
-    }
+    if (!job) return;
+    const payload: SavePayload = {
+      prompt: vprompt,
+      dialogue: dialog,
+      durationSec: duration,
+      regenerate,
+    };
+    if (selectedModel) payload.model = selectedModel;
+    payload.finalPrompt = overrideOn ? finalPromptText : "";
     onSave(job.id, payload);
   }
 
-  const botonCopiar = (
-    <Button
-      size="sm"
-      variant="ghost"
-      onClick={() => void copyPrompt()}
-      disabled={!data?.executedPrompt}
-      icon={
-        copiado === null ? (
-          <Copy aria-hidden className="size-3.5" />
-        ) : copiado ? (
-          <Check aria-hidden className="size-3.5" />
-        ) : (
-          <WarningCircle aria-hidden className="size-3.5" />
-        )
-      }
-    >
-      Copiar
-    </Button>
-  );
-
   return (
-    <Card className="flex flex-col gap-3">
-      {/* ─── Cabecera de la tarjeta: quien es, como esta, y los dos guardados ─ */}
-      <CardHeader className="mb-0 flex-wrap items-center">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="font-mono tnum text-body font-semibold text-fg-dim">
-            #{orden}
-          </span>
-          <CardTitle className="truncate">{job.label}</CardTitle>
-          <Badge tone={estado.tone} punto animado={estado.animado}>
-            {estado.label}
-          </Badge>
-          {data?.model && (
-            <span className="font-mono text-label text-fg-dim">{data.model}</span>
+    <>
+      {/* ─── Header: id, badge, agrandar/achicar, flechas ↑↓ ────────────────── */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono tnum text-title font-semibold text-fg">
+          #{orden} {item.label}
+        </span>
+        <Badge tone={estado.tone} punto animado={estado.animado}>
+          {estado.label}
+        </Badge>
+        <span className="flex-1" />
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onToggleWide}
+          title={asideW > ASIDE_WIDE ? "Achicar el panel" : "Agrandar el panel"}
+          icon={
+            asideW > ASIDE_WIDE ? (
+              <ArrowsInLineHorizontal aria-hidden className="size-4" />
+            ) : (
+              <ArrowsOutLineHorizontal aria-hidden className="size-4" />
+            )
+          }
+        />
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onPrev}
+          title="Clip anterior (↑)"
+          icon={<CaretUp aria-hidden className="size-4" />}
+        />
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onNext}
+          title="Clip siguiente (↓)"
+          icon={<CaretDown aria-hidden className="size-4" />}
+        />
+      </div>
+
+      {/* ─── Frame inicial + Clip, en 2 columnas 9:16 ────────────────────────── */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-col gap-1">
+          <span className="text-label text-fg-dim">Frame inicial</span>
+          {inputImg ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              /*
+                `inputImg` viene de dos fuentes con forma distinta: del preview del
+                job llega una ruta RELATIVA al proyecto (`images/x.png`), y de
+                `item.imageUrl` llega ya resuelta como una URL de la ruta de archivos.
+                El chequeo es contra el prefijo COMPLETO de esa ruta y no contra el
+                prefijo `api` a secas para que la verificacion de endpoints
+                (`tasks/_verificacion-endpoints.sh`) siga contando los endpoints reales
+                de la pantalla: un prefijo pelado en el codigo le figura como un
+                endpoint nuevo y marca una regresion que no existe.
+              */
+              src={inputImg.startsWith("/api/files/") ? inputImg : fileUrl(inputImg)}
+              alt={`Frame inicial del clip ${orden}`}
+              className="aspect-[9/16] w-full rounded-md bg-bg object-cover"
+            />
+          ) : (
+            <div className="flex aspect-[9/16] w-full items-center justify-center rounded-md bg-surface-hi text-label text-fg-dim">
+              sin imagen
+            </div>
           )}
         </div>
-        {/*
-          Los dos guardados de ESTE clip. Los dos `secondary` porque los dos son la
-          accion normal de la tarjeta, y se distinguen por el icono y por el texto: el
-          disquete no gasta nada, las monedas si. El tercer boton, el que regenera
-          TODO el lote, vive arriba y es `danger`.
-        */}
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <Button
-            size="sm"
-            onClick={() => save(false)}
-            icon={<FloppyDisk aria-hidden className="size-3.5" />}
-            title="Guarda los cambios en el plan SIN regenerar. Se usan en el próximo render y en el export"
-          >
-            Guardar
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => save(true)}
-            icon={<Coins aria-hidden className="size-3.5" />}
-            title="Guarda los cambios y vuelve a generar este clip con lo editado. Cuesta plata"
-          >
-            Guardar y regenerar
-          </Button>
-        </div>
-      </CardHeader>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* ─── Izquierda: la imagen de entrada y el resultado actual ───────── */}
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
-            <p className="text-label font-medium uppercase tracking-wide text-fg-dim">
-              Imagen de entrada
-            </p>
-            {inputImg ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={fileUrl(inputImg)}
-                alt={`Frame inicial del clip ${orden}`}
-                className="max-h-72 w-auto rounded-lg bg-bg"
+        <div className="flex flex-col gap-1">
+          <span className="text-label text-fg-dim">Clip</span>
+          {outUrl ? (
+            showVideo ? (
+              <video
+                key={outUrl}
+                src={outUrl}
+                controls
+                preload="none"
+                playsInline
+                aria-label={`Clip ${orden}`}
+                className="aspect-[9/16] w-full rounded-md bg-bg object-cover"
               />
-            ) : data?.refs && data.refs.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {data.refs.map((r) =>
-                  r.file ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      key={r.id}
-                      src={fileUrl(r.file)}
-                      alt={`Referencia ${r.id}`}
-                      className="max-h-48 w-auto rounded-lg bg-bg"
-                    />
-                  ) : (
-                    <span key={r.id} className="text-label text-fg-dim">
-                      {r.id} (sin archivo)
-                    </span>
-                  )
-                )}
-              </div>
             ) : (
-              <p className="text-body text-fg-dim">Sin imagen de entrada.</p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <p className="text-label font-medium uppercase tracking-wide text-fg-dim">
-              Resultado actual
-            </p>
-            {outUrl ? (
-              showVideo ? (
-                <>
-                  {/*
-                    `max-h-[70vh]` y no `max-h-72` (288px): un clip vertical en 288px de
-                    alto queda de 162px de ancho, del tamaño de un sello, y esta es la
-                    pantalla donde hay que decidir si el clip sirve o se regenera.
-                    `max-w-full` para que en un formato horizontal no desborde la tarjeta.
-                  */}
-                  <video
-                    key={outUrl}
-                    src={outUrl}
-                    controls
-                    preload="none"
-                    playsInline
-                    aria-label={`Resultado del clip ${orden}`}
-                    className="max-h-[70vh] w-auto max-w-full rounded-lg bg-bg"
-                  />
-                  <a
-                    href={`${outUrl}${outUrl.includes("?") ? "&" : "?"}dl=1`}
-                    download
-                    className="inline-flex w-fit items-center gap-1.5 rounded-sm text-label text-accent transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    title="Baja este clip solo, sin el zip del proyecto entero"
-                  >
-                    <DownloadSimple aria-hidden className="size-3.5" />
-                    Descargar este clip
-                  </a>
-                </>
-              ) : (
-                // El <video> se monta recien al tocar el boton: es el mismo criterio
-                // de la lista, y con varios clips abiertos suma.
-                <Button
-                  size="sm"
-                  onClick={() => setShowVideo(true)}
-                  icon={<Play aria-hidden className="size-3.5" />}
-                >
-                  Ver resultado actual
-                </Button>
-              )
-            ) : (
-              <p className="text-body text-fg-dim">
-                {estado.animado ? "Todavía se está generando." : "Sin resultado."}
-              </p>
-            )}
-          </div>
+              <button
+                type="button"
+                onClick={() => setShowVideo(true)}
+                className="flex aspect-[9/16] w-full items-center justify-center rounded-md bg-surface-hi text-fg-dim transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <Play aria-hidden className="size-6" />
+              </button>
+            )
+          ) : (
+            <div className="flex aspect-[9/16] w-full items-center justify-center rounded-md bg-surface-hi text-label text-fg-dim">
+              {estado.animado ? "generando…" : "sin video"}
+            </div>
+          )}
         </div>
+      </div>
 
-        {/* ─── Derecha: los campos editables, el prompt final y el JSON ────── */}
-        <div className="flex flex-col gap-3">
+      {job ? (
+        <>
           <Textarea
-            label={isVideo ? "Prompt visual del video" : "Prompt de la imagen"}
-            hint="Es lo que describe la escena. Se guarda en el plan."
+            label="Diálogo (es-AR, lo que dice la persona)"
+            value={dialog}
+            onChange={(e) => setDialog(e.target.value)}
+            className="h-20 leading-relaxed"
+          />
+
+          <div className="grid grid-cols-2 gap-3">
+            <Select
+              label="Duración"
+              value={String(duration)}
+              onValueChange={(v) => setDuration(Number(v))}
+              options={DURACION_OPCIONES}
+            />
+            {videoModels.length > 0 && (
+              <Select
+                label="Modelo"
+                value={selectedModel || projectVideoModel}
+                onValueChange={setSelectedModel}
+                options={opcionesModelo}
+              />
+            )}
+          </div>
+
+          {resolutionOptions.length > 0 && (
+            <Select
+              label="Resolución"
+              value={resolution ?? resolutionOptions[0]}
+              onValueChange={(r) => onChangeResolution(item.clipId, r)}
+              options={resolutionOptions.map((r) => ({ value: r, label: r }))}
+            />
+          )}
+
+          <Textarea
+            label="Prompt visual del video"
+            hint="Describe la escena. Se guarda en el plan."
             value={vprompt}
             onChange={(e) => setVprompt(e.target.value)}
             spellCheck={false}
-            className="h-28 leading-relaxed"
+            className="h-24 leading-relaxed"
           />
 
-          {isVideo && (
-            <>
-              <Textarea
-                label="Diálogo (es-AR, lo que dice la persona)"
-                value={dialog}
-                onChange={(e) => setDialog(e.target.value)}
-                className="h-20 leading-relaxed"
+          <div className="flex flex-col gap-2 rounded-lg border border-accent/40 bg-accent/5 p-3">
+            <label className="flex cursor-pointer items-start gap-2 text-body text-fg">
+              <input
+                type="checkbox"
+                checked={overrideOn}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setOverrideOn(on);
+                  if (on && !finalPromptText.trim()) {
+                    setFinalPromptText(data?.autoPrompt ?? data?.executedPrompt ?? "");
+                  }
+                }}
+                className="mt-0.5 size-4 shrink-0 accent-accent"
               />
-              <div className="flex flex-wrap items-start gap-3">
-                <div className="w-24">
-                  <Select
-                    label="Duración"
-                    value={String(duration)}
-                    onValueChange={(v) => setDuration(Number(v))}
-                    options={DURACION_OPCIONES}
-                  />
-                </div>
-                {videoModels.length > 0 && (
-                  <div className="min-w-[200px] flex-1">
-                    <Select
-                      label="Modelo"
-                      value={selectedModel}
-                      onValueChange={setSelectedModel}
-                      options={opcionesModelo}
-                    />
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-
-          {isVideo ? (
-            /*
-              El override del prompt final va en `accent` porque en este sistema el
-              acento significa "esto espera una decision tuya", y esta es la unica
-              casilla de la pantalla que cambia lo que se le manda al modelo.
-            */
-            <div className="flex flex-col gap-2 rounded-lg border border-accent/40 bg-accent/5 p-3">
-              <label className="flex cursor-pointer items-start gap-2 text-body text-fg">
-                <input
-                  type="checkbox"
-                  checked={overrideOn}
-                  onChange={(e) => {
-                    const on = e.target.checked;
-                    setOverrideOn(on);
-                    if (on && !finalPromptText.trim()) {
-                      setFinalPromptText(data?.autoPrompt ?? data?.executedPrompt ?? "");
-                    }
-                  }}
-                  className="mt-0.5 size-4 shrink-0 accent-accent"
-                />
-                <span>
-                  Editar a mano el prompt FINAL
-                  <span className="block text-label text-fg-dim">
-                    Se manda tal cual al modelo de video.
-                  </span>
+              <span>
+                Editar a mano el prompt final
+                <span className="block text-label text-fg-dim">
+                  Se manda tal cual al modelo de video.
                 </span>
-              </label>
-              {overrideOn ? (
-                <>
-                  <p className="max-w-prose text-label leading-relaxed text-fg-dim">
-                    Ignora el armado automático (UGC/selfie, lip-sync, voz y acento).
-                    Es para b-roll que NO tiene que mostrar a una persona hablando. Si
-                    querés diálogo hablado, incluilo vos. Se guarda al tocar
-                    «Guardar».
-                  </p>
-                  <Textarea
-                    label="Prompt final que se ejecuta"
-                    labelOculto
-                    mono
-                    value={finalPromptText}
-                    onChange={(e) => setFinalPromptText(e.target.value)}
-                    spellCheck={false}
-                    className="h-40 whitespace-pre-wrap leading-relaxed"
-                  />
+              </span>
+            </label>
+            {overrideOn ? (
+              <Textarea
+                label="Prompt final que se ejecuta"
+                labelOculto
+                mono
+                value={finalPromptText}
+                onChange={(e) => setFinalPromptText(e.target.value)}
+                spellCheck={false}
+                className="h-32 whitespace-pre-wrap leading-relaxed"
+              />
+            ) : (
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-label font-medium text-fg-dim">
+                    Prompt final que se ejecuta
+                  </span>
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="self-start"
-                    onClick={() =>
-                      setFinalPromptText(data?.autoPrompt ?? data?.executedPrompt ?? "")
+                    onClick={() => setVerPrompt((v) => !v)}
+                    aria-expanded={verPrompt}
+                    icon={
+                      verPrompt ? (
+                        <EyeSlash aria-hidden className="size-3.5" />
+                      ) : (
+                        <Eye aria-hidden className="size-3.5" />
+                      )
                     }
-                    icon={<ArrowCounterClockwise aria-hidden className="size-3.5" />}
                   >
-                    Cargar el prompt automático
+                    {verPrompt ? "Ocultar" : "Ver"}
                   </Button>
-                </>
-              ) : (
-                <Colapsable
-                  id={`prompt-final-${job.id}`}
-                  titulo="Ver el prompt final automático"
-                  abierto={verPrompt}
-                  onToggle={() => setVerPrompt((v) => !v)}
-                  accion={botonCopiar}
-                  nota="Se recalcula al guardar, a partir del prompt visual y el diálogo de arriba."
-                >
-                  <pre className="max-h-52 overflow-auto whitespace-pre-wrap px-2 pb-2 font-mono text-label leading-relaxed text-fg-dim">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void copyPrompt()}
+                    disabled={!data?.executedPrompt}
+                    icon={
+                      copiado === null ? (
+                        <Copy aria-hidden className="size-3.5" />
+                      ) : copiado ? (
+                        <Check aria-hidden className="size-3.5" />
+                      ) : (
+                        <WarningCircle aria-hidden className="size-3.5" />
+                      )
+                    }
+                  >
+                    Copiar
+                  </Button>
+                </div>
+                {verPrompt && (
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-sm bg-bg px-2 py-1.5 font-mono text-label leading-relaxed text-fg-dim">
                     {data ? data.executedPrompt : "cargando…"}
                   </pre>
-                </Colapsable>
-              )}
-            </div>
-          ) : (
-            <Colapsable
-              id={`prompt-final-${job.id}`}
-              titulo="Ver el prompt final que se ejecuta"
-              abierto={verPrompt}
-              onToggle={() => setVerPrompt((v) => !v)}
-              accion={botonCopiar}
-              nota="Se recalcula al guardar. Editá los campos de arriba, no este texto."
-            >
-              <pre className="max-h-52 overflow-auto whitespace-pre-wrap px-2 pb-2 font-mono text-label leading-relaxed text-fg-dim">
-                {data ? data.executedPrompt : "cargando…"}
-              </pre>
-            </Colapsable>
-          )}
-
-          <Colapsable
-            id={`json-${job.id}`}
-            titulo={`Ver el JSON del ${isVideo ? "clip" : "imagen"}`}
-            abierto={verJson}
-            onToggle={() => setVerJson((v) => !v)}
-          >
-            <pre className="max-h-52 overflow-auto whitespace-pre-wrap px-2 pb-2 font-mono text-label leading-relaxed text-fg-dim">
-              {data ? JSON.stringify(data.json, null, 2) : "cargando…"}
-            </pre>
-          </Colapsable>
-
-          {/* El aviso de copia fallida se VE, porque hay que hacer algo al respecto. */}
-          <div aria-live="polite">
-            {copiado === false && (
-              <p className="flex items-start gap-2 rounded-sm bg-danger/10 px-2.5 py-2 text-label text-danger">
-                <WarningCircle aria-hidden className="mt-px size-3.5 shrink-0" />
-                No se pudo copiar. Abrí el prompt y seleccioná el texto a mano.
-              </p>
+                )}
+              </div>
             )}
           </div>
+
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              size="sm"
+              onClick={() => save(false)}
+              icon={<FloppyDisk aria-hidden className="size-3.5" />}
+              title="Guarda los cambios en el plan SIN regenerar. Se usan en el próximo render y en el export"
+            >
+              Guardar
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="border-accent text-accent hover:bg-accent/10"
+              onClick={() => save(true)}
+              icon={<ArrowsClockwise aria-hidden className="size-3.5" />}
+              title="Guarda los cambios y vuelve a generar este clip con lo editado. Cuesta plata"
+            >
+              Guardar y regenerar
+            </Button>
+            {outUrl && (
+              <Button asChild size="sm" variant="ghost" title="Baja este clip solo">
+                <a
+                  href={`${outUrl}${outUrl.includes("?") ? "&" : "?"}dl=1`}
+                  download
+                >
+                  <DownloadSimple aria-hidden className="size-3.5" />
+                </a>
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onRegenerate(job.id)}
+              title="Regenerar solo este clip, sin editar. Cuesta plata."
+              icon={<ArrowCounterClockwise aria-hidden className="size-3.5" />}
+            >
+              Regenerar
+            </Button>
+          </div>
+          <p className="text-label text-fg-dim">
+            Guardar no gasta: se usa en el próximo render y en el export. Regenerar
+            cuesta.
+          </p>
 
           {err && (
             <p
@@ -1963,8 +1643,14 @@ function ReviewCard({
               {err}
             </p>
           )}
-        </div>
-      </div>
-    </Card>
+        </>
+      ) : (
+        <p className="flex items-start gap-2 rounded-sm bg-accent/10 px-2.5 py-2 text-body text-fg">
+          <MagnifyingGlass aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" />
+          Este clip es <code className="font-mono">FILMAR_REAL</code>: lo subís vos
+          desde la pantalla de Resultado. No tiene job de video ni prompt para editar.
+        </p>
+      )}
+    </>
   );
 }
