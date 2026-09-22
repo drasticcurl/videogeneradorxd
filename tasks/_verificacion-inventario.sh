@@ -24,19 +24,42 @@ chequear() {
   fi
 }
 
-echo "═══ 1. Las 8 pantallas que se rediseñan ═══"
+# ─── ACTUALIZACION 2026-09-22 ────────────────────────────────────────────────
+#
+# El rediseño del handoff `design_handoff_rediseno_augc` reemplazo cinco archivos de
+# este inventario, y por eso el inventario cambia con ellos. Los cinco tenian
+# reemplazo, no se fue ninguna funcionalidad:
+#
+#   src/app/batch/review/ReviewDeck.tsx  ─┐  las dos pantallas de revision se
+#   src/app/batch/videos/VideoDeck.tsx   ─┘  unifican en src/app/batch/ReviewBoard.tsx
+#   src/components/ProjectTabs.tsx        ->  el segmented del header de cada proyecto
+#   src/components/FlowGraph.tsx          ->  src/components/Etapas.tsx
+#   src/app/batch/ClipTimeline.tsx        ->  src/components/MiniTimeline.tsx
+#
+# Este script es un PRE-FLIGHT, no un gate de regresion: sirve para que un agente no
+# cree de cero algo que ya existe. Dejarlo apuntando a archivos borrados lo volvia
+# ruido permanente (5 FALLOS fijos), y un verificador que siempre falla es un
+# verificador que nadie vuelve a correr. El gate de regresion de verdad es
+# `_verificacion-endpoints.sh`, que sigue exigiendo que ninguna pantalla pierda un
+# fetch.
+
+echo "═══ 1. Las pantallas que se rediseñan ═══"
 for f in \
   src/app/page.tsx \
+  src/app/HomeProyectos.tsx \
+  src/app/NuevoProyectoWizard.tsx \
   src/app/login/page.tsx \
   src/app/login/LoginForm.tsx \
   src/app/imagenes/page.tsx \
+  src/app/imagenes/ImagenesTabs.tsx \
   src/app/imagenes/ImagenesBoard.tsx \
+  src/app/imagenes/NuevaTanda.tsx \
+  src/app/imagenes/GeneradorMasivo.tsx \
   src/app/batch/page.tsx \
   src/app/batch/BatchBoard.tsx \
+  src/app/batch/ReviewBoard.tsx \
   src/app/batch/review/page.tsx \
-  src/app/batch/review/ReviewDeck.tsx \
   src/app/batch/videos/page.tsx \
-  src/app/batch/videos/VideoDeck.tsx \
   src/app/project/\[id\]/pipeline/page.tsx \
   src/app/project/\[id\]/result/page.tsx
 do chequear "$f"; done
@@ -46,14 +69,14 @@ echo "═══ 2. Componentes compartidos existentes ═══"
 for f in \
   src/components/JobCard.tsx \
   src/components/StatusBadge.tsx \
-  src/components/ProjectTabs.tsx \
   src/components/ModelSelectorBar.tsx \
   src/components/CostEstimatePanel.tsx \
   src/components/LogPanel.tsx \
   src/components/JsonEditor.tsx \
-  src/components/FlowGraph.tsx \
-  src/app/SessionBar.tsx \
-  src/app/batch/ClipTimeline.tsx
+  src/components/Etapas.tsx \
+  src/components/MiniTimeline.tsx \
+  src/components/Pantalla.tsx \
+  src/app/SessionBar.tsx
 do chequear "$f"; done
 
 echo
