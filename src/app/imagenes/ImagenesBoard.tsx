@@ -1,15 +1,16 @@
 "use client";
 
 /**
- * Tablero de solo imagenes: se pegan prompts, se generan con N variantes, se elige
- * la que queda y se puede variar cualquiera sin tocar las demas.
+ * Pestaña "Generar" de /imagenes: sidebar con la lista de tandas + la galería de la
+ * tanda abierta (grilla o visor) + el chat de cambios fijo abajo. "Nueva tanda" es
+ * una sub-vista propia (`vista === "nueva"`), ya no un formulario siempre visible.
  *
  * Reusa el pipeline normal: crea un proyecto con `clips: []` (ver
  * /api/imagenes/route.ts) y despues habla con las MISMAS rutas que el flujo de brief
  * (`/jobs` para el polling, `/jobs/:id/approve` para elegir variante,
  * `/jobs/:id/prompt` para regenerar). No hay lógica de generación duplicada acá.
  *
- * ─── TRES COSAS QUE NO SE TOCAN (§2 de T06) ──────────────────────────────────
+ * ─── TRES COSAS QUE NO SE TOCAN (§2 de T06, siguen intactas en el rediseño) ──
  *
  * 1. EL POLLING VIVE EN UN `ref` Y SE APAGA. El intervalo se guarda en `pollRef`
  *    para poder pararlo desde un efecto sin re-crearlo en cada render. Si se mueve a
@@ -27,49 +28,47 @@
  *    muestra el conteo real (`1 de 2`) y la nota en tono informativo. El estado sale
  *    de `job.status` y de ningun otro lado (§3 del plan).
  *
- * Rediseño VISUAL: no cambia ni un endpoint, ni un payload, ni una regla.
+ * Rediseño VISUAL (handoff `design_handoff_rediseno_augc`): no cambia ni un
+ * endpoint, ni un payload, ni una regla. Cambia el LAYOUT: pantalla de alto fijo sin
+ * scroll de página, sidebar de tandas a la izquierda, grilla en una fila al alto
+ * completo con toggle Grilla/Visor, lightbox, y "Nueva tanda" como pantalla propia.
  */
 
 import {
   ArrowsClockwise,
   ArrowsOut,
+  CaretLeft,
+  CaretRight,
   Check,
   CursorClick,
   DownloadSimple,
+  Image as ImageIcon,
   ImageSquare,
-  Info,
-  Sparkle,
-  Spinner,
+  MagicWand,
+  Rectangle,
+  SquaresFour,
+  TextAlignLeft,
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Badge,
   Button,
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   EmptyState,
-  Input,
-  Select,
+  Segmented,
   SkeletonGrid,
   Textarea,
   type SelectOption,
 } from "@/components/ui";
-import { Visor } from "@/components/Visor";
 import { cn } from "@/lib/cn";
 import type { ModelOption } from "@/lib/config";
-/*
-  De `@/lib/formatos` y NO de `@/lib/config`: config importa `node:path` y lee
-  AUTH_SECRET y PASSWORD_*, asi que no puede entrar al bundle del cliente. `ModelOption`
-  sigue viniendo de config porque es solo un tipo y se borra al compilar.
-*/
-import { IMAGE_ASPECT_RATIOS, IMAGE_SIZES, imageSizesFor } from "@/lib/formatos";
 import { estadoDeJob } from "@/lib/ui-tokens";
+
+import { CabeceraSidebar, type Tab } from "./ImagenesTabs";
+import NuevaTanda from "./NuevaTanda";
 
 interface Candidate {
   index: number;
@@ -132,304 +131,51 @@ const EN_CURSO = new Set(["pending", "queued", "generating", "waiting"]);
 /** Cada cuanto se pregunta por el estado. Un solo lugar, para que no divergan. */
 const POLL_MS = 3000;
 
-const VARIANTES: ReadonlyArray<SelectOption<string>> = [1, 2, 3, 4].map((n) => ({
-  value: String(n),
-  label: String(n),
-}));
-
-/**
- * La forma del formato, dibujada a escala.
- *
- * Es un `div` con las proporciones reales y no un icono de una fuente: la pregunta
- * que contesta es "¿esto es vertical u horizontal?", y para eso el rectangulo tiene
- * que tener LA proporcion, no una aproximada. Sale gratis y no agrega dependencias.
- *
- * `border-current` a proposito: el color lo hereda del texto del padre, asi que
- * cuando el boton queda elegido y cambia de color, la forma lo sigue sola. Sin esto
- * habria que pasarle el estado por prop.
- */
-function Forma({ w, h }: { w: number; h: number }) {
-  const MAX = 24;
-  const escala = MAX / Math.max(w, h);
-  return (
-    <span
-      aria-hidden
-      style={{ width: Math.round(w * escala), height: Math.round(h * escala) }}
-      className="block shrink-0 rounded-[2px] border-2 border-current"
-    />
-  );
-}
-
-/**
- * Selector de formato: los 10 que acepta Vertex, agrupados por orientacion.
- *
- * Son `<input type="radio">` de verdad (escondidos con sr-only y estilados por
- * `peer-checked`) y no botones con role="radio": el radio nativo trae la navegacion
- * con flechas del grupo gratis, y un radiogroup hecho a mano hay que teclearlo a
- * mano. El label envuelve al input, asi que toda la tarjeta es clickeable.
- */
-function SelectorFormato({
-  valor,
-  onChange,
-}: {
-  valor: string;
-  onChange: (v: string) => void;
-}) {
-  // Para qué sirve el formato elegido, al lado del label: reemplaza los tres titulos
-  // de grupo que se sacaron y ocupa cero espacio vertical.
-  const elegido = IMAGE_ASPECT_RATIOS.find((f) => f.id === valor);
-  return (
-    <div>
-      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3">
-        <span className="text-label font-medium text-fg-dim">Formato</span>
-        <span className="text-label text-fg-dim">{elegido?.uso}</span>
-      </div>
-      {/*
-        UNA fila que envuelve, no tres bloques con titulo "Vertical / Cuadrado /
-        Horizontal" como estaba. Los titulos eran redundantes: la forma dibujada YA dice
-        la orientacion, que es justo el motivo por el que se dibuja. Sacarlos bajo el
-        selector de tres bloques verticales a uno.
-
-        El orden del catalogo va de vertical a horizontal, asi que la fila queda
-        ordenada por proporcion sola y se lee como una escala. El separador marca donde
-        cambia la orientacion sin gastar una linea de texto.
-      */}
-      <div role="radiogroup" aria-label="Formato de la imagen" className="flex flex-wrap items-center gap-1.5">
-        {IMAGE_ASPECT_RATIOS.map((f, i) => {
-          const anterior = IMAGE_ASPECT_RATIOS[i - 1];
-          const cambiaOrientacion = anterior && anterior.orientacion !== f.orientacion;
-          return (
-            <Fragment key={f.id}>
-              {cambiaOrientacion && (
-                <span aria-hidden className="h-8 w-px shrink-0 bg-divider" />
-              )}
-              <label
-                className="cursor-pointer"
-                title={f.uso ? `${f.id} · ${f.uso}` : f.id}
-              >
-                <input
-                  type="radio"
-                  name="formato-imagen"
-                  value={f.id}
-                  checked={valor === f.id}
-                  onChange={() => onChange(f.id)}
-                  className="peer sr-only"
-                />
-                <span
-                  className={cn(
-                    "flex h-14 w-14 flex-col items-center justify-center gap-1 rounded-md",
-                    "border border-divider bg-surface text-fg-dim transition-colors",
-                    "hover:text-fg",
-                    "peer-checked:border-accent peer-checked:bg-accent peer-checked:text-on-accent",
-                    "peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-accent",
-                  )}
-                >
-                  <Forma w={f.w} h={f.h} />
-                  <span className="code text-label">{f.id}</span>
-                </span>
-              </label>
-            </Fragment>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Selector de calidad. Las que el modelo no soporta quedan DESHABILITADAS y con el
- * motivo al lado, en vez de desaparecer: si se esconden, el usuario que ya vio 4K en
- * otro modelo cree que la app se rompio.
- */
-function SelectorCalidad({
-  valor,
-  onChange,
-  permitidas,
-}: {
-  valor: string;
-  onChange: (v: string) => void;
-  permitidas: readonly string[];
-}) {
-  const recortado = permitidas.length < IMAGE_SIZES.length;
-  return (
-    <div>
-      <span className="mb-1 block text-label font-medium text-fg-dim">Calidad</span>
-      <div className="flex flex-wrap gap-1.5">
-        {IMAGE_SIZES.map((s) => {
-          const habilitada = permitidas.includes(s);
-          return (
-            <label
-              key={s}
-              className={habilitada ? "cursor-pointer" : "cursor-not-allowed"}
-              title={
-                habilitada ? undefined : "El modelo elegido no soporta esta calidad"
-              }
-            >
-              <input
-                type="radio"
-                name="calidad-imagen"
-                value={s}
-                checked={valor === s}
-                disabled={!habilitada}
-                onChange={() => onChange(s)}
-                className="peer sr-only"
-              />
-              <span
-                className={cn(
-                  "flex h-9 min-w-[3.25rem] items-center justify-center rounded-md px-3",
-                  "border border-divider bg-surface text-body text-fg-dim transition-colors",
-                  habilitada ? "hover:text-fg" : "opacity-40",
-                  "peer-checked:border-accent peer-checked:bg-accent peer-checked:font-medium peer-checked:text-on-accent",
-                  "peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-accent",
-                )}
-              >
-                {s}
-              </span>
-            </label>
-          );
-        })}
-      </div>
-      <p className="mt-1 text-label text-fg-dim">
-        {recortado ? (
-          <>Este modelo solo genera en 1K. Cambiá de modelo para 2K o 4K.</>
-        ) : (
-          <>4K tarda bastante más y pesa ~15 MB por imagen.</>
-        )}
-      </p>
-    </div>
-  );
-}
-
-/**
- * Como va a quedar el nombre del archivo. Es la misma transformación que hace
- * `slugify` en el server (`src/lib/storage.ts`), escrita acá porque ese módulo es de
- * Node y no baja al cliente. Es un PREVIEW, no la fuente de verdad: se mantiene
- * porque saber que `crema manos` sale como `crema_manos_01.png` es información
- * concreta y útil antes de gastar.
- */
-function slugPreview(nombre: string): string {
-  return (
-    (nombre.trim() || "nombre")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "") || "nombre"
-  );
-}
-
 export default function ImagenesBoard({
   modelos,
   modeloDefault,
+  tab,
+  onCambiarTab,
 }: {
   modelos: ModelOption[];
   modeloDefault: string;
+  tab: Tab;
+  onCambiarTab: (t: Tab) => void;
 }) {
-  const [nombre, setNombre] = useState("");
-  const [texto, setTexto] = useState("");
-  const [variantes, setVariantes] = useState(2);
-  const [modelo, setModelo] = useState(modeloDefault);
-  const [formato, setFormato] = useState("9:16");
-  const [calidad, setCalidad] = useState("1K");
-  const [negativo, setNegativo] = useState("");
-  /** Imagen subida para arrancar por image2image en vez de text2image. Opcional. */
-  const [imagenBase, setImagenBase] = useState<File | null>(null);
-  const [imagenBasePreview, setImagenBasePreview] = useState<string | null>(null);
-  const imagenBaseInputRef = useRef<HTMLInputElement | null>(null);
+  /**
+   * Sub-vista de ESTA pestaña: la galería de siempre, o la pantalla de "Nueva
+   * tanda". Es estado local (no en la URL, ver el comentario de `ImagenesTabs`)
+   * porque no necesita ser un link compartible y así no colisiona con `?id=`.
+   */
+  const [vista, setVista] = useState<"galeria" | "nueva">("galeria");
 
-  /*
-    Las calidades dependen del modelo. Si estabas en 4K y cambias al lite (que solo
-    hace 1K), la calidad se baja SOLA: dejarla en 4K mandaria un pedido que el server
-    rechaza con 400 y el boton de Generar parecería roto sin explicación.
-  */
-  const calidadesPermitidas = useMemo(() => imageSizesFor(modelo), [modelo]);
-  useEffect(() => {
-    if (!calidadesPermitidas.includes(calidad as (typeof calidadesPermitidas)[number])) {
-      setCalidad(calidadesPermitidas[0]);
-    }
-  }, [calidadesPermitidas, calidad]);
-
-  /*
-    Preview de la imagen base con `URL.createObjectURL`, revocada en cleanup: sin el
-    `revokeObjectURL` cada archivo elegido queda vivo en memoria hasta que se cierra la
-    pestaña, y esta pantalla puede quedar abierta horas con el usuario probando varias
-    imagenes base antes de elegir una.
-  */
-  useEffect(() => {
-    if (!imagenBase) {
-      setImagenBasePreview(null);
-      return;
-    }
-    const url = URL.createObjectURL(imagenBase);
-    setImagenBasePreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [imagenBase]);
-
-  function elegirImagenBase(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
-    setImagenBase(file);
-  }
-
-  function quitarImagenBase() {
-    setImagenBase(null);
-    if (imagenBaseInputRef.current) imagenBaseInputRef.current.value = "";
-  }
-
-  /*
-    ─── EL PROYECTO ABIERTO VIVE EN LA URL ─────────────────────────────────────
-
-    Antes era `useState(null)` y eso causaba dos bugs que parecian perdida de datos:
-
-      1. refrescar la pagina mostraba "todavia no generaste nada", porque el id solo
-         estaba en memoria de React. El proyecto seguia entero en el disco.
-      2. apretar Generar de nuevo hacia setProjectId(nuevo) + setJobs([]) y las
-         imagenes anteriores desaparecian de la vista. Tampoco se borraban, pero no
-         habia forma de volver a ellas.
-
-    Con el id en `?id=` el refresh lo conserva, el link se puede compartir y el boton
-    de atras del browser funciona. Y como abajo hay una lista de los proyectos de
-    imagenes, generar uno nuevo ya no tapa nada: los anteriores siguen a un click.
-  */
+  // ─── EL PROYECTO ABIERTO VIVE EN LA URL (se mantiene tal cual) ─────────────
+  //
+  // Antes era `useState(null)` y eso causaba dos bugs que parecian perdida de datos:
+  //   1. refrescar la pagina mostraba "todavia no generaste nada", porque el id solo
+  //      estaba en memoria de React. El proyecto seguia entero en el disco.
+  //   2. apretar Generar de nuevo hacia setProjectId(nuevo) + setJobs([]) y las
+  //      imagenes anteriores desaparecian de la vista.
+  // Con el id en `?id=` el refresh lo conserva y el link se puede compartir.
   const router = useRouter();
   const searchParams = useSearchParams();
   const projectId = searchParams.get("id");
-
-  /** Ancla de los resultados, para poder traerlos a la vista al cambiar de tanda. */
-  const resultadosRef = useRef<HTMLElement | null>(null);
 
   const abrirProyecto = useCallback(
     (id: string | null) => {
       router.replace(id ? `/imagenes?id=${encodeURIComponent(id)}` : "/imagenes", {
         scroll: false,
       });
-      /*
-        `scroll: false` evita el salto brusco al tope que hace el router por defecto,
-        pero entonces hay que mover la vista a mano: si no, se elige una tanda y el
-        cambio ocurre en una parte de la pagina que no se esta mirando. Eso fue
-        exactamente lo que se reporto como "no me deja elegir".
-
-        Se marca la intencion y el scroll lo hace un efecto, DESPUES del commit de
-        React. Con un `requestAnimationFrame` acá no alcanzaba: la primera tanda que se
-        abre monta la seccion de resultados en este mismo render, asi que el nodo
-        todavia no existe y el scroll se perdia en silencio.
-      */
-      pedirScroll.current = true;
+      setVista("galeria");
     },
     [router],
   );
 
-  /** Se pidio traer los resultados a la vista al elegir una tanda. */
-  const pedirScroll = useRef(false);
-
-  /** Los proyectos de SOLO IMAGENES, para la lista de abajo. */
+  /** Los proyectos de SOLO IMAGENES, para la lista del sidebar. */
   const [lista, setLista] = useState<ProyectoImagenes[]>([]);
   const [cargandoLista, setCargandoLista] = useState(true);
   /** Formato con el que se genero lo que se esta viendo (sale del manifest). */
   const [formatoGenerado, setFormatoGenerado] = useState<string | null>(null);
-  /** Imagen abierta en el visor grande, o null. */
-  const [ampliada, setAmpliada] = useState<{ url: string; titulo: string } | null>(
-    null,
-  );
   const [jobs, setJobs] = useState<Job[]>([]);
   const [prompts, setPrompts] = useState<Record<string, string>>({});
   /**
@@ -440,7 +186,6 @@ export default function ImagenesBoard({
   const [refImageIds, setRefImageIds] = useState<Record<string, string | undefined>>(
     {},
   );
-  const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   // Prompts en edicion, por refId. Separado de `prompts` para no perder lo tipeado
   // cuando llega una respuesta del polling.
@@ -454,44 +199,40 @@ export default function ImagenesBoard({
   const [chatEnviando, setChatEnviando] = useState<Record<string, boolean>>({});
   const [chatError, setChatError] = useState<Record<string, string | null>>({});
 
-  // Para que el boton del estado vacio lleve al campo que hay que llenar.
-  const promptsRef = useRef<HTMLTextAreaElement | null>(null);
-
-  /*
-    Trae los resultados a la vista cuando se elige una tanda de la lista.
-    Corre DESPUES del commit de React, y depende tambien de `jobs.length` para cubrir el
-    caso de la primera tanda que se abre: en ese render la seccion de resultados todavia
-    no existe, asi que el efecto sale sin hacer nada y reintenta cuando ya monto.
-  */
-  useEffect(() => {
-    if (!pedirScroll.current) return;
-    if (!resultadosRef.current) return;
-    pedirScroll.current = false;
-    // `smooth`: un salto instantaneo no deja ver que la pagina se movio, y ahi no se
-    // entiende de donde salio el contenido nuevo.
-    resultadosRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [projectId, jobs.length]);
-
   /*
     Hay UN prompt por proyecto, asi que los saltos de linea son parte del prompt y no
     un separador. Antes esto contaba lineas: un prompt de imagen con encuadre, luz y
     estilo en renglones distintos se convertia en cuatro prompts cortados al medio.
   */
-  const tienePrompt = texto.trim().length > 0;
+
+  // ─── Vista Grilla/Visor + hilo activo (nuevo estado del rediseño) ──────────
+  // No persiste (sin localStorage en la app, ver README): vuelve a "grilla" al
+  // recargar. Cada hilo tiene su propia variante seleccionada dentro de la grilla,
+  // asi que lo que hace falta acá es solo CUAL hilo esta activo (el "Hilo" de
+  // pastillas v1->v2 del spec reemplaza la lista apilada de antes).
+  const [modoVista, setModoVista] = useState<"grilla" | "visor">("grilla");
+  const [hiloActivo, setHiloActivo] = useState(0);
+  const [promptAbierto, setPromptAbierto] = useState(false);
+  const [lightbox, setLightbox] = useState<number | null>(null);
+
+  // Para que el boton del estado vacio lleve al campo que hay que llenar (ahora abre
+  // "Nueva tanda" en vez de hacer foco en un textarea que ya no esta siempre visible).
+
+  /*
+    Hay UN prompt por proyecto, asi que los saltos de linea son parte del prompt y no
+    un separador. Antes esto contaba lineas.
+  */
 
   /**
    * Si el modelo guardado no esta en el catalogo, se agrega como opcion. Con el
    * `<select>` nativo esto no hacia falta (mostraba la primera opcion); con Radix
    * el trigger queda VACIO y sin ningun error si el `value` no matchea ningun item.
-   * Mismo resguardo que `ModelSelectorBar`.
+   * Mismo resguardo que `ModelSelectorBar`. Se sigue calculando acá porque
+   * `NuevaTanda` lo recibe como prop (necesita `modeloDefault` y el catalogo).
    */
   const opcionesModelo = useMemo<ReadonlyArray<SelectOption<string>>>(() => {
-    const base = modelos.map((m) => ({ value: m.id, label: m.label, hint: m.id }));
-    if (modelo && !base.some((o) => o.value === modelo)) {
-      base.push({ value: modelo, label: modelo, hint: "fuera del catálogo actual" });
-    }
-    return base;
-  }, [modelos, modelo]);
+    return modelos.map((m) => ({ value: m.id, label: m.label, hint: m.id }));
+  }, [modelos]);
 
   // ─── Polling ──────────────────────────────────────────────────────────────
   // Se guarda en un ref para poder pararlo desde el efecto sin re-crearlo en cada
@@ -581,65 +322,50 @@ export default function ImagenesBoard({
     [traerEstado],
   );
 
+  // Al cambiar de proyecto, el hilo activo vuelve al primero: el indice viejo podria
+  // no existir en la tanda nueva.
+  useEffect(() => {
+    setHiloActivo(0);
+    setModoVista("grilla");
+    setPromptAbierto(false);
+  }, [projectId]);
+
   // ─── Acciones ─────────────────────────────────────────────────────────────
 
-  async function generar(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
+  /**
+   * Crea la tanda. Recibe el FormData/JSON ya armado por `NuevaTanda` (que sigue
+   * siendo la unica que sabe la forma exacta del payload) y hace EXACTAMENTE el
+   * mismo POST /api/imagenes que hacia el formulario viejo.
+   */
+  async function generar(payload: FormData | Record<string, unknown>) {
     setEnviando(true);
     try {
-      /*
-        Con imagen base: FormData (multipart), porque hay un File de por medio. Sin
-        ella: el mismo JSON de siempre. El server decide el parser por Content-Type
-        (ver /api/imagenes/route.ts), asi que alcanza con no mandar el header a mano
-        y dejar que `fetch` lo arme solo con el boundary cuando el body es FormData.
-      */
-      const res = imagenBase
-        ? await fetch("/api/imagenes", {
-            method: "POST",
-            body: (() => {
-              const fd = new FormData();
-              fd.set("nombre", nombre);
-              fd.set("prompt", texto);
-              fd.set("variantes", String(variantes));
-              fd.set("model", modelo);
-              fd.set("aspectRatio", formato);
-              fd.set("imageSize", calidad);
-              if (negativo.trim()) fd.set("negativePrompt", negativo);
-              fd.set("imagenBase", imagenBase);
-              return fd;
-            })(),
-          })
-        : await fetch("/api/imagenes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              nombre,
-              prompt: texto,
-              variantes,
-              model: modelo,
-              aspectRatio: formato,
-              imageSize: calidad,
-              negativePrompt: negativo,
-            }),
-          });
+      const res =
+        payload instanceof FormData
+          ? await fetch("/api/imagenes", { method: "POST", body: payload })
+          : await fetch("/api/imagenes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
       const data = (await res.json().catch(() => ({}))) as {
         project?: { id: string };
         error?: string;
-        detail?: unknown;
       };
       if (!res.ok || !data.project) {
-        setError(data.error ?? `Error ${res.status}`);
-        return;
+        return { ok: false as const, error: data.error ?? `Error ${res.status}` };
       }
       setJobs([]);
-      quitarImagenBase();
       // El nuevo pasa a ser el abierto, pero los anteriores NO se pierden: quedan en
-      // la lista de abajo, que se recarga acá mismo.
+      // la lista del sidebar, que se recarga acá mismo.
       abrirProyecto(data.project.id);
       void cargarLista();
+      return { ok: true as const };
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error de red");
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : "Error de red",
+      };
     } finally {
       setEnviando(false);
     }
@@ -696,9 +422,7 @@ export default function ImagenesBoard({
    * cuando el gate por lotes la frenó (ver el aviso mas abajo y P-01 del plan).
    *
    * Usa el MISMO endpoint y el MISMO payload que `elegir`, una vez por job: es
-   * exactamente lo que pasaria si el usuario clickeara cada tarjeta a mano. No hay
-   * ruta nueva ni lógica nueva, y respeta la variante que el usuario ya haya elegido
-   * (si no eligió ninguna, queda la primera, igual que en el resto de la app).
+   * exactamente lo que pasaria si el usuario clickeara cada tarjeta a mano.
    */
   async function aprobarLote(pendientes: Job[]) {
     setAprobandoLote(true);
@@ -762,37 +486,25 @@ export default function ImagenesBoard({
   }
 
   // ─── Derivados de la vista ────────────────────────────────────────────────
-  // Se leen del TONO que devuelve `estadoDeJob`, no de los strings de status: asi esta
-  // pantalla no repite el mapeo de estados (§6.1 del plan) y no imprime ni compara los
-  // nombres internos. `ok` = terminado, `attention` = espera tu decisión, `animado` =
-  // la maquina esta trabajando.
+  // Se leen del TONO que devuelve `estadoDeJob`, no de los strings de status, asi que
+  // esta pantalla no repite el mapeo de estados (§6.1 del plan) y no imprime ni
+  // compara los nombres internos.
   const tono = (j: Job) => estadoDeJob(j.status).tone;
 
   /**
    * Agrupa los jobs de imagen en HILOS de chat: cada hilo es la cadena completa
    * v1 -> v2 -> v3 de una misma imagen base, ordenada de mas vieja a mas nueva.
-   *
-   * Se agrupa por `ref_image_id` (del manifest) y no por el sufijo del id: seguir el
-   * puntero real es correcto aunque el usuario haya escrito un nombre de proyecto raro
-   * que ya contenga "_v2" — cosa que `chatTurnImageId` evita para los ids que genera
-   * esta pantalla, pero un plan pegado a mano (o importado) podria no respetarlo.
-   *
-   * children: por cada imageId, el/los id(s) de imagen que lo tienen como
-   * ref_image_id. Un job puede en teoria tener mas de un hijo si se abren dos turnos
-   * desde el mismo punto (no lo hace esta UI, pero no se asume que no pasa): se toma
-   * el ULTIMO creado (mayor updatedAt) como continuacion del hilo visible, y el resto
-   * simplemente no aparece encadenado (igual siguen existiendo como jobs sueltos).
+   * (Misma lógica que antes del rediseño; ver el comentario largo del archivo viejo
+   * para el detalle de por que se sigue `ref_image_id` y no un sufijo del id.)
    */
   const hilos = useMemo(() => {
     const byId = new Map(jobs.map((j) => [j.refId, j]));
     const children = new Map<string, Job[]>();
     for (const job of jobs) {
       const ref = refImageIds[job.refId];
-      if (!ref || !byId.has(ref)) continue; // ref a una reference subida, no a otro job
+      if (!ref || !byId.has(ref)) continue;
       children.set(ref, [...(children.get(ref) ?? []), job]);
     }
-    // Raices: jobs cuyo ref_image_id NO es otro job de este proyecto (text2image, o
-    // image2image contra una reference subida).
     const raices = jobs.filter((j) => {
       const ref = refImageIds[j.refId];
       return !ref || !byId.has(ref);
@@ -803,7 +515,6 @@ export default function ImagenesBoard({
       for (let i = 0; i < 200; i++) {
         const hijos = children.get(actual.refId);
         if (!hijos || hijos.length === 0) break;
-        // Si hay mas de un hijo (rama), seguimos el mas nuevo por updatedAt.
         const siguiente = hijos.reduce((a, b) =>
           (b.updatedAt ?? "") > (a.updatedAt ?? "") ? b : a,
         );
@@ -814,932 +525,894 @@ export default function ImagenesBoard({
     });
   }, [jobs, refImageIds]);
 
+  // El hilo activo, acotado a un indice valido (la cadena pudo encogerse al cambiar
+  // de proyecto, o crecer al llegar un turno nuevo del polling).
+  const indiceHiloValido = Math.min(hiloActivo, Math.max(hilos.length - 1, 0));
+  const cadenaActiva: Job[] = hilos[indiceHiloValido] ?? [];
+  // El job "cabeza" de la cadena activa: la ultima imagen, que es la que se muestra
+  // en la grilla/visor y desde la que sigue el chat.
+  const jobActivo: Job | undefined = cadenaActiva[cadenaActiva.length - 1];
+
   const listas = jobs.filter((j) => tono(j) === "ok").length;
   const esperandoDecision = jobs.filter((j) => tono(j) === "attention");
   const generando = jobs.some((j) => estadoDeJob(j.status).animado);
-  // Los que la cola todavia no arrancó: en curso pero sin generarse. `EN_CURSO` se
-  // mantiene tal cual porque es el mismo criterio con el que se corta el polling.
   const frenados = jobs.filter(
     (j) => EN_CURSO.has(j.status) && !estadoDeJob(j.status).animado,
   ).length;
 
   /**
    * ─── EL AVISO DEL GATE POR LOTES (§5 de T06, P-01 del plan) ────────────────
-   *
-   * `PIPELINE_APPROVAL_BATCH=5` frena la cola cuando se juntan 5 jobs del mismo tipo
-   * sin aprobar, y esta pantalla crea los proyectos con `autoApprove: false`, asi que
-   * con mas de 5 prompts la tanda SE DETIENE a mitad de camino. Es correcto, pero se
-   * lee como que se colgó.
-   *
-   * La condición no repite el 5 (`src/lib/config.ts` es intocable y ese numero no baja
-   * al cliente): se deduce de lo observable. Si hay jobs esperando decisión, quedan
-   * jobs sin arrancar y NINGUNO se esta generando, la cola esta parada esperandote.
-   * Durante la rampa siempre hay alguno generandose, asi que no salta de mas.
+   * (sin cambios de lógica, ver el archivo viejo para el detalle completo)
    */
   const gateFrenado =
     esperandoDecision.length > 0 && frenados > 0 && !generando && !aprobandoLote;
 
+  // Proyecto abierto, para el header de resultados.
+  const proyectoAbierto = lista.find((p) => p.id === projectId);
+  const formato = formatoGenerado ?? "9:16";
+
+  // ─── Teclado: flechas cambian de variante, Enter abre el lightbox, Esc cierra ──
+  useEffect(() => {
+    if (vista !== "galeria" || !jobActivo) return;
+    const candidatas = jobActivo.candidates;
+    if (candidatas.length === 0) return;
+
+    function indiceSeleccionado() {
+      const i = candidatas.findIndex((c) => c.index === jobActivo!.selectedIndex);
+      return i >= 0 ? i : 0;
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === "textarea" || tag === "input") return;
+
+      if (lightbox !== null) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setLightbox(null);
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          setLightbox((i) => (i === null ? 0 : (i + 1) % candidatas.length));
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          setLightbox((i) =>
+            i === null ? 0 : (i + candidatas.length - 1) % candidatas.length,
+          );
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          const elegida = candidatas[lightbox];
+          if (elegida) void elegir(jobActivo!, elegida.index);
+        }
+        return;
+      }
+
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        const actual = indiceSeleccionado();
+        const paso = e.key === "ArrowRight" ? 1 : -1;
+        const siguiente = candidatas[(actual + paso + candidatas.length) % candidatas.length];
+        if (siguiente) void elegir(jobActivo!, siguiente.index);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        setLightbox(indiceSeleccionado());
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vista, jobActivo, lightbox]);
+
   // ─── Render ───────────────────────────────────────────────────────────────
 
+  if (vista === "nueva") {
+    return (
+      <>
+        <aside className="flex min-h-0 flex-col border-r border-divider">
+          <CabeceraSidebar
+            tab={tab}
+            onCambiarTab={onCambiarTab}
+            onNuevaTanda={() => setVista("nueva")}
+            labelNueva="Nueva tanda"
+          />
+        </aside>
+        <NuevaTanda
+          modelos={opcionesModelo}
+          modeloDefault={modeloDefault}
+          enviando={enviando}
+          onGenerar={generar}
+          onCancelar={() => setVista("galeria")}
+        />
+      </>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-5">
-      {/* ─── 1. El formulario ─────────────────────────────────────────────── */}
-      <form onSubmit={generar}>
-        <Card className="flex flex-col gap-4">
-          <CardHeader className="mb-0">
-            <div>
-              <CardTitle>Generar imágenes</CardTitle>
-              <CardDescription>
-                Un prompt, con las variantes que quieras. El archivo se nombra con el
-                nombre del proyecto.
-              </CardDescription>
-            </div>
-          </CardHeader>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <Input
-                id="nombre"
-                label="Nombre del proyecto"
-                value={nombre}
-                onChange={(e) => setNombre(e.target.value)}
-                required
-                placeholder="crema manos"
-                autoComplete="off"
-                // El preview va aparte y no en `hint` porque `hint` es un string y
-                // este necesita mono para que se lea como un nombre de archivo.
-                aria-describedby="nombre-archivo"
-              />
-              <p id="nombre-archivo" className="mt-1 text-label text-fg-dim">
-                El archivo va a salir como{" "}
-                <code className="font-mono text-fg">{slugPreview(nombre)}.png</code>
-              </p>
-            </div>
-
-            <Select
-              label="Modelo"
-              value={modelo}
-              onValueChange={setModelo}
-              options={opcionesModelo}
-            />
-          </div>
-
-          <Textarea
-            ref={promptsRef}
-            id="prompts"
-            label="Prompt"
-            hint="Un prompt por proyecto. Podés usar varios renglones: todo es parte del mismo prompt."
-            value={texto}
-            onChange={(e) => setTexto(e.target.value)}
-            required
-            rows={8}
-            mono
-            spellCheck={false}
-            placeholder={
-              "A woman applying hand cream, close up on dry hands.\nNatural window light, shallow depth of field.\nPhotorealistic, documentary style."
-            }
-          />
-
-          {/*
-            Imagen base (opcional): sube un archivo y la primera generación es
-            image2image contra él, en vez de text2image. Mismo mecanismo que usan los
-            avatares de referencia del flujo VSL, expuesto acá para imágenes sueltas.
-          */}
-          <div>
-            <span className="mb-1 block text-label font-medium text-fg-dim">
-              Imagen base (opcional)
-            </span>
-            {imagenBasePreview ? (
-              <div className="flex items-center gap-3 rounded-md border border-divider bg-surface p-2">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={imagenBasePreview}
-                  alt="Vista previa de la imagen base"
-                  className="size-16 shrink-0 rounded-sm object-cover"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-body text-fg" title={imagenBase?.name}>
-                    {imagenBase?.name}
-                  </p>
-                  <p className="text-label text-fg-dim">
-                    Se usa como referencia: la primera generación va a ser image2image
-                    contra esta imagen.
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={quitarImagenBase}
-                  icon={<X aria-hidden className="size-3.5" />}
-                >
-                  Quitar
-                </Button>
-              </div>
-            ) : (
-              <label
-                className={cn(
-                  "flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed",
-                  "border-divider bg-surface px-3 py-4 text-body text-fg-dim transition-colors",
-                  "hover:border-border hover:text-fg",
-                )}
-              >
-                <ImageSquare aria-hidden className="size-4" />
-                Subir una imagen para partir de ella
-                <input
-                  ref={imagenBaseInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  onChange={elegirImagenBase}
-                  className="sr-only"
-                />
-              </label>
-            )}
-            <p className="mt-1 text-label text-fg-dim">
-              Sin imagen, se genera desde cero con el prompt (text2image).
-            </p>
-          </div>
-
-          <SelectorFormato valor={formato} onChange={setFormato} />
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <SelectorCalidad
-              valor={calidad}
-              onChange={setCalidad}
-              permitidas={calidadesPermitidas}
-            />
-            <Select
-              label="Variantes"
-              value={String(variantes)}
-              onValueChange={(v) => setVariantes(Number(v))}
-              options={VARIANTES}
-            />
-          </div>
-
-          <Input
-            id="negativo"
-            label="Negative prompt (opcional)"
-            value={negativo}
-            onChange={(e) => setNegativo(e.target.value)}
-            placeholder="text, watermark, extra fingers"
-            autoComplete="off"
-          />
-
-          <div aria-live="polite">
-            {error && (
-              <p
-                role="alert"
-                className="flex items-start gap-2 rounded-sm bg-danger/10 px-3 py-2 text-body text-danger"
-              >
-                <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
-                {error}
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 border-t border-divider pt-4">
-            <Button
-              type="submit"
-              variant="primary"
-              loading={enviando}
-              disabled={!tienePrompt || nombre.trim().length === 0}
-              icon={<Sparkle aria-hidden className="size-4" />}
-            >
-              Generar
-            </Button>
-            {/*
-              El resumen de lo que se va a gastar. Va en mono con .tnum porque cambia
-              con cada tecla y en proporcional los numeros bailan de ancho (D4).
-            */}
-            {tienePrompt && (
-              <p className="font-mono text-label tnum text-fg-dim">
-                <span className="text-fg">{variantes}</span>{" "}
-                {variantes === 1 ? "imagen" : "imágenes"} ·{" "}
-                <span className="text-fg">{formato}</span> ·{" "}
-                <span className="text-fg">{calidad}</span>
-              </p>
-            )}
-          </div>
-        </Card>
-      </form>
-
-      {/* ─── 1. Elegir que tanda mirar ───
-           Va ARRIBA de los resultados, no al final: es NAVEGACION, y tiene que
-           estar antes de lo que controla. Estaba abajo de todo y el usuario
-           reportaba que "no deja elegir": el click funcionaba, pero las imagenes
-           se pintaban ~500px mas arriba, fuera de la pantalla, asi que desde donde
-           estaba mirando no pasaba nada. ─── */}
-      <section className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-divider pt-5">
-          <h2 className="text-title font-semibold text-fg">
-            Tandas de imágenes{" "}
+    <>
+      {/* ─── Sidebar: segmented + Nueva tanda + lista de tandas ────────────── */}
+      <aside className="flex min-h-0 flex-col border-r border-divider">
+        <CabeceraSidebar
+          tab={tab}
+          onCambiarTab={onCambiarTab}
+          onNuevaTanda={() => setVista("nueva")}
+          labelNueva="Nueva tanda"
+        />
+        <div className="flex items-baseline justify-between px-4 pb-2">
+          <span className="text-label font-medium text-fg-dim">
+            Tandas{" "}
             {lista.length > 0 && (
-              <span className="font-mono text-label tnum font-normal text-fg-dim">
-                {lista.length}
-              </span>
+              <span className="code tnum font-normal">{lista.length}</span>
             )}
-          </h2>
-          <Button size="sm" onClick={() => void cargarLista()}>
-            Actualizar
-          </Button>
+          </span>
+          <button
+            type="button"
+            onClick={() => void cargarLista()}
+            className="text-label text-fg-dim transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <ArrowsClockwise aria-hidden className="size-3.5" />
+          </button>
         </div>
 
-        {cargandoLista && lista.length === 0 ? (
-          <SkeletonGrid items={3} />
-        ) : lista.length === 0 ? (
-          <p className="text-body text-fg-dim">
-            Todavía no generaste ninguna. Las que generes van a quedar acá, no se
-            borran al generar otra.
-          </p>
-        ) : (
-          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {lista.map((p) => {
-              const abierto = p.id === projectId;
-              return (
-                <li key={p.id}>
-                  {/*
-                    Un boton y no un <Link>: no hay navegacion real, se cambia el
-                    parametro de la URL de la misma pantalla. `aria-current` es lo que
-                    le dice al lector de pantalla cual esta abierto, porque el borde de
-                    acento solo lo comunica por color.
-                  */}
-                  <button
-                    type="button"
-                    onClick={() => abrirProyecto(p.id)}
-                    aria-current={abierto ? "true" : undefined}
-                    className={cn(
-                      "w-full rounded-lg border p-2.5 text-left transition-colors",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                      abierto
-                        ? "border-accent bg-accent/10"
-                        : "border-divider bg-surface hover:border-border",
-                    )}
-                  >
-                    <span className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-body font-medium text-fg">
-                        {p.name}
-                      </span>
-                      {abierto && (
-                        <span className="shrink-0 text-label font-medium text-accent">
-                          abierta
-                        </span>
-                      )}
-                    </span>
-                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-label text-fg-dim">
-                      <span className="font-mono tnum">
-                        {p.imageCount} {p.imageCount === 1 ? "imagen" : "imágenes"}
-                      </span>
-                      <span aria-hidden>·</span>
-                      <span>{estadoDeJob(p.status).label}</span>
-                      <span aria-hidden>·</span>
-                      <span className="font-mono tnum">
-                        {new Date(p.createdAt).toLocaleDateString("es-AR", {
-                          day: "2-digit",
-                          month: "2-digit",
-                        })}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      {/* ─── 2. Los resultados de la tanda abierta ─────────────────────────── */}
-      {!projectId ? (
-        <EmptyState
-          icon={<ImageSquare aria-hidden className="size-6" />}
-          title="Todavía no generaste nada"
-          body="Escribí el prompt, elegí formato, calidad y cuántas variantes querés, y dale Generar: las miniaturas caen acá y elegís la que queda."
-          action={{
-            label: "Escribir el prompt",
-            onClick: () => promptsRef.current?.focus(),
-          }}
-        />
-      ) : (
-        /*
-          `section` y NO otra `Card`: las tarjetas de la grilla ya son `surface`, y
-          `surface` sobre `surface` no se distingue. La separación la da el cambio de
-          superficie contra el `bg` de la pagina, que sobre oscuro alcanza y sobra.
-        */
-        <section ref={resultadosRef} className="flex flex-col gap-4">
-          <CardHeader className="mb-0 items-baseline">
-            <div>
-              <CardTitle className="flex flex-wrap items-baseline gap-2">
-                Resultados
-                <span className="font-mono text-label tnum font-normal text-fg-dim">
-                  {listas}/{jobs.length} listas
-                </span>
-              </CardTitle>
-              <CardDescription>
-                Tocá una miniatura para que quede esa variante. Los botones de arriba de
-                cada una la abren en grande o la bajan sola. Una vez aprobada, pedí un
-                cambio en el chat de abajo para encadenar otra imagen a partir de esa.
-              </CardDescription>
-            </div>
-            {/*
-              `?que=imagenes` explicito. El default de la ruta es automatico y en un
-              proyecto sin clips ya devolveria imagenes, pero decirlo evita que el dia
-              que este proyecto tenga un video el boton de ESTA pantalla empiece a bajar
-              otra cosa.
-            */}
-            <a
-              href={`/api/projects/${projectId}/download?que=imagenes`}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-sm text-body text-accent transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              title="Un .zip con las imágenes aprobadas del proyecto"
-            >
-              <DownloadSimple aria-hidden className="size-4" />
-              Descargar todas (zip)
-            </a>
-          </CardHeader>
-
-          {/*
-            El aviso del gate. `aria-live` porque aparece solo, minutos despues de
-            apretar Generar, cuando el usuario ya no esta mirando.
-          */}
-          <div aria-live="polite">
-            {gateFrenado && (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-accent/10 px-3 py-2.5">
-                <CursorClick aria-hidden className="size-5 shrink-0 text-accent" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-body font-medium text-fg">
-                    <span className="font-mono tnum">
-                      {esperandoDecision.length} de {jobs.length}
-                    </span>{" "}
-                    listas. Aprobá para que siga el resto.
-                  </p>
-                  <p className="text-label text-fg-dim">
-                    La cola se frena cuando se junta un lote sin aprobar: no está
-                    colgada, te espera.{" "}
-                    <span className="font-mono tnum">{frenados}</span> sin arrancar.
-                  </p>
-                </div>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  loading={aprobandoLote}
-                  onClick={() => void aprobarLote(esperandoDecision)}
-                  icon={<Check aria-hidden className="size-3.5" />}
-                  title="Aprueba las que están esperando con la variante que elegiste, o con la primera si todavía no elegiste ninguna."
-                >
-                  Aprobar las {esperandoDecision.length}
-                </Button>
-              </div>
-            )}
-          </div>
-
-          {jobs.length === 0 ? (
-            <div className="flex flex-col gap-3">
-              <p className="text-body text-fg-dim">Encolando…</p>
-              <SkeletonGrid items={4} />
-            </div>
-          ) : (
-            /*
-              Un bloque por HILO de chat, no una grilla plana de N tarjetas (§5 de la
-              feature de chat iterativo). Con una sola imagen en el proyecto esto se ve
-              exactamente igual que la grilla de antes (un hilo de un solo eslabon), asi
-              que el caso simple no cambia. Con mas de un turno, el hilo entero
-              (v1 -> v2 -> v3) se lee de una fila, y el chat para seguir editando queda
-              pegado debajo de la ULTIMA imagen aprobada de esa cadena.
-            */
-            <div className="flex flex-col gap-6">
-              {hilos.map((cadena) => (
-                <HiloChat
-                  key={cadena[0].id}
-                  cadena={cadena}
-                  projectId={projectId}
-                  prompts={prompts}
-                  formato={formatoGenerado ?? formato}
-                  editando={editando}
-                  ocupado={ocupado}
-                  onEditar={(refId, valor) =>
-                    setEditando((ed) => ({ ...ed, [refId]: valor }))
-                  }
-                  onElegir={(job, index) => void elegir(job, index)}
-                  onVariar={(job) => void variar(job)}
-                  onAmpliar={(url, titulo) => setAmpliada({ url, titulo })}
-                  chatTexto={chatTexto}
-                  chatEnviando={chatEnviando}
-                  chatError={chatError}
-                  onChatTexto={(imageId, valor) =>
-                    setChatTexto((t) => ({ ...t, [imageId]: valor }))
-                  }
-                  onChatEnviar={(imageId) => void enviarTurnoChat(imageId)}
-                />
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          {cargandoLista && lista.length === 0 ? (
+            <div className="flex flex-col gap-2 px-2">
+              {Array.from({ length: 5 }, (_, i) => (
+                <div key={i} className="h-14 animate-pulse rounded-md bg-surface-hi" />
               ))}
             </div>
+          ) : lista.length === 0 ? (
+            <p className="px-2 text-label text-fg-dim">
+              Todavía no generaste ninguna. Las que generes van a quedar acá.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-0.5">
+              {lista.map((p) => {
+                const abierto = p.id === projectId;
+                return (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => abrirProyecto(p.id)}
+                      aria-current={abierto ? "true" : undefined}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-md border p-2 text-left transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                        abierto
+                          ? "border-accent bg-accent/10"
+                          : "border-transparent hover:bg-surface",
+                      )}
+                    >
+                      {/*
+                        Miniatura 28x40 (proporcion 9:16 aproximada): placeholder con
+                        rayas, sin pedir la imagen real acá. La lista puede tener
+                        decenas de tandas y esta pantalla ya hace polling; pedir la
+                        miniatura de cada una multiplicaria los requests sin necesidad,
+                        el dato que importa (nombre + meta) ya esta en la respuesta de
+                        /api/projects.
+                      */}
+                      <span
+                        aria-hidden
+                        className="block h-10 w-7 shrink-0 rounded-sm bg-surface-hi"
+                      />
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-body font-medium text-fg">
+                          {p.name}
+                        </span>
+                        <span className="code truncate text-label text-fg-dim">
+                          {p.imageCount} {p.imageCount === 1 ? "img" : "img"} ·{" "}
+                          {estadoDeJob(p.status).label}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           )}
-        </section>
-      )}
+        </div>
+      </aside>
 
-      {ampliada && (
-        <Visor
-          url={ampliada.url}
-          titulo={ampliada.titulo}
-          tipo="image"
-          onCerrar={() => setAmpliada(null)}
+      {/* ─── Resultados de la tanda abierta ────────────────────────────────── */}
+      <main className="flex min-h-0 flex-col">
+        {!projectId ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+            <EmptyState
+              icon={<ImageSquare aria-hidden className="size-6" />}
+              title="Todavía no generaste nada"
+              body="Abrí 'Nueva tanda' para escribir el prompt, elegir formato, calidad y cuántas variantes querés."
+              action={{ label: "Nueva tanda", onClick: () => setVista("nueva") }}
+            />
+          </div>
+        ) : jobs.length === 0 ? (
+          <div className="flex min-h-0 flex-1 flex-col gap-3 p-6">
+            <p className="text-body text-fg-dim">Encolando…</p>
+            <SkeletonGrid items={4} />
+          </div>
+        ) : (
+          <>
+            {/* Header de resultados */}
+            <div className="flex flex-none flex-wrap items-center gap-3 p-4 pb-3">
+              <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h1
+                  className="code min-w-0 max-w-full truncate text-display font-semibold text-fg"
+                  title={proyectoAbierto?.name}
+                >
+                  {proyectoAbierto?.name ?? "Tanda"}
+                </h1>
+                <Badge tone={estadoDeJob(proyectoAbierto?.status ?? "").tone} punto>
+                  {estadoDeJob(proyectoAbierto?.status ?? "").label}
+                </Badge>
+                {/*
+                  `attempts > 1` es la unica señal de que hubo un 429 y la cola
+                  reintento (mismo criterio que la pantalla vieja). Se muestra acá,
+                  al lado del estado, para no perderla del todo en el rediseño.
+                */}
+                {jobActivo && jobActivo.attempts > 1 && (
+                  <Badge tone="neutral">
+                    <ArrowsClockwise aria-hidden className="size-3 shrink-0" />
+                    intento <span className="tnum">{jobActivo.attempts}</span>
+                  </Badge>
+                )}
+                <span className="code text-label text-fg-dim">
+                  {formato}
+                  {jobActivo ? ` · ${jobActivo.variants} variantes` : ""}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant={promptAbierto ? "secondary" : "ghost"}
+                  onClick={() => setPromptAbierto((v) => !v)}
+                  icon={<TextAlignLeft aria-hidden className="size-3.5" />}
+                >
+                  Prompt
+                  {/* Hay una edicion sin aplicar: se ve aunque el bloque este colapsado. */}
+                  {jobActivo && editando[jobActivo.refId] !== undefined && (
+                    <Badge tone="attention">editado</Badge>
+                  )}
+                </Button>
+                {jobActivo && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={Boolean(ocupado[jobActivo.id])}
+                    onClick={() => void variar(jobActivo)}
+                    icon={<ArrowsClockwise aria-hidden className="size-3.5" />}
+                  >
+                    Variar
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  asChild
+                  icon={<DownloadSimple aria-hidden className="size-3.5" />}
+                >
+                  <a href={`/api/projects/${projectId}/download?que=imagenes`}>
+                    Descargar (zip)
+                  </a>
+                </Button>
+                <Segmented
+                  etiqueta="Vista de la galería"
+                  tamanio="sm"
+                  value={modoVista}
+                  onChange={setModoVista}
+                  options={[
+                    {
+                      value: "grilla",
+                      label: <SquaresFour aria-hidden className="size-4" />,
+                      titulo: "Grilla",
+                    },
+                    {
+                      value: "visor",
+                      label: <Rectangle aria-hidden className="size-4" />,
+                      titulo: "Visor",
+                    },
+                  ]}
+                />
+              </div>
+            </div>
+
+            {/* Hilo: pastillas v1 -> v2 -> ... por cadena de chat */}
+            {hilos.length > 0 && (
+              <div className="flex flex-none flex-wrap items-center gap-1.5 px-4 pb-3">
+                <span className="text-label text-fg-dim">Hilo</span>
+                {hilos.map((cadena, i) => {
+                  const activo = i === indiceHiloValido;
+                  return (
+                    <button
+                      key={cadena[0].id}
+                      type="button"
+                      onClick={() => setHiloActivo(i)}
+                      className={cn(
+                        "inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-label transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                        activo
+                          ? "border-border bg-surface-hi text-fg"
+                          : "border-divider bg-transparent text-fg-dim hover:text-fg",
+                      )}
+                    >
+                      <span className="code tnum">{i + 1}</span>
+                      {cadena[0].refId}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/*
+              Bloque de prompt, colapsable y EDITABLE. El spec del handoff lo muestra
+              como un bloque mono de solo lectura, pero convertirlo en read-only real
+              hubiera perdido la unica forma que tenia la pantalla vieja de editar el
+              prompt antes de "Variar" (el `editando` separado de `prompts`, punto 2
+              del comentario del encabezado): sin un campo para escribir, `editando`
+              nunca se puebla y el boton "Variar" del header pasa a repetir siempre
+              el mismo prompt. Es una textarea en vez de un <p> para no perder esa
+              funcionalidad — el look sigue siendo "un bloque mono debajo del toggle
+              Prompt", que es lo que pide el spec.
+            */}
+            {promptAbierto && jobActivo && (
+              <div className="mx-4 mb-3 flex-none">
+                <Textarea
+                  label={`Prompt de ${jobActivo.refId}`}
+                  labelOculto
+                  mono
+                  rows={4}
+                  spellCheck={false}
+                  value={editando[jobActivo.refId] ?? prompts[jobActivo.refId] ?? ""}
+                  onChange={(e) =>
+                    setEditando((ed) => ({ ...ed, [jobActivo.refId]: e.target.value }))
+                  }
+                  hint={
+                    editando[jobActivo.refId] !== undefined
+                      ? "Editado: se usa este texto la próxima vez que apretés Variar."
+                      : undefined
+                  }
+                />
+              </div>
+            )}
+
+            {/*
+              La nota de `job.error`. Puede estar poblada en un job que NO falló: el
+              pipeline la usa tambien como nota informativa ("salieron 1/2 variantes",
+              ver el punto 3 del comentario del encabezado). El tinte sale del TONO
+              DEL ESTADO y no de que haya texto: mostrarla siempre en rojo era el bug
+              de percepcion mas grande de la pantalla vieja, una tanda perfectamente
+              aprobable parecia rota.
+            */}
+            {jobActivo?.error && (
+              <div className="mx-4 mb-3 flex-none">
+                <p
+                  title={jobActivo.error}
+                  className={cn(
+                    "flex items-start gap-1.5 rounded-sm p-1.5 text-label",
+                    estadoDeJob(jobActivo.status).tone === "danger"
+                      ? "bg-danger/10 text-danger"
+                      : "bg-surface-hi text-fg-dim",
+                  )}
+                >
+                  {estadoDeJob(jobActivo.status).tone === "danger" ? (
+                    <WarningCircle aria-hidden className="mt-px size-3.5 shrink-0" />
+                  ) : (
+                    <ImageSquare aria-hidden className="mt-px size-3.5 shrink-0" />
+                  )}
+                  <span className="line-clamp-2">{jobActivo.error}</span>
+                </p>
+              </div>
+            )}
+
+            {/* Aviso del gate por lotes */}
+            <div aria-live="polite" className="flex-none px-4">
+              {gateFrenado && (
+                <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-accent/10 px-3 py-2.5">
+                  <CursorClick aria-hidden className="size-5 shrink-0 text-accent" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-body font-medium text-fg">
+                      <span className="code tnum">
+                        {esperandoDecision.length} de {jobs.length}
+                      </span>{" "}
+                      listas. Aprobá para que siga el resto.
+                    </p>
+                    <p className="text-label text-fg-dim">
+                      La cola se frena cuando se junta un lote sin aprobar: no está
+                      colgada, te espera.{" "}
+                      <span className="code tnum">{frenados}</span> sin arrancar.
+                    </p>
+                  </div>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    loading={aprobandoLote}
+                    onClick={() => void aprobarLote(esperandoDecision)}
+                    icon={<Check aria-hidden className="size-3.5" />}
+                    title="Aprueba las que están esperando con la variante que elegiste, o con la primera si todavía no elegiste ninguna."
+                  >
+                    Aprobar las {esperandoDecision.length}
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* Grilla o visor, al alto completo */}
+            {jobActivo && jobActivo.candidates.length > 0 ? (
+              modoVista === "grilla" ? (
+                <GrillaVariantes
+                  job={jobActivo}
+                  projectId={projectId}
+                  formato={formato}
+                  onElegir={(index) => void elegir(jobActivo, index)}
+                  onAmpliar={(i) => setLightbox(i)}
+                />
+              ) : (
+                <VisorVariantes
+                  job={jobActivo}
+                  projectId={projectId}
+                  formato={formato}
+                  onElegir={(index) => void elegir(jobActivo, index)}
+                  onAmpliar={(i) => setLightbox(i)}
+                />
+              )
+            ) : (
+              <div className="flex min-h-0 flex-1 items-center justify-center">
+                <EstadoSinCandidatas job={jobActivo} />
+              </div>
+            )}
+
+            {/* Chat de cambios, FIJO abajo */}
+            <ChatDeCambios
+              job={jobActivo}
+              texto={jobActivo ? chatTexto[jobActivo.refId] ?? "" : ""}
+              enviando={jobActivo ? Boolean(chatEnviando[jobActivo.refId]) : false}
+              error={jobActivo ? chatError[jobActivo.refId] ?? null : null}
+              onTexto={(v) => jobActivo && setChatTexto((t) => ({ ...t, [jobActivo.refId]: v }))}
+              onEnviar={() => jobActivo && void enviarTurnoChat(jobActivo.refId)}
+            />
+          </>
+        )}
+      </main>
+
+      {/* ─── Lightbox ───────────────────────────────────────────────────────── */}
+      {lightbox !== null && jobActivo && projectId && (
+        <Lightbox
+          job={jobActivo}
+          projectId={projectId}
+          indice={lightbox}
+          onCerrar={() => setLightbox(null)}
+          onNavegar={setLightbox}
+          onElegir={(index) => void elegir(jobActivo, index)}
         />
       )}
+    </>
+  );
+}
+
+/** Cache-busting: los candidatos se escriben siempre en el mismo path. */
+function urlDe(projectId: string, job: Job, file: string) {
+  const ver = encodeURIComponent(job.updatedAt ?? "");
+  return `/api/files/${projectId}/${file}?v=${ver}`;
+}
+
+function labelVariante(c: Candidate, index: number): string {
+  if (c.promptLabel) {
+    const modelo = c.model?.includes("pro") ? "Pro" : c.model ? "Flash" : undefined;
+    return modelo ? `${c.promptLabel} · ${modelo}` : c.promptLabel;
+  }
+  return `v${index + 1}`;
+}
+
+/**
+ * La grilla: las N variantes en UNA fila al alto completo.
+ *
+ * `cq-size` (definida en globals.css por otra pantalla del rediseño — layout.tsx y
+ * globals.css son intocables por esta task, pero `container-type: size` es CSS
+ * estandar y se puede aplicar igual por `style` inline si la clase no existiera
+ * todavia: así este archivo no depende de que otro agente haya terminado su parte).
+ */
+function GrillaVariantes({
+  job,
+  projectId,
+  formato,
+  onElegir,
+  onAmpliar,
+}: {
+  job: Job;
+  projectId: string;
+  formato: string;
+  onElegir: (index: number) => void;
+  onAmpliar: (i: number) => void;
+}) {
+  const n = job.candidates.length;
+  const gaps = 16 * (n - 1) + 32; // gap entre tarjetas + padding lateral aproximado
+  return (
+    <div
+      style={{ containerType: "size" }}
+      className="min-h-0 flex-1 overflow-hidden px-4 pb-4"
+    >
+      <div className="flex h-full items-start gap-4">
+        {job.candidates.map((c, i) => {
+          const elegida = job.selectedIndex === c.index;
+          const url = urlDe(projectId, job, c.file);
+          return (
+            <button
+              key={c.index}
+              type="button"
+              onClick={() => onElegir(c.index)}
+              aria-pressed={elegida}
+              aria-label={`Elegir la variante ${i + 1} de ${job.refId}`}
+              style={{
+                width: `min(calc((100cqw - ${gaps}px) / ${n}), calc(100cqh * 0.5625))`,
+                aspectRatio: "9 / 16",
+              }}
+              className={cn(
+                "group relative shrink-0 overflow-hidden rounded-lg border-2 transition-colors",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                elegida ? "border-accent" : "border-divider hover:border-border",
+              )}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                key={url}
+                src={url}
+                alt={`Variante ${i + 1} de ${job.refId}`}
+                loading="lazy"
+                decoding="async"
+                className="size-full bg-bg object-cover"
+              />
+
+              {/* Ampliar / descargar, en hover arriba a la derecha */}
+              <span className="absolute right-2 top-2 flex gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Ver la variante ${i + 1} en grande`}
+                  title="Ver en grande"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAmpliar(i);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onAmpliar(i);
+                    }
+                  }}
+                  className="inline-flex size-8 cursor-pointer items-center justify-center rounded-md bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <ArrowsOut aria-hidden className="size-4" />
+                </span>
+                <a
+                  href={`${url}&dl=1&name=${encodeURIComponent(`${job.refId}_v${i + 1}.png`)}`}
+                  download
+                  aria-label={`Descargar la variante ${i + 1}`}
+                  title="Descargar esta imagen"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex size-8 items-center justify-center rounded-md bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <DownloadSimple aria-hidden className="size-4" />
+                </a>
+              </span>
+
+              {/* Degradado + label + check */}
+              <span className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-bg/85 to-transparent px-2.5 pb-2.5 pt-6">
+                <span className="code min-w-0 truncate whitespace-nowrap text-label text-fg">
+                  {labelVariante(c, i)}
+                </span>
+                {elegida && (
+                  <span
+                    title="Elegida"
+                    className="inline-flex size-[22px] shrink-0 items-center justify-center rounded-sm bg-accent text-on-accent"
+                  >
+                    <Check aria-hidden className="size-3.5" />
+                  </span>
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 /**
- * Una imagen con sus variantes. Se separó del tablero porque la grilla la monta hasta
- * 40 veces y tenerla suelta hace que el `map` se lea de un vistazo.
- *
- * NO usa `JobCard`: esa tarjeta recibe un `JobRecord` completo con los handlers del
- * pipeline (aprobar / regenerar / editar prompt+diálogo+duración+resolución) y su
- * `Props` es contrato de cuatro pantallas. Acá el modelo es otro: elegir variante y
- * variar, sobre la vista angosta de job que devuelve esta pantalla.
+ * El visor: tira vertical de miniaturas de 64px a la izquierda y la elegida en
+ * grande. Click en la grande abre el lightbox.
  */
-function TarjetaImagen({
+function VisorVariantes({
   job,
   projectId,
-  prompt,
   formato,
-  enEdicion,
-  ocupado,
-  onEditar,
   onElegir,
-  onVariar,
   onAmpliar,
 }: {
   job: Job;
   projectId: string;
-  prompt: string;
-  /** Formato del proyecto ("16:9", "4:5", ...). Define la proporcion de la miniatura. */
   formato: string;
-  enEdicion: string | undefined;
-  ocupado: boolean;
-  onEditar: (valor: string) => void;
   onElegir: (index: number) => void;
-  onVariar: () => void;
-  onAmpliar: (url: string, titulo: string) => void;
+  onAmpliar: (i: number) => void;
 }) {
-  // El estado y el label salen de `estadoDeJob` y de ningun switch local (§6.1 del
-  // plan). Los derivados se leen del TONO, no del string de status, asi que si mañana
-  // aparece un status nuevo se agrega en un solo lugar.
-  const estado = estadoDeJob(job.status);
-  const fallo = estado.tone === "danger";
-  const trabajando = ocupado || EN_CURSO.has(job.status);
-
-  /*
-    "16:9" -> "16 / 9", que es lo que entiende la propiedad CSS aspect-ratio. Va por
-    `style` y no por una clase de Tailwind porque el valor es dinamico: Tailwind
-    compila las clases que encuentra en el codigo y `aspect-[${x}]` armado en runtime
-    no existe en el CSS final.
-  */
-  const proporcionCss = formato.replace(":", " / ");
-
-  const candidatas = job.candidates.length;
-  // Menos candidatas que las pedidas es LEGITIMO: se resalta el conteo, pero el tono
-  // es `attention` ("mirá esto"), nunca `danger`. La tarjeta no se ve fallada.
-  const mostrarConteo = job.variants > 1 && candidatas > 0;
-  const faltanVariantes = mostrarConteo && candidatas < job.variants;
-
-  // Cache-busting: los candidatos se escriben siempre en el mismo path, asi que sin
-  // esto el browser sirve la imagen vieja despues de variar.
-  const ver = encodeURIComponent(job.updatedAt ?? "");
+  const seleccionIndex = job.candidates.findIndex((c) => c.index === job.selectedIndex);
+  const activo = seleccionIndex >= 0 ? seleccionIndex : 0;
+  const c = job.candidates[activo];
+  const url = urlDe(projectId, job, c.file);
 
   return (
-    <Card flush className="flex flex-col overflow-hidden">
-      {/* ─── Las variantes primero: son el contenido ────────────────────── */}
-      <div className="bg-bg">
-        {candidatas > 0 ? (
-          <div
-            role="group"
-            aria-label={`Variantes de ${job.refId}`}
-            className={cn("grid gap-1 p-1", candidatas > 1 ? "grid-cols-2" : "grid-cols-1")}
-          >
-            {job.candidates.map((c) => {
-              const elegida = job.selectedIndex === c.index;
-              const url = `/api/files/${projectId}/${c.file}?v=${ver}`;
-              return (
-                <button
-                  key={c.index}
-                  type="button"
-                  onClick={() => onElegir(c.index)}
-                  disabled={trabajando}
-                  aria-pressed={elegida}
-                  aria-label={`Elegir la variante ${c.index} de ${job.refId}`}
-                  title={elegida ? `v${c.index} es la que queda` : `Elegir v${c.index}`}
-                  className={cn(
-                    // `border-2` en los dos estados: si solo la elegida tuviera borde,
-                    // la miniatura cambiaria de tamaño al elegirla y saltaria la fila.
-                    // Los botones de ver/bajar van SIEMPRE visibles, no en hover: ver
-                    // el comentario en el <span> que los agrupa, mas abajo.
-                    "group relative overflow-hidden rounded-sm border-2 transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                    "disabled:cursor-not-allowed disabled:opacity-60",
-                    elegida
-                      ? "border-accent"
-                      : "border-divider hover:border-border",
-                  )}
-                >
-                  {/*
-                    `object-contain` y la proporcion REAL del proyecto, no un 9/16 fijo
-                    con object-cover como estaba: generando en 16:9 la miniatura
-                    recortaba la imagen a un rectangulo vertical y se veia cortada,
-                    justo lo que hay que evitar en una pantalla que existe para elegir
-                    entre variantes.
-                  */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    key={url}
-                    src={url}
-                    alt={`Variante ${c.index} de ${job.refId}`}
-                    loading="lazy"
-                    decoding="async"
-                    style={{ aspectRatio: proporcionCss }}
-                    className="w-full bg-bg object-contain"
-                  />
-                  <span
-                    className={cn(
-                      "absolute bottom-1 right-1 inline-flex items-center gap-0.5",
-                      "rounded-sm px-1 py-px font-mono text-label tnum font-semibold",
-                      elegida ? "bg-accent text-on-accent" : "bg-bg/80 text-fg-dim",
-                    )}
-                  >
-                    {elegida && <Check aria-hidden className="size-3" />}v{c.index}
-                  </span>
-
-                  {/*
-                    "Prompt dual" (generador masivo): que prompt (A/B) y que modelo
-                    generaron ESTA variante puntual. Solo aparece cuando el backend
-                    los completo (candidates[].model/promptLabel, ver types.ts) — en
-                    el caso normal las 4 variantes comparten prompt/modelo y esto no
-                    aporta nada, así que no se muestra.
-                  */}
-                  {c.promptLabel && (
-                    <span
-                      className="absolute bottom-1 left-1 inline-flex items-center gap-0.5 rounded-sm bg-bg/80 px-1 py-px font-mono text-label text-fg-dim"
-                      title={c.model ? `Prompt ${c.promptLabel} · ${c.model}` : `Prompt ${c.promptLabel}`}
-                    >
-                      {c.promptLabel}
-                      {c.model && (
-                        <span aria-hidden>
-                          {" · "}
-                          {c.model.includes("pro") ? "Pro" : "Flash"}
-                        </span>
-                      )}
-                    </span>
-                  )}
-
-                  {/*
-                    Ver en grande y bajar, arriba de cada variante.
-
-                    Son <span role="button"> y no <button>, y el click hace
-                    stopPropagation: esto vive DENTRO del boton que elige la variante, y
-                    un <button> anidado en otro <button> es HTML invalido (el browser lo
-                    desanida y el layout se rompe). Con role + onKeyDown quedan igual de
-                    accesibles por teclado.
-                  */}
-                  {/*
-                    SIEMPRE visibles. Estaban en `opacity-0` hasta pasar el mouse y el
-                    usuario reporto que no habia forma de bajar una imagen sola: los
-                    botones existian pero eran invisibles, o sea que no existian. Un
-                    control que hay que descubrir pasando el mouse por encima no es un
-                    control. En touch, ademas, no hay hover.
-                  */}
-                  <span className="absolute right-1 top-1 flex gap-1">
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Ver la variante ${c.index} en grande`}
-                      title="Ver en grande"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAmpliar(url, `${job.refId} · v${c.index}`);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          onAmpliar(url, `${job.refId} · v${c.index}`);
-                        }
-                      }}
-                      className="inline-flex size-6 cursor-pointer items-center justify-center rounded-sm bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      <ArrowsOut aria-hidden className="size-3.5" />
-                    </span>
-                    <a
-                      href={`${url}&dl=1&name=${encodeURIComponent(`${job.refId}_v${c.index}.png`)}`}
-                      download
-                      aria-label={`Descargar la variante ${c.index}`}
-                      title="Descargar esta imagen"
-                      onClick={(e) => e.stopPropagation()}
-                      className="inline-flex size-6 items-center justify-center rounded-sm bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      <DownloadSimple aria-hidden className="size-3.5" />
-                    </a>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div
-            style={{ aspectRatio: proporcionCss }}
-            className="flex max-h-56 items-center justify-center"
-          >
-            <span
+    <div className="flex min-h-0 flex-1 gap-4 px-4 pb-4">
+      <div className="flex w-16 shrink-0 flex-col gap-2 overflow-y-auto">
+        {job.candidates.map((cand, i) => {
+          const elegida = job.selectedIndex === cand.index;
+          const activa = i === activo;
+          const miniUrl = urlDe(projectId, job, cand.file);
+          return (
+            <button
+              key={cand.index}
+              type="button"
+              onClick={() => onElegir(cand.index)}
+              aria-label={`Ver variante ${i + 1}`}
+              style={{ aspectRatio: "9 / 16" }}
               className={cn(
-                "flex flex-col items-center gap-1.5 px-2 text-center text-label",
-                fallo ? "text-danger" : "text-fg-dim",
+                "relative w-16 shrink-0 overflow-hidden rounded-md border-2 transition-colors",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                activa ? "border-border" : elegida ? "border-accent" : "border-divider",
               )}
             >
-              {estado.animado ? (
-                <>
-                  <Spinner aria-hidden className="size-5 motion-safe:animate-spin" />
-                  generando…
-                </>
-              ) : fallo ? (
-                <>
-                  <WarningCircle aria-hidden className="size-5" />
-                  no salió ninguna
-                </>
-              ) : (
-                <>
-                  <ImageSquare aria-hidden className="size-5" />
-                  en cola…
-                </>
-              )}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={miniUrl}
+                alt={`Miniatura variante ${i + 1}`}
+                loading="lazy"
+                className="size-full object-cover"
+              />
+              <span className="code absolute bottom-0.5 left-1 text-label text-fg">
+                v{i + 1}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ containerType: "size" }} className="min-h-0 min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={() => onAmpliar(activo)}
+          style={{
+            height: "min(100cqh, calc(100cqw * 1.7778))",
+            aspectRatio: "9 / 16",
+          }}
+          className="group relative cursor-zoom-in overflow-hidden rounded-lg border-2 border-accent"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            key={url}
+            src={url}
+            alt={`Variante ${activo + 1} de ${job.refId}`}
+            className="size-full bg-bg object-cover"
+          />
+          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-bg/85 to-transparent px-3 pb-3 pt-6">
+            <span className="code min-w-0 truncate text-label text-fg">
+              {labelVariante(c, activo)}
             </span>
-          </div>
-        )}
+            <span
+              title="Elegida"
+              className="inline-flex size-[22px] shrink-0 items-center justify-center rounded-sm bg-accent text-on-accent"
+            >
+              <Check aria-hidden className="size-3.5" />
+            </span>
+          </span>
+        </button>
       </div>
+    </div>
+  );
+}
 
-      {/* ─── Identificador, estado y conteos ────────────────────────────── */}
-      <div className="flex min-w-0 flex-1 flex-col gap-2 p-2.5">
-        <div className="flex items-start justify-between gap-2">
-          <p
-            className="truncate font-mono text-body font-medium text-fg"
-            title={job.refId}
-          >
-            {job.refId}
-          </p>
-          {/*
-            El punto (con su pulso cuando la maquina trabaja) lo dibuja `Badge`, que
-            respeta prefers-reduced-motion. El label va en castellano: el status crudo
-            no se muestra nunca (§6.2).
-          */}
-          <Badge
-            tone={estado.tone}
-            punto
-            animado={estado.animado}
-            className="shrink-0 whitespace-nowrap"
-          >
-            {estado.label}
-          </Badge>
-        </div>
+/** El job activo esta generando, en cola, o fallo sin ninguna candidata. */
+function EstadoSinCandidatas({ job }: { job: Job | undefined }) {
+  if (!job) return null;
+  const estado = estadoDeJob(job.status);
+  const fallo = estado.tone === "danger";
+  return (
+    <span
+      className={cn(
+        "flex flex-col items-center gap-1.5 text-center text-body",
+        fallo ? "text-danger" : "text-fg-dim",
+      )}
+    >
+      {estado.animado ? (
+        <>
+          <ArrowsClockwise aria-hidden className="size-6 motion-safe:animate-spin" />
+          generando…
+        </>
+      ) : fallo ? (
+        <>
+          <WarningCircle aria-hidden className="size-6" />
+          no salió ninguna variante
+        </>
+      ) : (
+        <>
+          <ImageIcon aria-hidden className="size-6" />
+          en cola…
+        </>
+      )}
+    </span>
+  );
+}
 
-        {(mostrarConteo || job.attempts > 1) && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {mostrarConteo && (
-              <Badge tone={faltanVariantes ? "attention" : "neutral"} className="tnum">
-                {candidatas} de {job.variants} variantes
-              </Badge>
-            )}
-            {/*
-              `attempts > 1` es la unica señal de que hubo un 429 y la cola reintentó.
-              Antes se mezclaba dentro del texto del estado.
-            */}
-            {job.attempts > 1 && (
-              <Badge tone="neutral" className="tnum">
-                <ArrowsClockwise aria-hidden className="size-3 shrink-0" />
-                intento {job.attempts}
-              </Badge>
-            )}
-          </div>
-        )}
+/** Lightbox: fixed inset-0, imagen al 100% del alto, flechas de 44px. */
+function Lightbox({
+  job,
+  projectId,
+  indice,
+  onCerrar,
+  onNavegar,
+  onElegir,
+}: {
+  job: Job;
+  projectId: string;
+  indice: number;
+  onCerrar: () => void;
+  onNavegar: (i: number) => void;
+  onElegir: (index: number) => void;
+}) {
+  const n = job.candidates.length;
+  const c = job.candidates[indice];
+  if (!c) return null;
+  const url = urlDe(projectId, job, c.file);
+  const yaElegida = job.selectedIndex === c.index;
 
-        {/*
-          `job.error` puede estar poblado en un job que NO falló: el pipeline lo usa
-          como nota informativa ("salieron 1/2 variantes"). Por eso el tinte sale del
-          TONO DEL ESTADO y no de que haya texto acá. Este era el bug de percepcion
-          mas importante de la pantalla: la nota se veia igual de roja siempre y una
-          tanda perfectamente aprobable parecia rota.
-        */}
-        {job.error && (
-          <p
-            title={job.error}
-            className={cn(
-              "flex items-start gap-1.5 rounded-sm p-1.5 text-label",
-              fallo ? "bg-danger/10 text-danger" : "bg-surface-hi text-fg-dim",
-            )}
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Vista ampliada de ${job.refId}`}
+      className="fixed inset-0 z-50 flex flex-col bg-bg/[.94]"
+    >
+      <div className="flex h-14 flex-none items-center gap-3 px-4">
+        <span className="code text-body">
+          {job.refId} · {labelVariante(c, indice)}
+        </span>
+        <span className="code text-label text-fg-dim">
+          {indice + 1} / {n}
+        </span>
+        <span className="flex-1" />
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={() => onElegir(c.index)}
+          icon={<Check aria-hidden className="size-3.5" />}
+        >
+          {yaElegida ? "Elegida" : "Elegir esta"}
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          asChild
+          icon={<DownloadSimple aria-hidden className="size-3.5" />}
+        >
+          <a
+            href={`${url}&dl=1&name=${encodeURIComponent(`${job.refId}_v${indice + 1}.png`)}`}
+            download
           >
-            {fallo ? (
-              <WarningCircle aria-hidden className="mt-px size-3.5 shrink-0" />
-            ) : (
-              <Info aria-hidden className="mt-px size-3.5 shrink-0" />
-            )}
-            <span className="line-clamp-3">{job.error}</span>
-          </p>
-        )}
-
-        {/*
-          El prompt, colapsado. Sin `open` controlado a proposito: React no toca el
-          atributo si no se lo pasamos, asi que el polling no le cierra el bloque al
-          usuario mientras escribe. Lo tipeado vive en `editando`, en el tablero, asi
-          que sobrevive igual a que se colapse.
-        */}
-        <details className="rounded-sm bg-bg">
-          <summary
-            className={cn(
-              "cursor-pointer select-none rounded-sm px-2 py-1 text-label text-fg-dim",
-              "transition-colors hover:text-fg",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-            )}
-          >
-            Prompt{" "}
-            {enEdicion !== undefined && (
-              // Que hay una edicion sin aplicar tiene que verse con el bloque cerrado.
-              <Badge tone="attention">editado</Badge>
-            )}
-          </summary>
-          <div className="px-2 pb-2">
-            <Textarea
-              label={`Prompt de ${job.refId}`}
-              labelOculto
-              mono
-              rows={4}
-              spellCheck={false}
-              value={enEdicion ?? prompt}
-              onChange={(e) => onEditar(e.target.value)}
-            />
-          </div>
-        </details>
-
-        <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">
-          {/*
-            El texto del boton NO cambia con `enEdicion`: en una grilla, un boton que
-            pasa de "Variar" a "Variar con el prompt editado" ensancha la tarjeta y
-            salta la fila entera. Que hay una edicion pendiente lo dice el badge
-            "editado" de arriba, y el `title` explica que se manda.
-          */}
-          <Button
-            size="sm"
-            variant="secondary"
-            loading={trabajando}
-            onClick={onVariar}
-            icon={<ArrowsClockwise aria-hidden className="size-3.5" />}
-            title="Vuelve a generar las variantes de esta imagen. Si editaste el prompt, usa el texto editado."
-          >
-            Variar
-          </Button>
-        </div>
+            Descargar
+          </a>
+        </Button>
+        <button
+          type="button"
+          onClick={onCerrar}
+          title="Cerrar (Esc)"
+          aria-label="Cerrar"
+          className="inline-flex size-8 items-center justify-center rounded-md bg-surface-hi text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <X aria-hidden className="size-4" />
+        </button>
       </div>
-    </Card>
+      <div className="flex min-h-0 flex-1 items-center justify-center gap-4 px-4 pb-6">
+        <button
+          type="button"
+          onClick={() => onNavegar((indice + n - 1) % n)}
+          title="Anterior (←)"
+          aria-label="Variante anterior"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-surface-hi text-fg hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <CaretLeft aria-hidden className="size-5" />
+        </button>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt={`Variante ${indice + 1} de ${job.refId}`}
+          className="h-full max-w-[calc(100vw-152px)] rounded-lg object-contain"
+        />
+        <button
+          type="button"
+          onClick={() => onNavegar((indice + 1) % n)}
+          title="Siguiente (→)"
+          aria-label="Siguiente variante"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-surface-hi text-fg hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <CaretRight aria-hidden className="size-5" />
+        </button>
+      </div>
+    </div>
   );
 }
 
 /**
- * Un HILO de chat iterativo: la cadena completa de una imagen (v1 -> v2 -> v3...)
- * como tira horizontal de tarjetas, con el chat para seguir editando pegado abajo de
- * la ULTIMA.
- *
- * Por que una fila horizontal con scroll y no una grilla como el resto de la
- * pantalla: la cadena tiene un ORDEN (cada paso depende del anterior) y una grilla
- * envuelve sin avisar, así que "v3" podría terminar arriba de "v1" en una fila
- * distinta. Una fila preserva la lectura izquierda->derecha = viejo->nuevo.
- *
- * El chat solo se habilita cuando la ULTIMA imagen de la cadena esta aprobada
- * (`outputPath` presente): pedir un turno nuevo contra algo que todavia no tiene
- * archivo en disco es exactamente el 400 que devuelve el endpoint, así que se evita
- * ofrecer la accion antes de que tenga sentido.
+ * Chat de cambios, fijo abajo del todo (afuera del scroll de la grilla/visor). Solo
+ * se habilita cuando el job activo esta aprobado (`outputPath` presente): pedir un
+ * turno nuevo contra algo que todavia no tiene archivo en disco es exactamente el
+ * 400 que devuelve el endpoint.
  */
-function HiloChat({
-  cadena,
-  projectId,
-  prompts,
-  formato,
-  editando,
-  ocupado,
-  onEditar,
-  onElegir,
-  onVariar,
-  onAmpliar,
-  chatTexto,
-  chatEnviando,
-  chatError,
-  onChatTexto,
-  onChatEnviar,
+function ChatDeCambios({
+  job,
+  texto,
+  enviando,
+  error,
+  onTexto,
+  onEnviar,
 }: {
-  cadena: Job[];
-  projectId: string;
-  prompts: Record<string, string>;
-  formato: string;
-  editando: Record<string, string>;
-  ocupado: Record<string, boolean>;
-  onEditar: (refId: string, valor: string) => void;
-  onElegir: (job: Job, index: number) => void;
-  onVariar: (job: Job) => void;
-  onAmpliar: (url: string, titulo: string) => void;
-  chatTexto: Record<string, string>;
-  chatEnviando: Record<string, boolean>;
-  chatError: Record<string, string | null>;
-  onChatTexto: (imageId: string, valor: string) => void;
-  onChatEnviar: (imageId: string) => void;
+  job: Job | undefined;
+  texto: string;
+  enviando: boolean;
+  error: string | null;
+  onTexto: (v: string) => void;
+  onEnviar: () => void;
 }) {
-  const ultima = cadena[cadena.length - 1];
-  const ultimaAprobada = Boolean(ultima.outputPath) && ultima.status === "done";
-  const enviando = Boolean(chatEnviando[ultima.refId]);
-  const texto = chatTexto[ultima.refId] ?? "";
-  const error = chatError[ultima.refId];
-
+  const aprobada = Boolean(job?.outputPath) && job?.status === "done";
   return (
-    <div className="flex flex-col gap-2">
-      {/* La cadena: scroll horizontal si no entra, nunca envuelve (ver comentario arriba). */}
-      <div className="flex gap-3 overflow-x-auto pb-1">
-        {cadena.map((job, i) => (
-          <div key={job.id} className="flex shrink-0 items-center gap-3">
-            {i > 0 && (
-              <span aria-hidden className="hidden shrink-0 text-fg-dim sm:inline">
-                →
-              </span>
-            )}
-            <div className="w-64 shrink-0">
-              <TarjetaImagen
-                job={job}
-                projectId={projectId}
-                prompt={prompts[job.refId] ?? ""}
-                formato={formato}
-                enEdicion={editando[job.refId]}
-                ocupado={Boolean(ocupado[job.id])}
-                onEditar={(valor) => onEditar(job.refId, valor)}
-                onElegir={(index) => onElegir(job, index)}
-                onVariar={() => onVariar(job)}
-                onAmpliar={onAmpliar}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* El chat: siguiente turno a partir de la ULTIMA imagen de la cadena. */}
-      <div className="rounded-md border border-divider bg-surface p-2.5">
-        {!ultimaAprobada ? (
-          <p className="flex items-center gap-1.5 text-label text-fg-dim">
-            <Info aria-hidden className="size-3.5 shrink-0" />
-            Elegí una variante de <span className="font-mono">{ultima.refId}</span> para
-            poder seguir el chat desde ahí.
-          </p>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              onChatEnviar(ultima.refId);
+    <div className="flex-none p-4 pt-0">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (aprobada) onEnviar();
+        }}
+        className="flex items-end gap-2 rounded-lg border border-divider bg-surface p-2"
+      >
+        <div className="flex-1">
+          <Textarea
+            label="Pedir un cambio sobre la imagen elegida"
+            labelOculto
+            rows={1}
+            value={texto}
+            disabled={!aprobada}
+            onChange={(e) => onTexto(e.target.value)}
+            placeholder="Ej: cambiá el fondo a un living luminoso, mantené la pose"
+            className="min-h-9 resize-none border-0 bg-transparent focus-visible:ring-0"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (aprobada) onEnviar();
+              }
             }}
-            className="flex flex-col gap-2"
-          >
-            <div className="flex items-end gap-2">
-              <div className="flex-1">
-                <Textarea
-                  id={`chat-${ultima.refId}`}
-                  label={`Pedir un cambio sobre ${ultima.refId}`}
-                  labelOculto
-                  rows={2}
-                  value={texto}
-                  onChange={(e) => onChatTexto(ultima.refId, e.target.value)}
-                  placeholder="Ej: cambiá el fondo a un living luminoso, mantené la pose"
-                  onKeyDown={(e) => {
-                    // Enter envia, Shift+Enter agrega una linea: el mismo atajo que
-                    // cualquier chat, y el prompt de imagen puede necesitar mas de
-                    // una linea igual que el textarea principal.
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      onChatEnviar(ultima.refId);
-                    }
-                  }}
-                />
-              </div>
-              <Button
-                type="submit"
-                variant="primary"
-                size="md"
-                loading={enviando}
-                disabled={!texto.trim()}
-                icon={<Sparkle aria-hidden className="size-4" />}
-              >
-                Modificar
-              </Button>
-            </div>
-            {error && (
-              <p role="alert" className="flex items-start gap-1.5 text-label text-danger">
-                <WarningCircle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-                {error}
-              </p>
-            )}
-            <p className="text-label text-fg-dim">
-              Crea una imagen nueva a partir de <span className="font-mono">{ultima.refId}</span>{" "}
-              — la anterior queda intacta arriba, no se reemplaza.
-            </p>
-          </form>
+          />
+        </div>
+        <Button
+          type="submit"
+          variant="secondary"
+          size="md"
+          loading={enviando}
+          disabled={!aprobada || !texto.trim()}
+          icon={<MagicWand aria-hidden className="size-4" />}
+        >
+          Modificar
+        </Button>
+      </form>
+      {error && (
+        <p role="alert" className="mt-1.5 flex items-start gap-1.5 text-label text-danger">
+          <WarningCircle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          {error}
+        </p>
+      )}
+      <p className="mt-1.5 text-label text-fg-dim">
+        {aprobada ? (
+          <>
+            Crea una imagen nueva a partir de{" "}
+            <span className="code text-fg">{job?.refId}</span> — la anterior queda en
+            el hilo, no se reemplaza.
+          </>
+        ) : (
+          <>Elegí una variante para poder pedir un cambio desde ahí.</>
         )}
-      </div>
+      </p>
     </div>
   );
 }

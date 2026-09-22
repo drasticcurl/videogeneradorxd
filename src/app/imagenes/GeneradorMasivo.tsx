@@ -1,6 +1,10 @@
 "use client";
 
 /**
+ * Pestaña "Masivo" de /imagenes: sidebar con las tandas masivas de esta sesión +
+ * el formulario ("Nueva tanda masiva", abierto por defecto si no hay ninguna en
+ * curso) o el progreso de la tanda seleccionada.
+ *
  * Generador masivo de variaciones: subís N fotos + UN prompt, y crea N proyectos de
  * imagenes (uno por foto, image2image contra ella) que corren SECUENCIAL — uno
  * termina, arranca el siguiente — alternando Nano Banana Pro/Flash por proyecto.
@@ -8,7 +12,7 @@
  * Backend: `POST /api/imagenes/masivo` (ver ese archivo para el detalle de las dos
  * mitigaciones anti rate-limit). Esta pantalla es solo el formulario + el progreso
  * agregado de la tanda; no duplica la revision de variantes, cada proyecto se revisa
- * en la pestaña "Generar" de siempre (mismo `/imagenes?id=<id>`) o desde `/batch`.
+ * en la pestaña "Generar" de siempre (mismo `/imagenes?id=<id>`).
  *
  * ─── POR QUE NO REUSA <ImagenesBoard> PARA MOSTRAR RESULTADOS ────────────────
  *
@@ -16,17 +20,20 @@
  * chat iterativo. Una tanda masiva son VARIOS proyectos a la vez, y lo que hace falta
  * ver aca es el PROGRESO AGREGADO (cuantos van, cual esta corriendo, cual fallo), no
  * las variantes de cada uno. Por eso esta pantalla solo linkea a cada proyecto
- * (`/imagenes?id=<id>`) para revisarlo en la pestaña "Generar", que ya sabe mostrar
- * las variantes de un proyecto.
+ * (`/imagenes?id=<id>`) para revisarlo en la pestaña "Generar".
  *
  * ─── POLLING: SOLO MIENTRAS HAYA UNA TANDA EN CURSO EN ESTA PESTAÑA ──────────
  * Mismo patron que ImagenesBoard: intervalo en un ref, se apaga solo cuando no queda
  * nada en curso. No hace polling si el usuario no lanzo ninguna tanda desde que abrio
- * la pagina (evita pegarle a /api/projects sin necesidad la primera vez que se entra).
+ * la pagina.
+ *
+ * Rediseño VISUAL (handoff `design_handoff_rediseno_augc`): no cambia ni un
+ * endpoint, ni un payload, ni una regla. El form pasa a ser pantalla propia con
+ * scroll y dos columnas; el progreso de una tanda usa el sidebar para elegir CUAL
+ * tanda de la sesión se esta mirando, en vez de listarlas todas apiladas.
  */
 
 import {
-  Image as ImageIcon,
   Sparkle,
   Trash,
   UploadSimple,
@@ -38,18 +45,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Button,
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   Input,
+  Progreso,
   Select,
   Textarea,
+  ToggleCard,
   type SelectOption,
 } from "@/components/ui";
+import { BarraInferior } from "@/components/Pantalla";
 import { cn } from "@/lib/cn";
 import { IMAGE_ASPECT_RATIOS, IMAGE_SIZES } from "@/lib/formatos";
 import { estadoDeProyecto } from "@/lib/ui-tokens";
+
+import { CabeceraSidebar, type Tab } from "./ImagenesTabs";
 
 const VARIANTES: ReadonlyArray<SelectOption<string>> = [1, 2, 3, 4].map((n) => ({
   value: String(n),
@@ -75,11 +83,6 @@ const MODELOS_TANDA = "Nano Banana Pro y Flash, alternados";
  * PRIMERA vez que se activa el switch (si el campo todavía está vacío), como punto
  * de partida editable — no son obligatorios ni se vuelven a pisar si el usuario ya
  * escribió otra cosa y desactiva/reactiva el switch.
- *
- * `PROMPT_A_DEFAULT` es, casi textual, el prompt real que ya se usa en producción
- * para la variación conservadora. `PROMPT_B_DEFAULT` es la contraparte de libertad
- * creativa que completa el par, pensada para el mismo caso de uso (ads con foto de
- * referencia).
  */
 const PROMPT_A_DEFAULT =
   'Me haces una variación de este creativo.\n' +
@@ -108,16 +111,20 @@ interface BatchResumen {
 const POLL_MS = 4000;
 const STATUS_EN_CURSO = new Set(["draft", "running", "review"]);
 
-export default function GeneradorMasivo() {
+export default function GeneradorMasivo({
+  tab,
+  onCambiarTab,
+}: {
+  tab: Tab;
+  onCambiarTab: (t: Tab) => void;
+}) {
   const [nombreBase, setNombreBase] = useState("");
   const [prompt, setPrompt] = useState("");
   /**
    * "Prompt dual": en vez de un prompt con N variantes del mismo modelo, dos prompts
    * fijos en 4 variantes cruzadas con los dos modelos (ver el comentario de
    * `/api/imagenes/masivo`, sección "PROMPT DUAL"). `promptA` es la variación
-   * conservadora, `promptB` la libre. Con el switch activo, `variantes` se ignora
-   * (el selector queda deshabilitado en vez de escondido: así se ve el "4" fijo y no
-   * parece que la app se olvidó de mostrarlo).
+   * conservadora, `promptB` la libre. Con el switch activo, `variantes` se ignora.
    */
   const [dual, setDual] = useState(false);
   const [promptA, setPromptA] = useState("");
@@ -132,10 +139,8 @@ export default function GeneradorMasivo() {
 
   /**
    * Activa/desactiva "Prompt dual". Al ACTIVAR (no al desactivar), si algún campo
-   * está vacío se precarga con el default de referencia — así la primera vez que se
-   * prueba el switch ya hay algo editable en pantalla en vez de dos textareas en
-   * blanco. Si el campo ya tiene texto (el usuario lo escribió, o ya lo había
-   * precargado antes), se deja tal cual: activar el switch no pisa nada.
+   * está vacío se precarga con el default de referencia. Si el campo ya tiene texto,
+   * se deja tal cual: activar el switch no pisa nada.
    */
   function toggleDual(activar: boolean) {
     setDual(activar);
@@ -147,15 +152,18 @@ export default function GeneradorMasivo() {
 
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Las tandas lanzadas DESDE ESTA PESTAÑA (no persiste entre reloads: agrupar las
-  // tandas viejas se puede reconstruir mas adelante desde /api/projects agrupando por
-  // `batch.batchId` si hiciera falta; para "generar y ver que pasa" alcanza con esto).
+  // Las tandas lanzadas DESDE ESTA PESTAÑA (no persiste entre reloads).
   const [tandas, setTandas] = useState<BatchResumen[]>([]);
+  /**
+   * Tanda seleccionada en el sidebar, para ver su progreso. `null` = mostrar el
+   * formulario. Al lanzar una tanda nueva, pasa a apuntar a esa automáticamente
+   * (mismo comportamiento de "recién generado pasa a ser lo que se mira" que tiene
+   * la pestaña Generar con `?id=`).
+   */
+  const [tandaAbierta, setTandaAbierta] = useState<string | null>(null);
 
   /*
-    Preview de cada foto con URL.createObjectURL, revocadas en cleanup: mismo motivo
-    que la imagen base de ImagenesBoard (sin revoke, cada archivo elegido queda vivo
-    en memoria hasta cerrar la pestaña).
+    Preview de cada foto con URL.createObjectURL, revocadas en cleanup.
   */
   useEffect(() => {
     const urls = fotos.map((f) => URL.createObjectURL(f));
@@ -294,6 +302,7 @@ export default function GeneradorMasivo() {
         },
         ...prev,
       ]);
+      setTandaAbierta(data.batchId!);
       setPrompt("");
       setPromptA("");
       setPromptB("");
@@ -317,272 +326,344 @@ export default function GeneradorMasivo() {
     }`;
   }, [fotos.length, variantes, dual, formato, calidad]);
 
+  const tandaSeleccionada = tandas.find((t) => t.batchId === tandaAbierta) ?? null;
+
   return (
-    <div className="flex flex-col gap-5">
-      <form onSubmit={generar}>
-        <Card className="flex flex-col gap-4">
-          <CardHeader className="mb-0">
-            <div>
-              <CardTitle>Generador masivo de variaciones</CardTitle>
-              <CardDescription>
-                Subí varias fotos y un solo prompt: crea un proyecto por foto y los
-                corre de a uno (no en paralelo), alternando {MODELOS_TANDA} para no
-                pegar contra la cuota por minuto de un solo modelo.
-              </CardDescription>
-            </div>
-          </CardHeader>
-
-          <Input
-            id="nombre-base-masivo"
-            label="Nombre de la tanda"
-            value={nombreBase}
-            onChange={(e) => setNombreBase(e.target.value)}
-            required
-            placeholder="alma-gemela"
-            autoComplete="off"
-            hint="Cada proyecto se va a llamar así + un número (alma-gemela 1, alma-gemela 2, …)."
-          />
-
-          {/*
-            Switch "Prompt dual". Mismo patron que el de auto-aprobacion de la home
-            (checkbox nativo + accent-accent): no hay un componente Switch en el
-            sistema de diseño, y agregar uno para un solo uso no se justifica.
-          */}
-          <Card flush>
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg p-3.5 focus-within:ring-2 focus-within:ring-accent">
-              <input
-                type="checkbox"
-                checked={dual}
-                onChange={(e) => toggleDual(e.target.checked)}
-                className="mt-0.5 size-4 shrink-0 accent-accent"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block text-body font-medium text-fg">Prompt dual</span>
-                <span className="mt-0.5 block max-w-prose text-label text-fg-dim">
-                  {dual ? (
-                    <>
-                      4 variantes fijas por foto: <b className="font-medium text-fg">A</b>{" "}
-                      (variación casi igual) y <b className="font-medium text-fg">B</b>{" "}
-                      (libertad para armar el ad), cada una con Flash y con Pro.
-                    </>
-                  ) : (
-                    <>
-                      Probá dos prompts distintos por foto — uno conservador y otro con
-                      más libertad creativa — cruzados con los dos modelos.
-                    </>
-                  )}
-                </span>
-              </span>
-            </label>
-          </Card>
-
-          {dual ? (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="flex flex-col gap-1">
-                <Textarea
-                  id="prompt-a-masivo"
-                  label="Prompt A — variación casi igual"
-                  hint="Conservador: mantiene la composición, cambia poco. Precargado con un ejemplo — editalo como quieras."
-                  value={promptA}
-                  onChange={(e) => setPromptA(e.target.value)}
-                  required
-                  rows={6}
-                  mono
-                  spellCheck={false}
-                />
-                {promptA !== PROMPT_A_DEFAULT && (
-                  <button
-                    type="button"
-                    onClick={() => setPromptA(PROMPT_A_DEFAULT)}
-                    className="self-start text-label text-fg-dim underline-offset-2 hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Restaurar el sugerido
-                  </button>
-                )}
-              </div>
-              <div className="flex flex-col gap-1">
-                <Textarea
-                  id="prompt-b-masivo"
-                  label="Prompt B — libertad creativa"
-                  hint="Usa la foto solo como referencia y le da más libertad al modelo. Precargado con un ejemplo — editalo como quieras."
-                  value={promptB}
-                  onChange={(e) => setPromptB(e.target.value)}
-                  required
-                  rows={6}
-                  mono
-                  spellCheck={false}
-                />
-                {promptB !== PROMPT_B_DEFAULT && (
-                  <button
-                    type="button"
-                    onClick={() => setPromptB(PROMPT_B_DEFAULT)}
-                    className="self-start text-label text-fg-dim underline-offset-2 hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Restaurar el sugerido
-                  </button>
-                )}
-              </div>
-            </div>
+    <>
+      {/* ─── Sidebar: segmented + Nueva tanda masiva + tandas de la sesión ─── */}
+      <aside className="flex min-h-0 flex-col border-r border-divider">
+        <CabeceraSidebar
+          tab={tab}
+          onCambiarTab={onCambiarTab}
+          onNuevaTanda={() => setTandaAbierta(null)}
+          labelNueva="Nueva tanda masiva"
+        />
+        <div className="px-4 pb-2">
+          <span className="text-label font-medium text-fg-dim">
+            Tandas de esta sesión{" "}
+            {tandas.length > 0 && (
+              <span className="code tnum font-normal">{tandas.length}</span>
+            )}
+          </span>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          {tandas.length === 0 ? (
+            <p className="px-2 text-label text-fg-dim">
+              Las tandas que lances en esta pestaña van a quedar acá mientras esta
+              pestaña esté abierta.
+            </p>
           ) : (
-            <Textarea
-              id="prompt-masivo"
-              label="Prompt (el mismo para todas)"
-              hint="Se aplica igual a cada foto. Podés usar varios renglones."
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              required
-              rows={6}
-              mono
-              spellCheck={false}
-              placeholder={
-                'Me haces una variación de este creativo.\nEs un ad para vender una oferta de "dibujá tu alma gemela".\nVa orientado a mujeres.\nNo hace falta que cambies mucho, este ya funcionó.'
-              }
-            />
-          )}
-
-          {/* Dropzone multi-archivo */}
-          <div>
-            <span className="mb-1 block text-label font-medium text-fg-dim">
-              Fotos a variar
-            </span>
-            <label
-              onDragOver={(e) => {
-                e.preventDefault();
-                setArrastrando(true);
-              }}
-              onDragLeave={() => setArrastrando(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setArrastrando(false);
-                agregarFotos(e.dataTransfer.files);
-              }}
-              className={cn(
-                "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed",
-                "px-3 py-6 text-body text-fg-dim transition-colors",
-                arrastrando
-                  ? "border-accent bg-accent/5 text-fg"
-                  : "border-divider bg-surface hover:border-border",
-              )}
-            >
-              <UploadSimple aria-hidden className="size-5" />
-              Arrastrá las fotos, o hacé click para elegirlas
-              <span className="text-label">
-                PNG, JPG o WEBP · podés elegir varias a la vez
-              </span>
-              <input
-                ref={inputRef}
-                type="file"
-                multiple
-                accept="image/png,image/jpeg,image/webp"
-                onChange={(e) => {
-                  agregarFotos(e.target.files);
-                  e.target.value = "";
-                }}
-                className="sr-only"
-              />
-            </label>
-
-            {fotos.length > 0 && (
-              <div className="mt-2 flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <p className="font-mono text-label tnum text-fg-dim">
-                    {fotos.length} {fotos.length === 1 ? "foto" : "fotos"}
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={limpiarFotos}
-                    icon={<Trash aria-hidden className="size-3.5" />}
-                  >
-                    Vaciar
-                  </Button>
-                </div>
-                <ul className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8">
-                  {fotos.map((foto, i) => (
-                    <li key={`${foto.name}-${i}`} className="relative">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={previews[i]}
-                        alt={foto.name}
-                        className="aspect-square w-full rounded-md border border-divider object-cover"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => quitarFoto(i)}
-                        aria-label={`Quitar ${foto.name}`}
-                        title="Quitar"
-                        className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-danger text-on-accent shadow-sm hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                      >
-                        <Trash aria-hidden className="size-3" />
-                      </button>
-                      <span className="mt-0.5 block truncate text-center text-label text-fg-dim">
-                        {i + 1}
+            <ul className="flex flex-col gap-0.5">
+              {tandas.map((t) => {
+                const terminadas = t.proyectos.filter(
+                  (p) => !STATUS_EN_CURSO.has(p.status),
+                ).length;
+                const activa = t.batchId === tandaAbierta;
+                const nombre = t.proyectos[0]?.name.replace(/\s\d+$/, "") ?? "Tanda";
+                return (
+                  <li key={t.batchId}>
+                    <button
+                      type="button"
+                      onClick={() => setTandaAbierta(t.batchId)}
+                      aria-current={activa ? "true" : undefined}
+                      className={cn(
+                        "flex w-full flex-col gap-1.5 rounded-md border p-2.5 text-left transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                        activa
+                          ? "border-accent bg-accent/10"
+                          : "border-transparent hover:bg-surface",
+                      )}
+                    >
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-body font-medium text-fg">
+                          {nombre}
+                        </span>
+                        <span className="code tnum shrink-0 text-label text-fg-dim">
+                          {terminadas}/{t.total}
+                        </span>
                       </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
+                      <Progreso hechos={terminadas} total={t.total} tono="ok" alto={3} />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </aside>
 
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Select
-              label="Formato"
-              value={formato}
-              onValueChange={setFormato}
-              options={FORMATOS}
-            />
-            <Select
-              label="Calidad"
-              value={calidad}
-              onValueChange={setCalidad}
-              options={CALIDADES}
-            />
-            {dual ? (
-              // Deshabilitado y no escondido: se ve el "4" fijo en vez de que
-              // parezca que la pantalla se olvidó de mostrar el selector.
-              <Select
-                label="Variantes por foto"
-                value="4"
-                onValueChange={() => {}}
-                options={[{ value: "4", label: "4 (fijo con prompt dual)" }]}
-                disabled
-              />
-            ) : (
-              <Select
-                label="Variantes por foto"
-                value={String(variantes)}
-                onValueChange={(v) => setVariantes(Number(v))}
-                options={VARIANTES}
-              />
-            )}
-          </div>
+      {/* ─── Main: form de "Nueva tanda masiva", o el progreso de la elegida ── */}
+      {tandaSeleccionada ? (
+        <ProgresoTanda tanda={tandaSeleccionada} />
+      ) : (
+        <main className="flex min-h-0 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <form
+              id="form-masivo"
+              onSubmit={generar}
+              className="mx-auto flex max-w-[1080px] flex-col gap-5 p-6"
+            >
+              <header>
+                <h1 className="text-display font-semibold text-fg">Generador masivo</h1>
+                <p className="mt-1 max-w-prose text-body text-fg-dim">
+                  Subí varias fotos y un solo prompt: crea un proyecto por foto y los
+                  corre de a uno (no en paralelo), alternando {MODELOS_TANDA}.
+                </p>
+              </header>
 
-          <Input
-            id="negativo-masivo"
-            label="Negative prompt (opcional)"
-            value={negativo}
-            onChange={(e) => setNegativo(e.target.value)}
-            placeholder="text, watermark, extra fingers"
-            autoComplete="off"
-          />
-
-          <div aria-live="polite">
-            {error && (
-              <p
-                role="alert"
-                className="flex items-start gap-2 rounded-sm bg-danger/10 px-3 py-2 text-body text-danger"
+              <div
+                className="grid gap-6"
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}
               >
-                <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
-                {error}
-              </p>
-            )}
+                {/* ─── Izquierda ───────────────────────────────────────────── */}
+                <div className="flex flex-col gap-4">
+                  {/* Dropzone multi-archivo */}
+                  <div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-label font-medium text-fg-dim">
+                        Fotos a variar
+                      </span>
+                      {fotos.length > 0 && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={limpiarFotos}
+                          icon={<Trash aria-hidden className="size-3.5" />}
+                        >
+                          Vaciar
+                        </Button>
+                      )}
+                    </div>
+                    <label
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setArrastrando(true);
+                      }}
+                      onDragLeave={() => setArrastrando(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setArrastrando(false);
+                        agregarFotos(e.dataTransfer.files);
+                      }}
+                      className={cn(
+                        "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed",
+                        "px-3 py-6 text-body text-fg-dim transition-colors",
+                        arrastrando
+                          ? "border-accent bg-accent/5 text-fg"
+                          : "border-divider bg-surface hover:border-border",
+                      )}
+                    >
+                      <UploadSimple aria-hidden className="size-5" />
+                      Arrastrá las fotos, o hacé click para elegirlas
+                      <span className="text-label">
+                        PNG, JPG o WEBP · podés elegir varias a la vez
+                      </span>
+                      <input
+                        ref={inputRef}
+                        type="file"
+                        multiple
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={(e) => {
+                          agregarFotos(e.target.files);
+                          e.target.value = "";
+                        }}
+                        className="sr-only"
+                      />
+                    </label>
+
+                    {fotos.length > 0 && (
+                      <div className="mt-2 flex flex-col gap-2">
+                        <p className="code tnum text-label text-fg-dim">
+                          {fotos.length} {fotos.length === 1 ? "foto" : "fotos"}
+                        </p>
+                        <ul className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8">
+                          {fotos.map((foto, i) => (
+                            <li key={`${foto.name}-${i}`} className="relative">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={previews[i]}
+                                alt={foto.name}
+                                className="aspect-square w-full rounded-md border border-divider object-cover"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => quitarFoto(i)}
+                                aria-label={`Quitar ${foto.name}`}
+                                title="Quitar"
+                                className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-danger text-on-accent shadow-sm hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              >
+                                <Trash aria-hidden className="size-3" />
+                              </button>
+                              <span className="mt-0.5 block truncate text-center text-label text-fg-dim">
+                                {i + 1}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  <Input
+                    id="nombre-base-masivo"
+                    label="Nombre de la tanda"
+                    value={nombreBase}
+                    onChange={(e) => setNombreBase(e.target.value)}
+                    required
+                    placeholder="alma-gemela"
+                    autoComplete="off"
+                    hint={`Cada proyecto se llama así + un número (${
+                      nombreBase.trim() || "alma-gemela"
+                    } 1, ${nombreBase.trim() || "alma-gemela"} 2, …).`}
+                  />
+
+                  <ToggleCard
+                    activo={dual}
+                    onChange={toggleDual}
+                    title="Prompt dual"
+                    descripcion={
+                      dual ? (
+                        <>
+                          4 variantes fijas por foto: <b className="font-medium text-fg">A</b>{" "}
+                          (variación casi igual) y <b className="font-medium text-fg">B</b>{" "}
+                          (libertad para armar el ad), cada una con Flash y con Pro.
+                        </>
+                      ) : (
+                        <>
+                          Probá dos prompts distintos por foto — uno conservador y otro con
+                          más libertad creativa — cruzados con los dos modelos.
+                        </>
+                      )
+                    }
+                  />
+
+                  {dual ? (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="flex flex-col gap-1">
+                        <Textarea
+                          id="prompt-a-masivo"
+                          label="Prompt A — variación casi igual"
+                          hint="Conservador: mantiene la composición, cambia poco."
+                          value={promptA}
+                          onChange={(e) => setPromptA(e.target.value)}
+                          required
+                          rows={7}
+                          mono
+                          spellCheck={false}
+                        />
+                        {promptA !== PROMPT_A_DEFAULT && (
+                          <button
+                            type="button"
+                            onClick={() => setPromptA(PROMPT_A_DEFAULT)}
+                            className="self-start text-label text-fg-dim underline-offset-2 hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          >
+                            Restaurar el sugerido
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <Textarea
+                          id="prompt-b-masivo"
+                          label="Prompt B — libertad creativa"
+                          hint="Usa la foto solo como referencia y le da más libertad al modelo."
+                          value={promptB}
+                          onChange={(e) => setPromptB(e.target.value)}
+                          required
+                          rows={7}
+                          mono
+                          spellCheck={false}
+                        />
+                        {promptB !== PROMPT_B_DEFAULT && (
+                          <button
+                            type="button"
+                            onClick={() => setPromptB(PROMPT_B_DEFAULT)}
+                            className="self-start text-label text-fg-dim underline-offset-2 hover:text-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                          >
+                            Restaurar el sugerido
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <Textarea
+                      id="prompt-masivo"
+                      label="Prompt (el mismo para todas)"
+                      hint="Se aplica igual a cada foto. Podés usar varios renglones."
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      required
+                      rows={6}
+                      mono
+                      spellCheck={false}
+                      placeholder={
+                        'Me haces una variación de este creativo.\nEs un ad para vender una oferta de "dibujá tu alma gemela".\nVa orientado a mujeres.\nNo hace falta que cambies mucho, este ya funcionó.'
+                      }
+                    />
+                  )}
+                </div>
+
+                {/* ─── Derecha: card surface ───────────────────────────────── */}
+                <div className="flex flex-col gap-4 rounded-lg bg-surface p-4">
+                  <Select
+                    label="Formato"
+                    value={formato}
+                    onValueChange={setFormato}
+                    options={FORMATOS}
+                  />
+                  <Select
+                    label="Calidad"
+                    value={calidad}
+                    onValueChange={setCalidad}
+                    options={CALIDADES}
+                  />
+                  {dual ? (
+                    // Deshabilitado y no escondido: se ve el "4" fijo en vez de que
+                    // parezca que la pantalla se olvidó de mostrar el selector.
+                    <Select
+                      label="Variantes por foto"
+                      value="4"
+                      onValueChange={() => {}}
+                      options={[{ value: "4", label: "4 (fijo con prompt dual)" }]}
+                      disabled
+                    />
+                  ) : (
+                    <Select
+                      label="Variantes por foto"
+                      value={String(variantes)}
+                      onValueChange={(v) => setVariantes(Number(v))}
+                      options={VARIANTES}
+                    />
+                  )}
+                  <Input
+                    id="negativo-masivo"
+                    label="Negative prompt (opcional)"
+                    value={negativo}
+                    onChange={(e) => setNegativo(e.target.value)}
+                    placeholder="text, watermark, extra fingers"
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+
+              <div aria-live="polite">
+                {error && (
+                  <p
+                    role="alert"
+                    className="flex items-start gap-2 rounded-sm bg-danger/10 px-3 py-2 text-body text-danger"
+                  >
+                    <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+                    {error}
+                  </p>
+                )}
+              </div>
+            </form>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 border-t border-divider pt-4">
+          <BarraInferior>
             <Button
               type="submit"
+              form="form-masivo"
               variant="primary"
               loading={enviando}
               disabled={!puedeEnviar}
@@ -590,62 +671,87 @@ export default function GeneradorMasivo() {
             >
               Generar la tanda
             </Button>
-            {resumenCosto && (
-              <p className="font-mono text-label tnum text-fg-dim">{resumenCosto}</p>
-            )}
-          </div>
-        </Card>
-      </form>
+            {resumenCosto && <p className="code text-label text-fg-dim">{resumenCosto}</p>}
+          </BarraInferior>
+        </main>
+      )}
+    </>
+  );
+}
 
-      {/* ─── Tandas lanzadas en esta pestaña ────────────────────────────────── */}
-      {tandas.length > 0 && (
-        <section className="flex flex-col gap-3">
-          <h2 className="border-t border-divider pt-5 text-title font-semibold text-fg">
-            Tandas de esta sesión
-          </h2>
-          <div className="flex flex-col gap-3">
-            {tandas.map((t) => {
-              const terminadas = t.proyectos.filter(
-                (p) => !STATUS_EN_CURSO.has(p.status),
-              ).length;
+/**
+ * Progreso de una tanda: header mono + barra de 4px, grilla de cards por proyecto.
+ * Click en una card abre `/imagenes?id=` en la pestaña Generar — es un <Link>
+ * normal, no cambia de pestaña por JS: al navegar, `ImagenesTabs` vuelve a montar
+ * con `tab` en su default ("generar"), que es exactamente donde tiene que aparecer.
+ */
+function ProgresoTanda({ tanda }: { tanda: BatchResumen }) {
+  const terminadas = tanda.proyectos.filter((p) => !STATUS_EN_CURSO.has(p.status)).length;
+  const nombre = tanda.proyectos[0]?.name.replace(/\s\d+$/, "") ?? "Tanda";
+
+  return (
+    <main className="flex min-h-0 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex max-w-[1080px] flex-col gap-4 p-6">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h1 className="code text-display font-semibold text-fg">{nombre}</h1>
+              <p className="code text-label text-fg-dim">
+                {terminadas}/{tanda.total} listas · corre de a una · 9:16
+              </p>
+            </div>
+          </div>
+          <Progreso
+            hechos={terminadas}
+            total={tanda.total}
+            tono="ok"
+            alto={4}
+            etiqueta={`Progreso de ${nombre}`}
+          />
+          <div
+            className="grid gap-3"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}
+          >
+            {tanda.proyectos.map((p) => {
+              const estado = estadoDeProyecto(p.status);
               return (
-                <Card key={t.batchId} className="flex flex-col gap-2.5">
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <p className="text-body font-medium text-fg">
-                      {t.proyectos[0]?.name.replace(/\s\d+$/, "") ?? "Tanda"}
-                    </p>
-                    <p className="font-mono text-label tnum text-fg-dim">
-                      {terminadas}/{t.total} listas · corre de a una
-                    </p>
+                <Link
+                  key={p.id}
+                  href={`/imagenes?id=${encodeURIComponent(p.id)}`}
+                  className={cn(
+                    "flex flex-col gap-2 rounded-lg border border-divider bg-surface p-2 transition-colors",
+                    "hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                  )}
+                >
+                  <div className="grid grid-cols-2 gap-1">
+                    <span
+                      aria-hidden
+                      className="aspect-[9/16] rounded-sm bg-surface-hi"
+                      style={{ opacity: STATUS_EN_CURSO.has(p.status) ? 0.3 : 1 }}
+                    />
+                    <span
+                      aria-hidden
+                      className="aspect-[9/16] rounded-sm bg-surface-hi"
+                      style={{ opacity: STATUS_EN_CURSO.has(p.status) ? 0.3 : 1 }}
+                    />
                   </div>
-                  <ul className="flex flex-col gap-1.5">
-                    {t.proyectos.map((p) => {
-                      const estado = estadoDeProyecto(p.status);
-                      return (
-                        <li
-                          key={p.id}
-                          className="flex items-center justify-between gap-2 rounded-md border border-divider bg-surface px-2.5 py-1.5"
-                        >
-                          <Link
-                            href={`/imagenes?id=${encodeURIComponent(p.id)}`}
-                            className="flex min-w-0 items-center gap-2 text-body text-fg hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                          >
-                            <ImageIcon aria-hidden className="size-4 shrink-0 text-fg-dim" />
-                            <span className="truncate">{p.name}</span>
-                          </Link>
-                          <Badge tone={estado.tone} punto animado={estado.animado}>
-                            {estado.label}
-                          </Badge>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </Card>
+                  <div className="flex items-center justify-between gap-2 px-0.5 pb-0.5">
+                    <span className="code min-w-0 truncate text-label text-fg">
+                      {p.name}
+                    </span>
+                    <Badge tone={estado.tone} punto animado={estado.animado} className="shrink-0">
+                      {estado.label}
+                    </Badge>
+                  </div>
+                </Link>
               );
             })}
           </div>
-        </section>
-      )}
-    </div>
+          <p className="text-label text-fg-dim">
+            Corre de a una. Tocá una tanda para revisar sus variantes en Generar.
+          </p>
+        </div>
+      </div>
+    </main>
   );
 }
