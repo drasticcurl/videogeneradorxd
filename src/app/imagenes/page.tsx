@@ -12,6 +12,7 @@
  * importarlo desde el server revienta el build. Los iconos de esta pantalla viven en
  * `ImagenesBoard`, que si es cliente.
  */
+import { PantallaScroll } from "@/components/Pantalla";
 import { MODEL_CATALOG, config } from "@/lib/config";
 
 import ImagenesTabs from "./ImagenesTabs";
@@ -24,6 +25,7 @@ export const metadata = {
 
 export default function ImagenesPage() {
   return (
+    <PantallaScroll>
     <div className="flex flex-col gap-6">
       <header>
         <h1 className="text-display font-semibold text-fg">Imágenes</h1>
@@ -38,5 +40,6 @@ export default function ImagenesPage() {
         modeloDefault={config.models.image}
       />
     </div>
+    </PantallaScroll>
   );
 }

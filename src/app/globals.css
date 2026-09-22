@@ -42,6 +42,27 @@ body {
   scrollbar-color: #3f3f46 transparent;
 }
 
+/* ─── Medios 9:16 dimensionados contra el ALTO disponible ────────────────────
+   El rediseño saca el scroll de la pagina: la grilla de variantes y el video final
+   tienen que entrar en el alto que quedo, sea el que sea. Para eso el contenedor
+   declara `container-type: size` (mide alto Y ancho, no solo ancho) y el item se
+   pide `width: min(<lo que permite el ancho>, calc(100cqh * 0.5625))`, donde 0.5625
+   es 9/16.
+
+   Va en CSS a mano y no como clase de Tailwind porque `container-type: size` no
+   existe en Tailwind 3.4: el plugin oficial de container queries solo genera
+   `inline-size`, que mide el ancho y deja `100cqh` sin resolver. Con inline-size la
+   imagen crece hasta desbordar el contenedor y vuelve el scroll que el rediseño
+   vino a sacar.
+
+   OJO: `container-type: size` obliga al contenedor a tener un alto definido por su
+   padre (no puede depender del contenido). En la practica eso significa que arriba
+   siempre hay un `flex-1 min-h-0`. Si el contenedor queda sin alto, el item mide 0
+   y la pantalla se ve vacia, sin ningun error. */
+.cq-size {
+  container-type: size;
+}
+
 /* El anillo de foco NUNCA se saca sin reemplazo: son dos personas que trabajan con
    teclado. Se usa focus-visible para que no aparezca al clickear con el mouse. */
 :focus-visible {

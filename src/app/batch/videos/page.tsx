@@ -17,6 +17,7 @@
  */
 import { Suspense } from "react";
 
+import { PantallaScroll } from "@/components/Pantalla";
 import { Skeleton } from "@/components/ui";
 
 import { VideoDeck } from "./VideoDeck";
@@ -29,9 +30,11 @@ export const metadata = {
 
 export default function BatchVideosPage() {
   return (
-    <Suspense fallback={<DeckCargando />}>
-      <VideoDeck />
-    </Suspense>
+    <PantallaScroll>
+      <Suspense fallback={<DeckCargando />}>
+        <VideoDeck />
+      </Suspense>
+    </PantallaScroll>
   );
 }
 

@@ -35,7 +35,25 @@ export default function RootLayout({
       className={cn(GeistSans.variable, GeistMono.variable)}
       suppressHydrationWarning
     >
-      <body className="min-h-screen bg-bg font-sans text-body text-fg antialiased">
+      {/*
+        SHELL DE ALTO FIJO, y es la decision de layout que sostiene el rediseño
+        entero: `h-screen flex flex-col overflow-hidden` + header de 56px + main
+        `flex-1 min-h-0`. El scroll pasa a vivir ADENTRO de cada columna y no en la
+        pagina.
+
+        Por que: las pantallas de trabajo (galeria de imagenes, pipeline de un
+        proyecto, revisar) muestran medios 9:16. Con scroll de pagina, para aprobar
+        la variante de una tanda habia que bajar hasta el final, y al volver del
+        fetch la posicion se perdia. Con el alto fijo la grilla se dimensiona con
+        container queries contra el alto REAL disponible y todo entra sin scrollear.
+
+        Consecuencia para quien agregue una pantalla: `main` ya NO trae max-width ni
+        padding. Cada pagina elige, con `PantallaScroll` (scrollea, ancho maximo) o
+        `PantallaFija` (columnas con su propio scroll). Una pagina que no use
+        ninguna de las dos y sea mas alta que el viewport queda CORTADA, porque el
+        body es overflow-hidden.
+      */}
+      <body className="flex h-screen flex-col overflow-hidden bg-bg font-sans text-body text-fg antialiased">
         {/* Salta el nav. Son dos personas que trabajan con teclado y hoy hay que
             tabular los 4 links en cada pantalla para llegar al contenido. */}
         <a
@@ -45,8 +63,14 @@ export default function RootLayout({
           Saltar al contenido
         </a>
 
-        <header className="border-b border-divider bg-bg">
-          <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-3 px-4 sm:gap-6">
+        <header className="flex-none border-b border-divider bg-bg">
+          {/*
+            Ancho completo y ya no `max-w-[1400px] mx-auto`: abajo hay pantallas de
+            ancho completo (la galeria de imagenes arranca con un sidebar pegado al
+            borde izquierdo) y un header centrado a 1400 dejaba la marca flotando
+            lejos del sidebar en un monitor ancho.
+          */}
+          <div className="flex h-14 items-center gap-3 px-4 sm:gap-6">
             <Link
               href="/"
               className="flex shrink-0 items-center gap-2 rounded-md font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -92,9 +116,13 @@ export default function RootLayout({
           </div>
         </header>
 
-        {/* 1400px y no max-w-6xl (1152): esta app muestra grillas de medios y en un
-            monitor ancho el limite viejo desperdiciaba media pantalla. */}
-        <main id="contenido" className="mx-auto max-w-[1400px] px-4 py-6">
+        {/*
+          Ni `max-w` ni `py`: los pone la pagina, con `PantallaScroll` o
+          `PantallaFija` (ver `@/components/Pantalla`). `min-h-0` es lo que permite
+          que un hijo con `overflow-y-auto` scrollee: sin eso el hijo crece y
+          empuja, y el shell de alto fijo no sirve para nada.
+        */}
+        <main id="contenido" className="flex min-h-0 flex-1 flex-col">
           {children}
         </main>
       </body>

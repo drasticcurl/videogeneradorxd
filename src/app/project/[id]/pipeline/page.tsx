@@ -83,6 +83,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlowGraph } from "@/components/FlowGraph";
 import { JobCard } from "@/components/JobCard";
 import { LogPanel } from "@/components/LogPanel";
+import { PantallaScroll } from "@/components/Pantalla";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
@@ -436,6 +437,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
   const grafoAbierto = verGrafo ?? groups.vids.length <= UMBRAL_VISTA_LIVIANA;
 
   return (
+    <PantallaScroll>
     <div className="flex flex-col gap-5">
       <ProjectTabs projectId={projectId} />
 
@@ -728,6 +730,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
 
       <LogPanel logs={logs} />
     </div>
+    </PantallaScroll>
   );
 }
 

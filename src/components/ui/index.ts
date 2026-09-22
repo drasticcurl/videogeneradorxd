@@ -26,6 +26,12 @@ export {
 } from "./Dialog";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Input, Textarea, type InputProps, type TextareaProps } from "./Field";
+export { Progreso, ProgresoConLabel } from "./Progreso";
+export {
+  Segmented,
+  type OpcionSegmentada,
+} from "./Segmented";
 export { Select, type SelectOption, type SelectProps } from "./Select";
 export { Skeleton, SkeletonGrid } from "./Skeleton";
 export { Tabs, TabsContent, TabsList, TabsTrigger } from "./Tabs";
+export { Kbd, ToggleCard } from "./ToggleCard";

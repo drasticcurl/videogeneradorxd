@@ -61,6 +61,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { PantallaScroll } from "@/components/Pantalla";
 import { ProjectTabs } from "@/components/ProjectTabs";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
@@ -297,6 +298,7 @@ export default function ResultPage({ params }: { params: { id: string } }) {
   );
 
   return (
+    <PantallaScroll>
     <div className="flex flex-col gap-5">
       <ProjectTabs projectId={projectId} />
 
@@ -594,6 +596,7 @@ export default function ResultPage({ params }: { params: { id: string } }) {
         </Card>
       )}
     </div>
+    </PantallaScroll>
   );
 }
 

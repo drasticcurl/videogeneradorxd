@@ -14,6 +14,7 @@
  */
 import { Suspense } from "react";
 
+import { PantallaScroll } from "@/components/Pantalla";
 import { Skeleton } from "@/components/ui";
 
 import { BatchBoard } from "./BatchBoard";
@@ -26,9 +27,11 @@ export const metadata = {
 
 export default function BatchPage() {
   return (
-    <Suspense fallback={<TableroCargando />}>
-      <BatchBoard />
-    </Suspense>
+    <PantallaScroll>
+      <Suspense fallback={<TableroCargando />}>
+        <BatchBoard />
+      </Suspense>
+    </PantallaScroll>
   );
 }
 

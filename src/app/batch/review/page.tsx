@@ -13,6 +13,7 @@
  */
 import { Suspense } from "react";
 
+import { PantallaScroll } from "@/components/Pantalla";
 import { Skeleton } from "@/components/ui";
 
 import { ReviewDeck } from "./ReviewDeck";
@@ -25,9 +26,11 @@ export const metadata = {
 
 export default function BatchReviewPage() {
   return (
-    <Suspense fallback={<DeckCargando />}>
-      <ReviewDeck />
-    </Suspense>
+    <PantallaScroll>
+      <Suspense fallback={<DeckCargando />}>
+        <ReviewDeck />
+      </Suspense>
+    </PantallaScroll>
   );
 }
 

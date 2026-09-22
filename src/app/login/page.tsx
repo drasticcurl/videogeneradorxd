@@ -18,6 +18,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { PantallaScroll } from "@/components/Pantalla";
 import { Card, CardDescription } from "@/components/ui";
 import { currentUser, listUsers, isConfigured } from "@/lib/auth";
 
@@ -40,6 +41,7 @@ export default function LoginPage() {
   return (
     // Centrado, que es lo correcto SOLO aca: es la unica pantalla de la app con un
     // proposito unico y sin datos que mostrar al costado.
+    <PantallaScroll ancho="full">
     <div className="mx-auto mt-10 max-w-sm">
       {/* `p-6` en vez del `p-4` que trae `Card`: es la unica tarjeta que ocupa la
           pantalla entera, y con el padding de una tarjeta de grilla queda apretada. */}
@@ -80,5 +82,6 @@ export default function LoginPage() {
         )}
       </Card>
     </div>
+    </PantallaScroll>
   );
 }

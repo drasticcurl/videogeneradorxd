@@ -58,6 +58,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CostEstimatePanel } from "@/components/CostEstimatePanel";
 import { JsonEditor } from "@/components/JsonEditor";
 import { ModelSelectorBar } from "@/components/ModelSelectorBar";
+import { PantallaScroll } from "@/components/Pantalla";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   Badge,
@@ -487,6 +488,7 @@ export default function HomePage() {
   ).length;
 
   return (
+    <PantallaScroll>
     <div className="space-y-8">
       {/* ─────────────────────────── encabezado ─────────────────────────── */}
       <header className="flex flex-wrap items-end justify-between gap-4">
@@ -1134,6 +1136,7 @@ export default function HomePage() {
         />
       )}
     </div>
+    </PantallaScroll>
   );
 }
 
