@@ -6,6 +6,57 @@ edita una entrada vieja, se agrega una nueva si hay que corregir algo.
 
 ---
 
+## 2026-09-23 (2) — "Aprobar clip" y "Extender +7s" desconectados por el rediseño
+
+**Pedido:** "me desapareció el botón de aprobar clip".
+
+**Estado:** hecha, verificada apretando el botón en la app real (no sólo leyendo código).
+
+### El diagnóstico, y la pregunta que lo abrió
+
+Lo primero fue no asumir. En `/batch/videos` el botón existía y estaba bien condicionado
+(`item.status === "awaiting_approval"`), así que el problema estaba en el pipeline. El chequeo que lo
+encontró rápido fue listar **qué acciones del store extrae la página y dónde se consumen**: `approveJob`
+y `extendJob` estaban importadas y envueltas en `useCallback`, pero el objeto `handlers` que las
+transporta sólo llegaba a las tarjetas de imagen. El `ClipEditor` recibía `onSave`, `onRegenerate` y
+`onChangeResolution`, y nada más.
+
+Ese barrido también destapó el segundo caso: "Extender +7s" no estaba inalcanzable *en el pipeline*,
+estaba inalcanzable **en toda la app**, con el endpoint vivo y documentado.
+
+### Decisiones tomadas sin especificación explícita
+
+- **Se replicaron las condiciones de `JobCard` en vez de inventar nuevas**: aprobar con
+  `status === "awaiting_approval"` (que era `estado.tone === "attention"`) y extender con
+  `job.outputPath`. Si el criterio de cuándo se puede aprobar algo cambia, tiene que cambiar en un solo
+  lugar, y ese lugar no es este editor.
+- **`onApprove` se adapta a un argumento** al pasarlo al editor. El de la página acepta
+  `(id, index?)` porque las imágenes eligen cuál de las N variantes se aprueba; un clip de video no
+  tiene variantes. Pasarlo tal cual dejaba abierta la puerta a mandar un índice y que el backend
+  aprobara la variante 0 de un job que no las tiene.
+- **`/api/projects/[id]/stage` NO se borró** aunque está huérfano desde `6069ed6`: está documentado en
+  el README y borrar un endpoint es un cambio de API, no limpieza. Queda como excepción con el motivo
+  en el verificador nuevo, y anotado acá para que la decisión sea visible.
+- **Dos verificadores y no uno**, porque hacen cosas distintas y uno solo no alcanza:
+  el estático corre en un segundo y caza que se borre el último llamador; el funcional abre Chrome y
+  caza lo que al estático se le escapa. Probé el estático simulando la pérdida y **siguió diciendo
+  OK** — lo dejé escrito en su propio encabezado para que nadie confíe de más en él.
+
+### Lo que aprendí de esto y conviene tener presente
+
+La firma de este bug es: *endpoint vivo + acción del store viva + typecheck verde + botón inexistente*.
+Se da cuando se reemplaza un componente por otro y los callbacks se siguen creando pero cambian de
+destinatario. Un `grep` no lo ve porque todos los identificadores siguen ahí. La única defensa barata
+es abrir la pantalla y buscar el botón, que es lo que ahora hace
+`tasks/_verificacion-ui-funcional.mjs`.
+
+**Cómo correrlo** (necesita la app en mock en :3100, el comando exacto está en el encabezado del
+script):
+
+    node tasks/_verificacion-ui-funcional.mjs
+
+---
+
 ## 2026-09-23 — Arreglo de layout en laptop (pipeline, resultado, /imagenes)
 
 **Pedido:** "revisá la ui dentro de un video, en mi laptop se ve mal, se superponen cosas y queda

@@ -6,6 +6,46 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-23 (2) — Volvieron "Aprobar clip" y "Extender +7s", que el rediseño había desconectado
+
+**Qué pasó:** reporte de "me desapareció el botón de aprobar clip". Real, y venía con un segundo caso
+más silencioso al lado.
+
+El rediseño reemplazó las `JobCard` de video por lista + editor de clip. Los botones vivían en
+`JobCard`, y el editor nuevo nunca los recibió: `onApprove` y `onExtend` se seguían creando en la
+página y metiendo en el objeto `handlers`, pero `handlers` llega **sólo a las tarjetas de imagen**.
+
+| acción | qué quedó | consecuencia |
+|---|---|---|
+| aprobar un clip | sin ningún botón | en modo manual el único camino era "Aprobar todos" del aviso, que compromete el lote entero — y cada clip de Veo son varios USD |
+| extender +7s | sin ningún botón **en toda la app** | `extendJob` seguía en el store, `POST /api/jobs/:id/extend` seguía respondiendo y el README seguía documentando la función |
+
+Los dos botones vuelven al editor con la **misma condición que usaba `JobCard`**: aprobar sólo si el
+job está en `awaiting_approval`, extender sólo si el video ya tiene archivo.
+
+**Lo que más importa de esto no es el botón, es que ningún control lo detectó.** Falló cada uno por un
+motivo distinto:
+
+- `_verificacion-endpoints.sh` compara **prefijos** (`/api/jobs/`), y el pipeline seguía mencionando ese
+  prefijo por el preview del job. Dijo "SIN REGRESIONES".
+- el typecheck: `extendJob` estaba importado, tipado y asignado a un `useCallback`. Código muerto
+  impecable.
+- el build y el inventario: ni se enteran.
+
+Se agregaron dos verificaciones. `_verificacion-acciones-alcanzables.sh` parte de los endpoints que
+existen y exige que cada uno se mencione en la interfaz; encontró dos huérfanos **preexistentes**
+(`/api/files`, legítimo, y `/api/projects/[id]/stage`, sin llamadores desde `6069ed6` porque la fase se
+cambia por `POST /api/batch`), los dos anotados como excepción con el motivo. Y
+`_verificacion-ui-funcional.mjs`, que **abre la app de verdad** con Chrome por CDP y verifica que los
+botones críticos estén en el DOM, además del chequeo de layout. Ese es el único que caza esta clase de
+bug: el estático siguió diciendo OK cuando se simuló la pérdida, porque el endpoint estaba mencionado y
+lo que lo cortaba era la condición de render.
+
+**Verificado** clickeando el botón de verdad en la app: el clip pasó de `awaiting_approval` a `done`, el
+log registró 'Video "c1" aprobado', el aviso bajó de 3 a 2 clips y la barra de Videos pasó a 1/3.
+
+---
+
 ## 2026-09-23 — El pipeline se rompía en una laptop: las imágenes tapaban el log
 
 **Qué pasó:** reporte de "en mi laptop se ve mal, se superponen cosas y queda horrible" en la pantalla
