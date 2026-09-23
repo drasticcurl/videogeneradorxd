@@ -71,6 +71,7 @@ import {
   Eye,
   EyeSlash,
   FilmSlate,
+  FastForward,
   FloppyDisk,
   ImageSquare,
   MagnifyingGlass,
@@ -601,6 +602,15 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           onRegenerateMany={onRegenerateMany}
           onChangeResolution={onChangeResolution}
           /*
+            `onApprove` de la pagina acepta un indice de variante (lo usan las
+            imagenes, para elegir cual de las N se aprueba). Un clip de video no
+            tiene variantes, asi que se adapta a un callback de UN argumento: si se
+            pasara `onApprove` tal cual, el editor podria mandar un indice sin
+            querer y el backend aprobaria la variante 0 de un job que no tiene.
+          */
+          onApprove={(jobId: string) => onApprove(jobId)}
+          onExtend={onExtend}
+          /*
             EL LOG VIAJA ADENTRO DEL SCROLL, no como bloque al final del shell.
             Medido con Chrome a 1280x700: como `flex-none` se comia 305px, el 43%
             del viewport de una laptop, y dejaba el pipeline de clips en 177px.
@@ -663,6 +673,8 @@ function ImagenesYClips({
   onRegenerate,
   onRegenerateMany,
   onChangeResolution,
+  onApprove,
+  onExtend,
   /** El log del pipeline. Va al final del scroll, no como bloque de alto fijo. */
   pie,
 }: {
@@ -683,6 +695,8 @@ function ImagenesYClips({
   onRegenerate: (jobId: string) => void;
   onRegenerateMany: (jobIds: string[]) => void;
   onChangeResolution: (clipId: string, r: string) => void;
+  onApprove: (jobId: string) => void;
+  onExtend: (jobId: string) => void;
   pie?: React.ReactNode;
 }) {
   /*
@@ -783,6 +797,8 @@ function ImagenesYClips({
       onRegenerate={onRegenerate}
       onRegenerateMany={onRegenerateMany}
       onChangeResolution={onChangeResolution}
+      onApprove={onApprove}
+      onExtend={onExtend}
       encabezado={seccionImagenes}
       pie={pie}
     />
@@ -864,6 +880,8 @@ function PipelineClips({
   onRegenerate,
   onRegenerateMany,
   onChangeResolution,
+  onApprove,
+  onExtend,
   /**
    * Bloques que viajan ADENTRO del scroll de la lista de clips: la seccion de
    * imagenes arriba y el log abajo. Van como nodos y no como hermanos del grid
@@ -889,6 +907,8 @@ function PipelineClips({
   onRegenerate: (jobId: string) => void;
   onRegenerateMany: (jobIds: string[]) => void;
   onChangeResolution: (clipId: string, r: string) => void;
+  onApprove: (jobId: string) => void;
+  onExtend: (jobId: string) => void;
   encabezado?: React.ReactNode;
   pie?: React.ReactNode;
 }) {
@@ -1206,6 +1226,8 @@ function PipelineClips({
             onSave={onSave}
             onRegenerate={onRegenerate}
             onChangeResolution={onChangeResolution}
+            onApprove={onApprove}
+            onExtend={onExtend}
           />
         )}
       </aside>
@@ -1324,6 +1346,8 @@ function ClipEditor({
   onSave,
   onRegenerate,
   onChangeResolution,
+  onApprove,
+  onExtend,
 }: {
   item: BatchTimelineItem;
   job: JobRecord | null;
@@ -1341,6 +1365,8 @@ function ClipEditor({
   onSave: (jobId: string, payload: SavePayload) => void;
   onRegenerate: (jobId: string) => void;
   onChangeResolution: (clipId: string, r: string) => void;
+  onApprove: (jobId: string) => void;
+  onExtend: (jobId: string) => void;
 }) {
   const [data, setData] = useState<PreviewData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1668,6 +1694,31 @@ function ClipEditor({
           </div>
 
           <div className="flex gap-2 flex-wrap">
+            {/*
+              ─── APROBAR ESTE CLIP ────────────────────────────────────────────
+              SE HABÍA PERDIDO en el rediseño y es la acción más importante de la
+              pantalla en modo manual. Antes cada clip era una `JobCard`, que traía
+              su botón de aprobar; al reemplazar las tarjetas por lista + editor,
+              `onApprove` quedó llegando sólo a las tarjetas de imagen y el editor
+              de clip se quedó sin él. Con `PIPELINE_AUTO_APPROVE=false` eso dejaba
+              un solo camino para aprobar: "Aprobar todos" del aviso, que compromete
+              el lote entero de una. En un VSL son varios USD por clip.
+
+              Misma condición que usaba `JobCard`: sólo cuando el job espera la
+              decisión. Un clip FILMAR_REAL no tiene job, así que acá no aparece
+              (se sube el archivo en la pantalla de Resultado).
+            */}
+            {job.status === "awaiting_approval" && (
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => onApprove(job.id)}
+                icon={<Check aria-hidden className="size-3.5" />}
+                title="Aprueba este clip y desbloquea lo que dependa de él"
+              >
+                Aprobar clip
+              </Button>
+            )}
             <Button
               size="sm"
               onClick={() => save(false)}
@@ -1705,6 +1756,27 @@ function ClipEditor({
             >
               Regenerar
             </Button>
+            {/*
+              ─── EXTENDER +7s ─────────────────────────────────────────────────
+              También se había perdido, y de forma más silenciosa: `extendJob` seguía
+              en el store y `POST /api/jobs/:id/extend` seguía en la API, pero no
+              quedaba ni un botón que los llamara en toda la app. El endpoint estaba
+              vivo y documentado en el README, inalcanzable desde la UI.
+
+              Misma condición que `JobCard`: sólo si el video ya tiene archivo, que
+              es lo que se extiende.
+            */}
+            {job.outputPath && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => onExtend(job.id)}
+                icon={<FastForward aria-hidden className="size-3.5" />}
+                title="Genera 7s más de continuación y los une al final del video. Cuesta plata"
+              >
+                Extender +7s
+              </Button>
+            )}
           </div>
           <p className="text-label text-fg-dim">
             Guardar no gasta: se usa en el próximo render y en el export. Regenerar
