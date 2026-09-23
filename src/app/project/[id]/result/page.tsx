@@ -58,6 +58,7 @@ import {
   FileZip,
   FilmStrip,
   FolderOpen,
+  Play,
   Sparkle,
   Spinner,
   Stack,
@@ -790,14 +791,31 @@ function ClipThumb({
     <div className="flex w-[72px] flex-col gap-1">
       <div className="relative aspect-[9/16] w-[72px] overflow-hidden rounded-md bg-bg">
         {fileUrl ? (
-          <video
-            src={fileUrl}
-            controls
-            preload="none"
-            playsInline
-            aria-label={`Clip ${clip.id}`}
-            className="size-full bg-bg object-contain"
-          />
+          /*
+            LINK AL ARCHIVO, no un `<video controls>`. En 72px de ancho la barra de
+            controles nativa no entra: el navegador la colapsa al menú de ⋮ y la
+            tarjeta queda con tres puntitos y una barra de progreso de 60px encima
+            del video, que es exactamente el "queda horrible" que se reporto.
+            Verificado con Chrome a 1366x660.
+
+            Un <a> abre el clip a tamaño real en una pestaña, que es lo que se
+            quiere de una miniatura de 72px, y de paso no monta un elemento de
+            medios por cada uno de los 95 clips de un VSL. El `<video>` grande
+            sigue existiendo arriba para el video final unido.
+          */
+          <a
+            href={fileUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Ver el clip ${clip.id} a tamaño real`}
+            className="group/thumb flex size-full items-center justify-center bg-surface-hi transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <Play
+              aria-hidden
+              weight="fill"
+              className="size-5 text-fg-dim transition-colors group-hover/thumb:text-fg"
+            />
+          </a>
         ) : (
           <div
             className={cn(

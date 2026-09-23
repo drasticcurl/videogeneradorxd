@@ -121,16 +121,17 @@ interface SavePayload {
 }
 
 /**
- * Umbral que decide si la seccion de imagenes arranca abierta o colapsada.
+ * Acá vivía `UMBRAL_VISTA_LIVIANA = 24`, que decidía si la sección de imágenes
+ * arrancaba abierta o colapsada según la cantidad de jobs. Se fue porque ahora
+ * arranca colapsada SIEMPRE: medido a 1280x700, con la sección abierta las
+ * tarjetas se comían el primer scroll entero de la columna y la lista de clips no
+ * se veía sin scrollear, con 6 clips o con 95. El umbral solo elegía a partir de
+ * cuántas imágenes empezaba a molestar; la respuesta medida fue "desde la
+ * primera".
  *
- * NO SUBIRLO NI SACARLO: es el mismo numero que ya media P-03 del plan viejo para
- * un VSL real de 95 clips. Arriba de este umbral, la seccion de imagenes (que
- * puede montar hasta 95 `JobCard` mas) se colapsa por defecto para no competir por
- * el primer scroll con el pipeline de clips, que es lo que hay que revisar. El
- * pipeline de clips en si NUNCA monta 95 `<video>`: el panel del editor carga el
- * medio on-demand sin importar cuantos clips tenga el proyecto.
+ * El pipeline de clips sigue sin montar 95 `<video>`: el panel del editor carga el
+ * medio del clip abierto y nada más, sin importar el tamaño del proyecto.
  */
-const UMBRAL_VISTA_LIVIANA = 24;
 
 /** Las duraciones que acepta el modelo de video. Igual que antes: 4, 6 u 8. */
 const DURACION_OPCIONES: ReadonlyArray<SelectOption<string>> = [4, 6, 8].map((d) => ({
@@ -599,12 +600,15 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           onRegenerate={onRegenerate}
           onRegenerateMany={onRegenerateMany}
           onChangeResolution={onChangeResolution}
+          /*
+            EL LOG VIAJA ADENTRO DEL SCROLL, no como bloque al final del shell.
+            Medido con Chrome a 1280x700: como `flex-none` se comia 305px, el 43%
+            del viewport de una laptop, y dejaba el pipeline de clips en 177px.
+            Adentro del scroll no le roba alto a nada y se sigue viendo entero.
+          */
+          pie={<LogPanel logs={logs} />}
         />
       )}
-
-      <div className="flex-none px-4 pb-4 sm:px-6">
-        <LogPanel logs={logs} />
-      </div>
     </PantallaFija>
   );
 }
@@ -659,6 +663,8 @@ function ImagenesYClips({
   onRegenerate,
   onRegenerateMany,
   onChangeResolution,
+  /** El log del pipeline. Va al final del scroll, no como bloque de alto fijo. */
+  pie,
 }: {
   groups: { t2i: JobRecord[]; i2i: JobRecord[]; vids: JobRecord[] };
   projectId: string;
@@ -677,80 +683,109 @@ function ImagenesYClips({
   onRegenerate: (jobId: string) => void;
   onRegenerateMany: (jobIds: string[]) => void;
   onChangeResolution: (clipId: string, r: string) => void;
+  pie?: React.ReactNode;
 }) {
-  // Colapsada por defecto arriba de UMBRAL_VISTA_LIVIANA: con 95 clips, la seccion
-  // de imagenes (hasta 95 tarjetas mas) no puede competir por el primer scroll con
-  // el pipeline de clips, que es lo que hay que revisar. Con pocos clips se ve
-  // abierta, que es el caso donde de verdad ayuda ver las imagenes de un vistazo.
-  const [imagenesAbiertas, setImagenesAbiertas] = useState(
-    groups.t2i.length + groups.i2i.length <= UMBRAL_VISTA_LIVIANA
-  );
+  /*
+    CERRADA POR DEFECTO, SIEMPRE. Antes se abria sola cuando habia pocas imagenes,
+    y el resultado medido a 1280x700 es que las tarjetas se comian el primer
+    scroll completo de la columna y la lista de clips no se veia NUNCA sin
+    scrollear — justo lo que el rediseño vino a sacar. El handoff no pone imagenes
+    en esta pantalla: el contenido del pipeline es la lista de clips. Quedan a un
+    click, y para revisarlas en serio esta /batch/review.
+  */
+  const [imagenesAbiertas, setImagenesAbiertas] = useState(false);
   const totalImagenes = groups.t2i.length + groups.i2i.length;
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {totalImagenes > 0 && (
-        <section className="flex-none border-b border-divider px-4 py-3 sm:px-6">
-          <button
-            type="button"
-            onClick={() => setImagenesAbiertas((v) => !v)}
-            aria-expanded={imagenesAbiertas}
-            aria-controls="seccion-imagenes"
-            className="flex w-full items-center gap-2 text-left"
-          >
-            <ImageSquare aria-hidden className="size-4 text-fg-dim" />
-            <span className="text-body font-medium text-fg">Imágenes</span>
-            <span className="font-mono tnum text-label text-fg-dim">
-              {totalImagenes}
-            </span>
-            <span className="flex-1" />
-            <CaretDown
-              aria-hidden
-              className={cn(
-                "size-4 text-fg-dim transition-transform",
-                imagenesAbiertas && "rotate-180"
-              )}
-            />
-          </button>
-          {imagenesAbiertas && (
-            <div id="seccion-imagenes" className="mt-3 flex flex-col gap-4">
-              <GrupoImagenes
-                title="Imágenes base (text2image)"
-                jobs={groups.t2i}
-                projectId={projectId}
-                handlers={handlers}
-                meta={imageMeta}
-              />
-              <GrupoImagenes
-                title="Imágenes derivadas (image2image · misma identidad)"
-                jobs={groups.i2i}
-                projectId={projectId}
-                handlers={handlers}
-                meta={imageMeta}
-              />
-            </div>
-          )}
-        </section>
-      )}
+  /*
+    ─── POR QUE IMAGENES Y LOG VAN ADENTRO DEL SCROLL DE LOS CLIPS ────────────
 
-      <PipelineClips
-        vids={groups.vids}
-        projectId={projectId}
-        timelineItems={timelineItems}
-        videoModels={videoModels}
-        projectVideoModel={projectVideoModel}
-        assetTypeByRef={assetTypeByRef}
-        ordenByClip={ordenByClip}
-        resByClip={resByClip}
-        resolutionOptions={resolutionOptions}
-        selectedClipId={selectedClipId}
-        onSelectClip={onSelectClip}
-        onSave={onSave}
-        onRegenerate={onRegenerate}
-        onRegenerateMany={onRegenerateMany}
-        onChangeResolution={onChangeResolution}
-      />
-    </div>
+    Antes esta funcion devolvia tres bloques HERMANOS dentro del shell de alto
+    fijo: la seccion de imagenes (`flex-none`), el grid de clips (`flex-1`) y, en
+    la pagina, el `LogPanel` (`flex-none`). Medido con Chrome a 1280x700 (una
+    laptop):
+
+        header + etapas + aviso   161px   flex-none
+        imagenes + clips          177px   flex-1
+        LogPanel                  305px   flex-none
+
+    La seccion de imagenes sola mide ~900px de contenido. `flex-none` NO se
+    encoge y el contenedor no tenia overflow, asi que se salia 756px y se
+    DIBUJABA ENCIMA del log: las tarjetas de imagen tapaban las lineas del log y
+    los botones "Regenerar/Editar" quedaban flotando cortados abajo. Y el grid de
+    clips —que es el contenido de esta pantalla— se quedaba con 177px, o sea
+    invisible.
+
+    Ahora los dos viajan como nodos al scroll interno de la columna de clips
+    (`encabezado` y `pie` de PipelineClips). El unico `flex-none` que queda
+    arriba es el header, y todo lo demas pelea por el alto adentro de un
+    contenedor que scrollea. No se saco ninguna funcionalidad: las imagenes y el
+    log siguen ahi, pero ya no le roban alto al pipeline.
+  */
+  const seccionImagenes =
+    totalImagenes > 0 ? (
+      <section className="border-b border-divider pb-4">
+        <button
+          type="button"
+          onClick={() => setImagenesAbiertas((v) => !v)}
+          aria-expanded={imagenesAbiertas}
+          aria-controls="seccion-imagenes"
+          className="flex w-full items-center gap-2 text-left"
+        >
+          <ImageSquare aria-hidden className="size-4 text-fg-dim" />
+          <span className="text-body font-medium text-fg">Imágenes</span>
+          <span className="font-mono tnum text-label text-fg-dim">
+            {totalImagenes}
+          </span>
+          <span className="flex-1" />
+          <CaretDown
+            aria-hidden
+            className={cn(
+              "size-4 text-fg-dim transition-transform",
+              imagenesAbiertas && "rotate-180"
+            )}
+          />
+        </button>
+        {imagenesAbiertas && (
+          <div id="seccion-imagenes" className="mt-3 flex flex-col gap-4">
+            <GrupoImagenes
+              title="Imágenes base (text2image)"
+              jobs={groups.t2i}
+              projectId={projectId}
+              handlers={handlers}
+              meta={imageMeta}
+            />
+            <GrupoImagenes
+              title="Imágenes derivadas (image2image · misma identidad)"
+              jobs={groups.i2i}
+              projectId={projectId}
+              handlers={handlers}
+              meta={imageMeta}
+            />
+          </div>
+        )}
+      </section>
+    ) : null;
+
+  return (
+    <PipelineClips
+      vids={groups.vids}
+      projectId={projectId}
+      timelineItems={timelineItems}
+      videoModels={videoModels}
+      projectVideoModel={projectVideoModel}
+      assetTypeByRef={assetTypeByRef}
+      ordenByClip={ordenByClip}
+      resByClip={resByClip}
+      resolutionOptions={resolutionOptions}
+      selectedClipId={selectedClipId}
+      onSelectClip={onSelectClip}
+      onSave={onSave}
+      onRegenerate={onRegenerate}
+      onRegenerateMany={onRegenerateMany}
+      onChangeResolution={onChangeResolution}
+      encabezado={seccionImagenes}
+      pie={pie}
+    />
   );
 }
 
@@ -773,7 +808,22 @@ function GrupoImagenes({
       <h3 className="text-label font-medium uppercase tracking-wide text-fg-dim">
         {title} <span className="font-mono tnum">({jobs.length})</span>
       </h3>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+      {/*
+        `auto-fill minmax(160px,1fr)` y NO los breakpoints `sm:/lg:/xl:` que tenia.
+        Los breakpoints de Tailwind miden el VIEWPORT, no el contenedor, y esta
+        grilla vive adentro de la columna izquierda, que en una laptop de 1280px
+        mide 743px porque el panel del editor se lleva el resto. Con
+        `lg:grid-cols-4` + `xl:grid-cols-6` a 1280px se pedian 4 columnas en 743px:
+        tarjetas de 130px donde el id salia truncado a "ava…" y el badge de estado
+        no entraba. Medido con Chrome. Con auto-fill la cuenta la hace el ancho
+        real de la columna.
+
+        El minimo es 200px y no 160px por el mismo motivo medido: con 160 daban
+        tarjetas de 169px y el id seguia sin entrar al lado del badge
+        (`scrollWidth > clientWidth` en "avatar1_base"). Con 200 entran 3 columnas
+        de ~230px y el nombre se lee entero, que es para lo que existe la tarjeta.
+      */}
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
         {jobs.map((j) => (
           <JobCard
             key={j.id}
@@ -814,6 +864,15 @@ function PipelineClips({
   onRegenerate,
   onRegenerateMany,
   onChangeResolution,
+  /**
+   * Bloques que viajan ADENTRO del scroll de la lista de clips: la seccion de
+   * imagenes arriba y el log abajo. Van como nodos y no como hermanos del grid
+   * porque son `flex-none` con cientos de px de contenido, y en un shell de alto
+   * fijo eso desbordaba y se dibujaba encima del resto (ver el comentario de
+   * `ImagenesYClips`).
+   */
+  encabezado,
+  pie,
 }: {
   vids: JobRecord[];
   projectId: string;
@@ -830,6 +889,8 @@ function PipelineClips({
   onRegenerate: (jobId: string) => void;
   onRegenerateMany: (jobIds: string[]) => void;
   onChangeResolution: (clipId: string, r: string) => void;
+  encabezado?: React.ReactNode;
+  pie?: React.ReactNode;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmarLote, setConfirmarLote] = useState(false);
@@ -950,13 +1011,22 @@ function PipelineClips({
   const fallidos = timelineItems.filter((it) => it.status === "failed").length;
 
   if (timelineItems.length === 0) {
+    /*
+      Proyecto sin clips de IA (todos FILMAR_REAL, o un plan solo de imagenes que
+      cayo en esta pantalla). El vacio NO puede ocupar la pantalla entera: las
+      imagenes y el log siguen siendo lo unico que hay para ver, asi que van
+      adentro de un contenedor que scrollea. Antes el early return devolvia solo
+      el EmptyState centrado y los dos bloques quedaban afuera del arbol.
+    */
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center px-4 sm:px-6">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-6">
+        {encabezado}
         <EmptyState
           icon={<FilmSlate aria-hidden className="size-6" />}
           title="No hay clips de video"
           body="Este proyecto no tiene clips generados por IA en el plan, así que no hay nada que revisar acá."
         />
+        {pie}
       </div>
     );
   }
@@ -1041,7 +1111,13 @@ function PipelineClips({
           onConfirmar={() => onRegenerateMany(selectedJobIds)}
         />
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2 sm:px-4">
+        {/*
+          EL UNICO SCROLL de la columna. Adentro va todo lo que puede crecer sin
+          techo: la seccion de imagenes, la tabla de clips y el log. Afuera solo
+          quedan la timeline y la barra de seleccion, que tienen alto fijo.
+        */}
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 py-2 sm:px-4">
+          {encabezado}
           <table className="w-full text-body">
             <caption className="sr-only">Clips del proyecto, en orden de timeline</caption>
             <thead>
@@ -1082,6 +1158,7 @@ function PipelineClips({
               ))}
             </tbody>
           </table>
+          {pie}
         </div>
       </div>
 

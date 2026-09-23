@@ -263,6 +263,24 @@ export default function ImagenesBoard({
     void cargarLista();
   }, [cargarLista]);
 
+  /*
+    Abre la primera tanda cuando hay lista y no hay ninguna abierta.
+
+    Sin esto, entrar a /imagenes con 20 tandas generadas mostraba el sidebar lleno
+    y el centro vacio: habia que adivinar que el paso siguiente era tocar una de la
+    izquierda. La galeria del handoff siempre tiene una tanda activa.
+
+    `vista === "galeria"` es la condicion que lo hace seguro: si el usuario esta en
+    el formulario de "Nueva tanda", abrir una tanda le cambiaria la pantalla abajo
+    de los dedos. Y `router.replace` (no `push`) para no ensuciar el historial: el
+    boton de atras del navegador tiene que salir de /imagenes, no recorrer las
+    tandas que se abrieron solas.
+  */
+  useEffect(() => {
+    if (projectId || vista !== "galeria" || lista.length === 0) return;
+    abrirProyecto(lista[0].id);
+  }, [projectId, vista, lista, abrirProyecto]);
+
   const traerEstado = useCallback(async (id: string) => {
     try {
       const res = await fetch(`/api/projects/${id}/jobs`, { cache: "no-store" });
@@ -716,12 +734,29 @@ export default function ImagenesBoard({
       <main className="flex min-h-0 flex-col">
         {!projectId ? (
           <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-            <EmptyState
-              icon={<ImageSquare aria-hidden className="size-6" />}
-              title="Todavía no generaste nada"
-              body="Abrí 'Nueva tanda' para escribir el prompt, elegir formato, calidad y cuántas variantes querés."
-              action={{ label: "Nueva tanda", onClick: () => setVista("nueva") }}
-            />
+            {/*
+              DOS VACIOS DISTINTOS, y antes los dos decian lo mismo. Con tandas en
+              el sidebar y ninguna abierta, el centro decia "Todavía no generaste
+              nada" mientras la izquierda listaba las tandas: se contradecian en la
+              misma pantalla. El de abajo solo aparece cuando la lista esta de
+              verdad vacia; si hay tandas, el efecto de mas abajo abre la primera y
+              este bloque no se ve nunca.
+            */}
+            {lista.length === 0 ? (
+              <EmptyState
+                icon={<ImageSquare aria-hidden className="size-6" />}
+                title="Todavía no generaste nada"
+                body="Abrí 'Nueva tanda' para escribir el prompt, elegir formato, calidad y cuántas variantes querés."
+                action={{ label: "Nueva tanda", onClick: () => setVista("nueva") }}
+              />
+            ) : (
+              <EmptyState
+                icon={<ImageSquare aria-hidden className="size-6" />}
+                title="Elegí una tanda"
+                body="Tocá una de la lista de la izquierda para ver sus variantes, o armá una nueva."
+                action={{ label: "Nueva tanda", onClick: () => setVista("nueva") }}
+              />
+            )}
           </div>
         ) : jobs.length === 0 ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3 p-6">
