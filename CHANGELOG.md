@@ -6,6 +6,45 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-23 (3) — Auditoría de UI en pantalla chica y normal: 3 defectos, ninguno de layout
+
+Auditoría pedida sobre el rediseño ya deployado. 10 pantallas x 4 tamaños (1680x1000, 1440x900,
+1280x720, 1152x670) con Chrome por CDP, sembrando los 8 casos reales: video corto con video final
+unido por ffmpeg, VSL de 5 clips en modo manual, VSL de 24 clips, dos tandas de imágenes y una tanda
+masiva de 3 proyectos con prompt dual.
+
+**Lo que está sano, y ahora está medido:** 0 elementos desbordando sin scroll, 0 cajas superpuestas, 0
+scroll horizontal y 0 errores de consola en las 40 combinaciones. El bug de superposición del
+2026-09-23 no volvió.
+
+**Los tres defectos, todos de interacción y no de layout:**
+
+1. **La manija de resize del panel de clip no se podía agarrar.** El `<aside>` tenía `overflow-y-auto`,
+   lo que fuerza `overflow-x: auto`, y eso recorta lo que se sale de la caja. La manija está en
+   `-left-1` (4px por fuera, para no robarle ancho al contenido) y esos 4px quedaban cortados: de los
+   8px de agarre respondían 3, y justo sobre el borde `elementFromPoint` devolvía el aside. El scroll
+   pasó al div de adentro. **Es una trampa que vale recordar: `overflow-y: auto` nunca es sólo
+   vertical.**
+2. **La tecla `A` no aprobaba en modo imágenes**, sí en clips. Misma pantalla, se cambia con el
+   segmented: el mismo teclado hacía dos cosas distintas según el modo.
+3. **La tira de pastillas repetía números entre proyectos** (el número es el `orden` dentro de cada
+   proyecto), sin forma de ver de un vistazo dónde termina uno. Ahora hay un separador.
+
+Y el botón de refrescar tandas en `/imagenes` tenía 14x14 de área clickeable, siendo de sólo icono.
+Pasó a 24x24 (WCAG 2.5.8).
+
+**Lo verificado funcionando, con clicks reales en 1440x900 y 1280x720 (21 casos, todos en verde):**
+aprobar un clip, elegir variante, guardar diálogo y confirmar que **queda en el plan** (que es de donde
+lee el export), resize con sus cuatro comportamientos, atajos de teclado, wizard de 3 pasos con su
+validación, armar tablero desde la home, quitar del tablero, descargas (zip devuelve 200
+`application/zip`), stitch con ffmpeg real y el segmented de revisión.
+
+Queda una observación de diseño sin resolver: el máximo del panel de clip es `innerWidth - 360` (lo
+pide el handoff), así que en 1280px el panel puede llegar a 920px y dejar la lista de clips en 360px,
+que es poco para sus 6 columnas. No es un defecto, es el contrato; si molesta, el número a mover es ese.
+
+---
+
 ## 2026-09-23 (2) — Volvieron "Aprobar clip" y "Extender +7s", que el rediseño había desconectado
 
 **Qué pasó:** reporte de "me desapareció el botón de aprobar clip". Real, y venía con un segundo caso

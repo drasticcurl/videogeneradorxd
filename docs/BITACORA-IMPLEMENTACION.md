@@ -6,6 +6,56 @@ edita una entrada vieja, se agrega una nueva si hay que corregir algo.
 
 ---
 
+## 2026-09-23 (3) — Auditoría de UI (pantalla chica y normal)
+
+**Pedido:** "audita la ui en pantalla chica sacando screen y en pantalla normal, revisá que todo
+funcione correctamente".
+
+**Estado:** hecha. 40 combinaciones medidas + 21 pruebas funcionales x 2 tamaños, 3 defectos
+encontrados y arreglados, capturas en `~/Desktop/auditoria-ui-augc/`.
+
+### Cómo se armó
+
+El instrumental de `tasks/_verificacion-ui-funcional.mjs` alcanzaba para los botones, pero una
+auditoría necesita datos representativos: se sembraron los 8 casos que la app puede mostrar (video con
+video final unido por ffmpeg real, modo manual con clips esperando, VSL de 24, tandas de imágenes de
+4 y 2 variantes, y una tanda masiva de 3 proyectos con prompt dual). Sin eso se auditan pantallas
+vacías, que es justo donde nada se rompe.
+
+Dos scripts separados, y la separación importa: uno mide GEOMETRÍA (desborde sin scroll, cajas
+superpuestas, scroll horizontal, controles < 24px, texto recortado) y saca la captura; el otro prueba
+COMPORTAMIENTO con clicks y verifica el efecto contra la API, no contra el DOM.
+
+### Decisiones y hallazgos que conviene recordar
+
+- **`overflow-y: auto` no es sólo vertical.** El navegador computa `overflow-x: auto` y recorta
+  horizontalmente. Cualquier elemento posicionado por fuera de la caja (una manija, un badge que
+  sobresale, un tooltip) queda cortado. Fue la causa del defecto 1 y es un error fácil de repetir.
+- **El detector de "controles chicos" tuvo 89 falsos positivos la primera corrida**, todos elementos
+  `sr-only`, que miden 1x1 *a propósito*. Se filtran por la clase. Vale la pena anotarlo: un
+  verificador con demasiado ruido es uno que se ignora.
+- **Tres de las cuatro "fallas" de la primera corrida funcional eran de MI instrumento, no de la app**:
+  "Armar tablero" es un `<a>` (Button asChild + Link) y yo buscaba un `<button>`; el wizard deshabilita
+  "Siguiente" hasta que hay brief (correcto, con el hint "Pegá el brief para poder interpretarlo"); y
+  el drag de CDP necesita `buttons: 1` en el `mouseMoved`. Antes de reportar un bug conviene descartar
+  el instrumento — pero la cuarta era real.
+- **Las pruebas funcionales consumen su propio dato**: al aprobar clips en una corrida, la siguiente no
+  encuentra nada por aprobar y "falla". Se resolvió desaprobando con el endpoint antes de repetir. Si
+  esto se vuelve parte del flujo habitual, conviene que el script siembre su propio proyecto
+  descartable en cada corrida.
+- **No correr `npm run build` con el dev server arriba**: comparten `.next/` y el script empieza a
+  recibir HTML donde espera JSON, con un error que no explica nada. Quedó anotado en el encabezado del
+  verificador.
+
+### Pendiente
+
+- El máximo del panel de clip (`innerWidth - 360`) viene del handoff, pero en 1280px deja la lista de
+  clips en 360px para 6 columnas. Es el contrato, no un bug; si se quiere cambiar, es ese número.
+- Los checkboxes de selección miden 16x16 (el default nativo). WCAG 2.5.8 pide 24x24 de target, con
+  excepción por separación. Preexistente, no se tocó para no cambiar todos los formularios de la app.
+
+---
+
 ## 2026-09-23 (2) — "Aprobar clip" y "Extender +7s" desconectados por el rediseño
 
 **Pedido:** "me desapareció el botón de aprobar clip".
