@@ -40,6 +40,11 @@
  *   PIPELINE_AUTO_APPROVE=false npx next dev -p 3100
  *
  * NUNCA apuntarlo a produccion: siembra proyectos y aprueba jobs.
+ *
+ * Y NO CORRER `npm run build` MIENTRAS ESTE LEVANTADO: los dos escriben en `.next/`,
+ * asi que el build le pisa los chunks al dev server y este script empieza a recibir
+ * HTML de error donde espera JSON ("Unexpected token '<'"). Pasa, y el mensaje no
+ * ayuda a entender por que. Reiniciar el dev server y volver a correr.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import { spawn } from "node:child_process";

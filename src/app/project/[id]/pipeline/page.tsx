@@ -1183,21 +1183,35 @@ function PipelineClips({
       </div>
 
       {/* ─── Manija de resize + panel editor ──────────────────────────────── */}
-      <aside className="relative flex min-h-0 flex-col gap-3.5 overflow-y-auto border-l border-divider px-5 py-4">
-        {/*
-          Manija de 8px sobre el borde izquierdo, mitad afuera (`-left-1`) para que
-          el area de agarre no le robe 8px al contenido del panel. `col-resize` +
-          doble click reset, igual que el handoff.
-        */}
+      {/*
+        EL SCROLL NO VA EN EL <aside>, VA EN EL DIV DE ADENTRO. Parece un detalle y
+        es lo que hacía que la manija no se pudiera agarrar.
+
+        Medido con Chrome: con `overflow-y-auto` en el aside, el navegador computa
+        `overflow-x: auto` también (no existe overflow-y:auto con overflow-x:visible),
+        así que el aside RECORTA todo lo que se salga de su caja. La manija vive en
+        `-left-1` —4px por fuera, a propósito, para no robarle ancho al contenido— y
+        esos 4px quedaban cortados. De los 8px de agarre respondían 3, y justo sobre
+        el borde (que es donde uno apunta) el mouse lo recibía el aside y no la
+        manija: `elementFromPoint(835, 500)` devolvía el aside.
+
+        Con el scroll en el hijo, el aside no tiene overflow y la manija se ve y se
+        agarra completa.
+      */}
+      <aside className="relative flex min-h-0 flex-col border-l border-divider">
         <div
           onMouseDown={startDrag}
           onDoubleClick={resetAncho}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Ancho del panel del clip. Arrastrá para ajustar, doble click para volver al inicial."
           title="Arrastrá para ajustar · doble click para volver al ancho inicial"
           className="absolute -left-1 top-0 bottom-0 z-10 flex w-2 cursor-col-resize items-center justify-center hover:bg-accent/15"
         >
           <span className="h-8 w-0.5 rounded-sm bg-border" aria-hidden />
         </div>
 
+        <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-5 py-4">
         {selectedItem && (
           <ClipEditor
             key={selectedItem.clipId}
@@ -1230,6 +1244,7 @@ function PipelineClips({
             onExtend={onExtend}
           />
         )}
+        </div>
       </aside>
     </div>
   );

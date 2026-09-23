@@ -665,7 +665,16 @@ export default function ImagenesBoard({
           <button
             type="button"
             onClick={() => void cargarLista()}
-            className="text-label text-fg-dim transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            /*
+              `size-6` (24px) y no el icono pelado de 14px: medido en la auditoría, el
+              área de click era de 14x14, abajo del mínimo de 24x24 que pide WCAG
+              2.5.8. Es un botón de sólo icono, o sea el peor caso: no hay texto al
+              lado que ayude a acertarle. El icono sigue siendo de 14px, lo que crece
+              es la zona clickeable.
+            */
+            aria-label="Actualizar la lista de tandas"
+            title="Actualizar la lista"
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-fg-dim transition-colors hover:bg-surface-hi hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <ArrowsClockwise aria-hidden className="size-3.5" />
           </button>

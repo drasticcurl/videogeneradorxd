@@ -81,7 +81,7 @@ import {
 } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PantallaFija } from "@/components/Pantalla";
 import {
@@ -276,7 +276,9 @@ function CabeceraRevisar({
  * nota grande en `ModoImagenes`); en clips si es navegable porque ahi la lista es
  * fija (todos los clips del lote, no una cola que se vacia).
  */
-function TiraPastillas<T extends { key: string; orden: number; aprobado: boolean; titulo: string }>({
+function TiraPastillas<
+  T extends { key: string; orden: number; aprobado: boolean; titulo: string; grupo?: string },
+>({
   items,
   actualKey,
   onSeleccionar,
@@ -288,8 +290,16 @@ function TiraPastillas<T extends { key: string; orden: number; aprobado: boolean
   if (items.length === 0) return null;
   return (
     <nav aria-label="Progreso de la revisión" className="flex flex-wrap gap-1 px-4 py-2">
-      {items.map((it) => {
+      {items.map((it, i) => {
         const actual = it.key === actualKey;
+        /*
+          SEPARADOR AL CAMBIAR DE PROYECTO. El número de la pastilla es el `orden`
+          DENTRO de su proyecto, así que en un lote de varios se repiten: con dos
+          proyectos la tira mostraba "1 2 3 4 5 1 2 3 4 5 6 …" y no había forma de
+          saber, de un vistazo, dónde termina uno y empieza el otro. El nombre estaba
+          sólo en el tooltip, o sea a un hover de distancia de cada pastilla.
+        */
+        const cambiaGrupo = i > 0 && it.grupo !== undefined && it.grupo !== items[i - 1].grupo;
         const clases = cn(
           "code tnum flex size-7 shrink-0 items-center justify-center rounded-sm text-label font-medium",
           "transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
@@ -299,7 +309,7 @@ function TiraPastillas<T extends { key: string; orden: number; aprobado: boolean
               ? "bg-ok/20 text-ok"
               : "bg-surface-hi text-fg-dim"
         );
-        return onSeleccionar ? (
+        const pastilla = onSeleccionar ? (
           <button
             key={it.key}
             type="button"
@@ -314,6 +324,17 @@ function TiraPastillas<T extends { key: string; orden: number; aprobado: boolean
           <span key={it.key} aria-current={actual ? "true" : undefined} title={it.titulo} className={clases}>
             {it.orden}
           </span>
+        );
+        if (!cambiaGrupo) return pastilla;
+        return (
+          <Fragment key={`g-${it.key}`}>
+            <span
+              aria-hidden
+              title={it.grupo}
+              className="mx-1 h-7 w-px shrink-0 self-center bg-border"
+            />
+            {pastilla}
+          </Fragment>
         );
       })}
     </nav>
@@ -496,7 +517,15 @@ function ModoImagenes({
       // pestañas, y sin esta guarda "→" pasaria de "Guión" a "Editar" Y aprobaria.
       if (el?.getAttribute("role") === "tab") return;
       if (e.repeat) return;
-      if (e.key === "ArrowRight") {
+      if (e.key === "ArrowRight" || e.key === "a" || e.key === "A") {
+        /*
+          `A` ADEMAS de `→`, que es lo que pide el handoff ("A o → aprueba").
+          Faltaba, y la inconsistencia dolía justamente acá: es la MISMA pantalla que
+          la de clips, se cambia de modo con el segmented, y en clips `A` aprueba. O
+          sea que el mismo teclado hacía dos cosas distintas según el modo, sin nada
+          que lo anunciara. El badge del botón sigue mostrando `→` (el handoff lo pide
+          así para imágenes), pero las dos teclas funcionan.
+        */
         e.preventDefault();
         void approve();
       } else if (e.key === "ArrowLeft") {
@@ -533,6 +562,7 @@ function ModoImagenes({
     orden: i + 1,
     aprobado: resolved.includes(r.jobId) && r.jobId !== current?.jobId,
     titulo: `${r.projectName} · ${r.imageId}`,
+    grupo: r.projectName,
   }));
 
   return (
@@ -1321,6 +1351,7 @@ function ModoClips({
     orden: it.orden,
     aprobado: it.status === "done",
     titulo: `${it.projectName} · ${it.label} · ${estadoDeJob(it.status).label}`,
+    grupo: it.projectName,
     _i: i,
   }));
 
