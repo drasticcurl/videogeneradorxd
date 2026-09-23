@@ -6,6 +6,59 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-23 — El pipeline se rompía en una laptop: las imágenes tapaban el log
+
+**Qué pasó:** reporte de "en mi laptop se ve mal, se superponen cosas y queda horrible" en la pantalla
+de un proyecto de video. Reproducido y medido con Chrome headless por CDP contra la app en mock, a
+1440x820, 1366x660, 1280x700, 1152x656 y 960x600 (los dos últimos equivalen a zoom 125% y 150%).
+
+El rediseño dejó **tres bloques `flex-none` compitiendo por el alto** dentro del shell de alto fijo de
+`/project/[id]/pipeline`. A 1280x700 el reparto era:
+
+| bloque | alto | flex |
+|---|---|---|
+| header + etapas + aviso | 161px | `flex-none` |
+| imágenes + clips | 177px | `flex-1` |
+| `LogPanel` | 305px | `flex-none` (43% del viewport) |
+
+La sección de imágenes mide ~900px de contenido y es `flex-none`: no se encoge. Su contenedor no tenía
+overflow, así que se salía 756px y **se dibujaba encima del log**. En pantalla: las tarjetas de imagen
+tapaban las líneas del log y los botones "Regenerar/Editar" quedaban flotando cortados abajo. Y el grid
+de clips, que es el contenido de la pantalla, se quedaba con 177px: invisible.
+
+**La regla que se violó** es la que este mismo CHANGELOG anotó el 2026-09-22: en un shell de alto fijo,
+todo lo que puede crecer sin techo tiene que vivir adentro de algo que scrollee. Un `flex-none` con
+cientos de px de contenido no es una excepción, es el caso exacto que rompe.
+
+Lo que se cambió:
+
+- La sección de imágenes y el log viajan **adentro** del scroll de la columna de clips (props
+  `encabezado` y `pie` de `PipelineClips`). Arriba queda un solo `flex-none`: el header.
+- La sección de imágenes arranca **colapsada siempre**. Antes se abría sola con pocos jobs y se comía
+  el primer scroll entero, así que la lista de clips no se veía sin scrollear. Se borró
+  `UMBRAL_VISTA_LIVIANA`: era el número que elegía a partir de cuántas imágenes empezaba a molestar, y
+  medido molesta desde la primera.
+- La grilla de tarjetas de imagen pasa de breakpoints de Tailwind a `auto-fill minmax(200px,1fr)`.
+  **Los breakpoints miden el viewport, no el contenedor**, y esa grilla vive en una columna de 710px
+  porque el editor de clip se lleva el resto: `lg:grid-cols-4` + `xl:grid-cols-6` pedía 4 columnas en
+  743px y daba tarjetas de 130px con el id truncado a "ava…". Es un error que va a volver a aparecer en
+  cualquier grilla que se ponga dentro de una columna angosta.
+- En Resultado, las miniaturas de 72px dejan de ser `<video controls>`: en ese ancho el navegador
+  colapsa la barra de controles al menú de ⋮ y la tarjeta quedaba con tres puntitos y una barra de
+  progreso encima del video. Ahora son un link al archivo con un ícono de play, y de paso no montan un
+  elemento de medios por cada uno de los 95 clips de un VSL.
+- En `/imagenes`, el centro decía "Todavía no generaste nada" **mientras el sidebar listaba las
+  tandas**: dos afirmaciones contradictorias en la misma pantalla. Ahora hay dos vacíos distintos y, si
+  hay tandas y ninguna abierta, se abre la primera sola.
+
+**Verificado:** 7 pantallas x 5 tamaños = 35 combinaciones con 0 elementos desbordando sin scroll y 0
+cajas superpuestas (antes: 12 elementos desbordando en el pipeline, hasta +756px). Incluye un VSL de 24
+clips en modo manual, que es el caso con el header más alto (221px, porque suma el aviso de
+aprobación). Más `tsc`, `build` 10/10, endpoints SIN REGRESIONES, inventario COMPLETO y cn/contraste en
+0 fallos. Esta vez sí hubo revisión visual: 14 capturas a tamaño de laptop.
+
+---
+
 ## 2026-09-22 — Rediseño de las cuatro pantallas: el scroll sale de la página
 
 **Qué pasó:** las pantallas de trabajo (galería de imágenes, pipeline de un proyecto, revisar) son

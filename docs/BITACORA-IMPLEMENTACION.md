@@ -6,6 +6,65 @@ edita una entrada vieja, se agrega una nueva si hay que corregir algo.
 
 ---
 
+## 2026-09-23 — Arreglo de layout en laptop (pipeline, resultado, /imagenes)
+
+**Pedido:** "revisá la ui dentro de un video, en mi laptop se ve mal, se superponen cosas y queda
+horrible", con la referencia del handoff `design_handoff_rediseno_augc`.
+
+**Estado:** hecha y verificada visualmente, que era justo lo que faltaba en la entrada anterior.
+
+### Cómo se midió (vale para la próxima vez)
+
+No había forma de verificar esto leyendo código: la superposición es geometría, no sintaxis. Se armó
+un instrumental sin instalar dependencias, aprovechando que macOS ya trae Chrome y que Node 24 tiene
+`WebSocket` global:
+
+1. `npx next dev -p 3100` con `PROVIDER_MODE=mock`, `DATA_DIR`/`OUTPUT_DIR` en `/tmp` y un
+   `PASSWORD_TEST`, para no tocar nada real.
+2. Un script siembra por API un proyecto de video (6 clips) y otro de 24 clips en modo manual, y los
+   genera en mock (gratis).
+3. Chrome en `--headless=new --remote-debugging-port=9222`, manejado por CDP con un driver de ~40
+   líneas: `Network.setCookie` para la sesión, `Emulation.setDeviceMetricsOverride` para el tamaño,
+   `Runtime.evaluate` para el diagnóstico y `Page.captureScreenshot` para mirar.
+4. El diagnóstico reporta tres cosas: elementos cuyo rect se sale del viewport **sin que ningún
+   ancestro scrollee** en ese eje, pares de cajas hermanas que se solapan, y el presupuesto vertical
+   (el alto y el `flex` de cada hijo del shell).
+
+Ese cuarto punto es el que encontró el bug en el primer intento: `+756px` en
+`section.flex-none` de la sección de imágenes. El presupuesto vertical es el dato que hay que mirar
+primero en cualquier pantalla de alto fijo.
+
+### Decisiones tomadas sin especificación explícita
+
+- **La sección de imágenes y el log van adentro del scroll de los clips**, como props `encabezado` y
+  `pie`, en vez de ser hermanos del grid. La alternativa era darle `overflow-y-auto` a la sección de
+  imágenes, pero eso deja dos scrolls anidados en la misma columna y el de adentro se traba cuando
+  llega al final. El handoff no pone ni imágenes ni log en esta pantalla, así que meterlos en el
+  scroll es lo más cerca del spec sin borrar funcionalidad.
+- **Colapsada siempre**, y se borró `UMBRAL_VISTA_LIVIANA` en vez de bajarlo a 0: una constante que
+  siempre da el mismo resultado es peor que no tenerla, porque hace creer que hay un caso donde
+  cambia. El comentario que documentaba el umbral quedó, reescrito, explicando por qué se fue.
+- **`auto-fill minmax(200px,1fr)` y no 160px**: con 160 las tarjetas daban 169px y el id seguía
+  cortado (`scrollWidth > clientWidth` en "avatar1_base"). 200 da 3 columnas de ~229px y entra. El
+  número salió de medir, no de estimar.
+- **Las miniaturas de Resultado son un `<a>` al archivo**, no un video sin controles ni un player
+  custom: es lo que hacía el `ClipTimeline` viejo, no necesita JS y abre el clip a tamaño real, que es
+  lo único que se le pide a una miniatura de 72px.
+- **`/imagenes` abre la primera tanda sola**, condicionado a `vista === "galeria"` para no cambiarle la
+  pantalla a alguien que está en el formulario de "Nueva tanda", y con `router.replace` para que el
+  botón de atrás del navegador salga de `/imagenes` en vez de recorrer las tandas que se abrieron
+  solas.
+
+### Lo que quedó pendiente
+
+- A 960x600 (zoom 150%) el pipeline no se superpone pero sí queda apretado: la tabla de clips trunca
+  el id y el diálogo. Es usable; si alguien trabaja siempre así, convendría que abajo de ~1100px el
+  editor de clip pase a ser una capa sobre la lista en vez de una columna al lado.
+- El instrumental de medición quedó en `/tmp` y no en el repo. Si esto se repite, vale hacerlo un
+  script versionado en `tasks/`.
+
+---
+
 ## 2026-09-22 — Rediseño de las 4 pantallas (handoff `design_handoff_rediseno_augc`)
 
 **Pedido:** implementar el handoff de rediseño de `/imagenes`, `/project/[id]`, `/` y `/batch` con
