@@ -50,6 +50,7 @@
  */
 
 import {
+  ArrowClockwise,
   ArrowLeft,
   BracketsCurly,
   Check,
@@ -63,13 +64,16 @@ import {
   Spinner,
   Stack,
   Textbox,
+  Trash,
   UploadSimple,
   VideoCamera,
+  Waveform,
   WarningCircle,
 } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { CambiarVozDialog } from "@/components/CambiarVozDialog";
 import { PantallaFija } from "@/components/Pantalla";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
@@ -79,14 +83,16 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Confirmar,
   EmptyState,
+  Progreso,
   Segmented,
   Skeleton,
   SkeletonGrid,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import type { ManifestClip } from "@/lib/types";
-import { estadoDeJob } from "@/lib/ui-tokens";
+import type { ManifestClip, RespuestaEstadoVoz, VersionDeVoz } from "@/lib/types";
+import { estadoDeJob, estadoDeVersionDeVoz } from "@/lib/ui-tokens";
 import { useProjectStore } from "@/store/useProjectStore";
 
 /**
@@ -138,6 +144,22 @@ export default function ResultPage({ params }: { params: { id: string } }) {
   const [verJson, setVerJson] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /*
+    Cambio de voz (tasks/cambio-de-voz/02-DISENO.md §12.1). `voz` es la respuesta de
+    GET /voz tal cual: un solo lugar de verdad para el panel, el dialogo y el polling.
+    `elegida` es la version que muestra el reproductor (null = el original).
+  */
+  const [voz, setVoz] = useState<RespuestaEstadoVoz | null>(null);
+  const [elegida, setElegida] = useState<string | null>(null);
+  const [dialogoVoz, setDialogoVoz] = useState(false);
+  const [preseleccion, setPreseleccion] = useState<VersionDeVoz | null>(null);
+  const [confirmarUnir, setConfirmarUnir] = useState(false);
+  const [aBorrar, setABorrar] = useState<VersionDeVoz | null>(null);
+  const [errorVoz, setErrorVoz] = useState<string | null>(null);
+  const [anuncio, setAnuncio] = useState("");
+  /** Estado anterior de cada version, para detectar la que acaba de quedar lista. */
+  const estadosPrevios = useRef<Map<string, string> | null>(null);
+
   const timerCopia = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -158,6 +180,104 @@ export default function ResultPage({ params }: { params: { id: string } }) {
     },
     [],
   );
+
+  async function cargarVoz() {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/voz`);
+      if (!res.ok) return;
+      const data = (await res.json()) as RespuestaEstadoVoz;
+      /*
+        Una version que pasa a "lista" con la pantalla abierta queda elegida sola y se
+        anuncia: el usuario ya dejo de mirar el panel cuando termina. En la PRIMERA
+        carga no se anuncia nada: esas ya estaban listas antes de entrar.
+      */
+      const previos = estadosPrevios.current;
+      if (previos) {
+        const recien = data.versiones.find(
+          (v) => v.estado === "lista" && previos.has(v.id) && previos.get(v.id) !== "lista",
+        );
+        if (recien) {
+          setElegida(recien.id);
+          setAnuncio(`Lista la versión con la voz ${recien.voz.nombre}`);
+        }
+      }
+      estadosPrevios.current = new Map(data.versiones.map((v) => [v.id, v.estado]));
+      setVoz(data);
+    } catch {
+      // Best-effort: si el polling falla una vez, el siguiente tick lo intenta de nuevo.
+    }
+  }
+
+  useEffect(() => {
+    void cargarVoz();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  /*
+    Polling cada 2 s SOLO mientras hay una conversion activa, y se limpia al desmontar:
+    un setInterval vivo despues de salir de la pantalla le seguiria pegando al server
+    cada 2 s para nadie.
+  */
+  const hayActiva = Boolean(voz?.activa);
+  useEffect(() => {
+    if (!hayActiva) return;
+    const t = setInterval(() => void cargarVoz(), 2000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hayActiva, projectId]);
+
+  /** Reintentar / Rehacer: un POST con las MISMAS opciones de esa version (§12.1). */
+  async function repetirVersion(v: VersionDeVoz) {
+    setErrorVoz(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/voz`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accion: v.prueba ? "probar" : "convertir",
+          voz: v.voz,
+          ajustes: v.ajustes,
+          quitarRuido: v.quitarRuido,
+          incluirFilmados: v.incluirFilmados,
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: string; version?: VersionDeVoz } | null;
+      if (!res.ok) throw new Error(data?.error ?? "No se pudo iniciar el cambio de voz.");
+      if (data?.version) estadosPrevios.current?.set(data.version.id, "en_cola");
+    } catch (err) {
+      setErrorVoz(err instanceof Error ? err.message : "No se pudo iniciar el cambio de voz.");
+    }
+    await cargarVoz();
+  }
+
+  async function cancelarVoz() {
+    setErrorVoz(null);
+    try {
+      await fetch(`/api/projects/${projectId}/voz`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accion: "cancelar" }),
+      });
+    } finally {
+      await cargarVoz();
+    }
+  }
+
+  async function borrarVersion(v: VersionDeVoz) {
+    setErrorVoz(null);
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/voz?version=${encodeURIComponent(v.id)}`,
+        { method: "DELETE" },
+      );
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) throw new Error(data?.error ?? "No se pudo borrar la versión.");
+      if (elegida === v.id) setElegida(null);
+    } catch (err) {
+      setErrorVoz(err instanceof Error ? err.message : "No se pudo borrar la versión.");
+    }
+    await cargarVoz();
+  }
 
   /**
    * Copia y deja el aviso un rato. Un solo timer, para que dos copias no se peleen.
@@ -206,12 +326,22 @@ export default function ResultPage({ params }: { params: { id: string } }) {
       const res = await fetch(`/api/projects/${projectId}/stitch`, {
         method: "POST",
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        finalPath?: string;
-        reason?: string;
-        error?: string;
-      };
+      /*
+        Una respuesta NO-JSON es casi siempre el 524 de Cloudflare: el proxy corta a
+        los 100 s pero el server sigue uniendo (P-04). Antes eso se mostraba como "No se
+        pudo unir." y el usuario volvia a apretar, con el primer stitch todavia corriendo.
+      */
+      const texto = await res.text();
+      let data: { ok?: boolean; finalPath?: string; reason?: string; error?: string };
+      try {
+        data = JSON.parse(texto) as typeof data;
+      } catch {
+        setStitch({
+          ok: false,
+          msg: "El servidor sigue uniendo: los videos largos tardan más de lo que espera el proxy. Recargá en unos minutos.",
+        });
+        return;
+      }
       if (data.ok) {
         /*
           El nombre sale de la respuesta y no esta escrito aca: el archivo se llama
@@ -222,7 +352,9 @@ export default function ResultPage({ params }: { params: { id: string } }) {
           ok: true,
           msg: `${data.finalPath ?? "El video unido"} listo. Ya entra en el zip.`,
         });
+        setElegida(null);
         await loadProject(projectId);
+        await cargarVoz();
       } else {
         setStitch({ ok: false, msg: data.reason ?? data.error ?? "No se pudo unir." });
       }
@@ -502,7 +634,7 @@ export default function ResultPage({ params }: { params: { id: string } }) {
                 ? "Ruta copiada"
                 : copia?.que === "json"
                   ? "JSON copiado"
-                  : ""}
+                  : anuncio}
             </span>
           )}
         </div>
@@ -522,6 +654,21 @@ export default function ResultPage({ params }: { params: { id: string } }) {
             outputPath={outputPath}
             onCopiarRuta={() => void copiar("ruta", outputPath)}
             copia={copia}
+            voz={voz}
+            elegida={elegida}
+            onElegir={setElegida}
+            busyUnir={busy === "stitch"}
+            puedeUnir={Boolean(config?.ffmpeg)}
+            onVolverAUnir={() => setConfirmarUnir(true)}
+            stitch={stitch}
+            errorVoz={errorVoz}
+            onCambiarVoz={() => {
+              setPreseleccion(null);
+              setDialogoVoz(true);
+            }}
+            onRepetir={(v) => void repetirVersion(v)}
+            onCancelar={() => void cancelarVoz()}
+            onBorrar={setABorrar}
           >
             {seccionClips}
             {seccionJson}
@@ -544,6 +691,47 @@ export default function ResultPage({ params }: { params: { id: string } }) {
           </>
         )}
       </div>
+
+      {voz && (
+        <CambiarVozDialog
+          abierto={dialogoVoz}
+          onCambio={setDialogoVoz}
+          proyectoId={projectId}
+          estado={voz}
+          preseleccion={preseleccion}
+          onIniciada={(v) => {
+            // Se registra ya como "en_cola": si termina antes del primer polling, igual
+            // se detecta la transicion a "lista" y queda elegida sola.
+            estadosPrevios.current?.set(v.id, "en_cola");
+            void cargarVoz();
+          }}
+        />
+      )}
+      <Confirmar
+        abierto={confirmarUnir}
+        onCambio={setConfirmarUnir}
+        title="Volver a unir el video"
+        detalle={`Se vuelve a generar ${manifest?.final_video ?? "el video unido"} con los clips actuales. Tarda ~1 s por segundo de video (~${duracion(segundosTotales)}). Las versiones con otra voz se conservan.`}
+        labelConfirmar="Volver a unir"
+        onConfirmar={() => void handleStitch()}
+      />
+      <Confirmar
+        abierto={aBorrar !== null}
+        onCambio={(v) => {
+          if (!v) setABorrar(null);
+        }}
+        title="Borrar esta versión"
+        detalle={
+          aBorrar
+            ? `Se borra ${aBorrar.prueba ? "la prueba" : "la versión"} con la voz ${aBorrar.voz.nombre}. El video original no se toca.`
+            : ""
+        }
+        labelConfirmar="Borrar"
+        peligroso
+        onConfirmar={() => {
+          if (aBorrar) void borrarVersion(aBorrar);
+        }}
+      />
     </PantallaFija>
   );
 }
@@ -565,6 +753,18 @@ function VideoFinal({
   outputPath,
   onCopiarRuta,
   copia,
+  voz,
+  elegida,
+  onElegir,
+  busyUnir,
+  puedeUnir,
+  onVolverAUnir,
+  stitch,
+  errorVoz,
+  onCambiarVoz,
+  onRepetir,
+  onCancelar,
+  onBorrar,
   children,
 }: {
   projectId: string;
@@ -573,9 +773,29 @@ function VideoFinal({
   outputPath: string;
   onCopiarRuta: () => void;
   copia: { que: "ruta" | "json"; ok: boolean } | null;
+  /** GET /voz. null mientras carga. */
+  voz: RespuestaEstadoVoz | null;
+  /** La version que muestra el reproductor; null = el original. */
+  elegida: string | null;
+  onElegir: (id: string | null) => void;
+  busyUnir: boolean;
+  puedeUnir: boolean;
+  onVolverAUnir: () => void;
+  stitch: { ok: boolean; msg: string } | null;
+  errorVoz: string | null;
+  onCambiarVoz: () => void;
+  onRepetir: (v: VersionDeVoz) => void;
+  onCancelar: () => void;
+  onBorrar: (v: VersionDeVoz) => void;
   /** Los clips y el JSON: van adentro de la columna que scrollea, no abajo. */
   children?: React.ReactNode;
 }) {
+  const versionElegida = voz?.versiones.find((v) => v.id === elegida && v.file) ?? null;
+  const src = `/api/files/${projectId}/${versionElegida?.file ?? finalVideo}`;
+  const activa = voz?.activa ?? null;
+  const unido = voz?.unido ?? null;
+  // Aviso de "los clips cambiaron" o "se unio antes del modulo" (R8.2, R8.4).
+  const aviso = unido && (unido.desactualizado || !unido.conReceta) ? unido.motivo : null;
   return (
     /*
       `min-h-0 flex-1` y no un alto en `vh`: el alto disponible lo define el shell
@@ -584,21 +804,70 @@ function VideoFinal({
       `cq-size` convierte ese alto en la unidad `100cqh`, que es lo que usa el video.
     */
     <div className="cq-size flex min-h-0 flex-1 gap-6">
+      {/*
+        `key={src}`: al elegir otra version el <video> se vuelve a montar. Cambiar solo
+        el `src` deja al navegador mostrando el ultimo frame del video anterior hasta
+        que el usuario le da play.
+      */}
       <video
-        src={`/api/files/${projectId}/${finalVideo}`}
+        key={src}
+        src={src}
         controls
         preload="none"
         playsInline
-        aria-label="Video final unido"
+        aria-label={versionElegida ? `Video con la voz ${versionElegida.voz.nombre}` : "Video final unido"}
         style={{ height: "100cqh", width: "min(calc(100cqh * 0.5625), 55cqw)" }}
         className="flex-none rounded-lg bg-bg object-contain"
       />
       <div className="flex min-w-0 min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto">
-        <div>
-          <p className="text-label text-fg-dim">Video final</p>
-          <p className="font-mono text-body text-fg">
-            {finalVideo} <span className="text-fg-dim">· {totalDur}</span>
+        <div className="flex flex-wrap items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <p className="text-label text-fg-dim">Video final</p>
+            <p className="font-mono text-body text-fg">
+              {finalVideo} <span className="text-fg-dim">· {totalDur}</span>
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={onVolverAUnir}
+            loading={busyUnir}
+            disabled={!puedeUnir || Boolean(activa)}
+            title={
+              activa
+                ? "Hay un cambio de voz en curso: esperá a que termine o cancelalo."
+                : puedeUnir
+                  ? "Vuelve a generar el video con los clips actuales."
+                  : "ffmpeg no detectado en este server"
+            }
+            icon={<ArrowClockwise aria-hidden className="size-3.5" />}
+          >
+            Volver a unir
+          </Button>
+        </div>
+        {aviso && (
+          <p className="flex items-start gap-2 rounded-sm bg-accent/10 px-3 py-2 text-body text-accent">
+            <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+            {unido?.desactualizado ? `Los clips cambiaron desde que se unió: ${aviso}` : aviso}
           </p>
+        )}
+        {/* aria-live porque unir tarda y el usuario ya dejo de mirar el boton cuando termina. */}
+        <div aria-live="polite">
+          {stitch && (
+            <p
+              role={stitch.ok ? undefined : "alert"}
+              className={cn(
+                "flex items-start gap-2 rounded-sm px-3 py-2 text-body",
+                stitch.ok ? "bg-ok/10 text-ok" : "bg-danger/10 text-danger",
+              )}
+            >
+              {stitch.ok ? (
+                <Check aria-hidden className="mt-0.5 size-4 shrink-0" />
+              ) : (
+                <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+              )}
+              {stitch.msg}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button asChild variant="primary" icon={<DownloadSimple aria-hidden className="size-4" />}>
@@ -615,6 +884,18 @@ function VideoFinal({
             </a>
           </Button>
         </div>
+        <PanelVoz
+          projectId={projectId}
+          voz={voz}
+          elegida={elegida}
+          onElegir={onElegir}
+          totalDur={totalDur}
+          errorVoz={errorVoz}
+          onCambiarVoz={onCambiarVoz}
+          onRepetir={onRepetir}
+          onCancelar={onCancelar}
+          onBorrar={onBorrar}
+        />
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-divider pt-3">
           <FolderOpen aria-hidden className="size-4 shrink-0 text-fg-dim" />
           <div className="min-w-0 flex-1">
@@ -636,6 +917,192 @@ function VideoFinal({
         {children}
       </div>
     </div>
+  );
+}
+
+/** "2026-09-25T14:02..." -> "25/9 14:02". */
+function fechaCorta(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.getDate()}/${d.getMonth() + 1} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** Bytes -> "214 MB". */
+function peso(bytes: number | null): string {
+  if (!bytes) return "";
+  return bytes >= 1e6 ? `${Math.round(bytes / 1e6)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}
+
+/**
+ * Nombre legible para la descarga: `<proyecto>__voz-<voz>.mp4` (R5.2). Sale del nombre
+ * del archivo sin el `-<id6>` del final, que esta para que dos versiones con la misma
+ * voz no se pisen en disco pero no le dice nada a quien baja el archivo.
+ */
+function nombreDescarga(file: string): string {
+  const base = file.split("/").pop() ?? file;
+  return base.replace(/-[0-9a-f]{6}\.mp4$/, ".mp4");
+}
+
+/**
+ * El panel "Voz" de Resultado (tasks/cambio-de-voz/02-DISENO.md §12.1): el original y
+ * cada version, con lo que se puede hacer con cada una. Solo existe con video unido
+ * (vive adentro de `VideoFinal`): sin unido no hay nada que cambiar.
+ */
+function PanelVoz({
+  projectId,
+  voz,
+  elegida,
+  onElegir,
+  totalDur,
+  errorVoz,
+  onCambiarVoz,
+  onRepetir,
+  onCancelar,
+  onBorrar,
+}: {
+  projectId: string;
+  voz: RespuestaEstadoVoz | null;
+  elegida: string | null;
+  onElegir: (id: string | null) => void;
+  totalDur: string;
+  errorVoz: string | null;
+  onCambiarVoz: () => void;
+  onRepetir: (v: VersionDeVoz) => void;
+  onCancelar: () => void;
+  onBorrar: (v: VersionDeVoz) => void;
+}) {
+  const unido = voz?.unido ?? null;
+  /*
+    Por que "Cambiar voz" esta deshabilitado, VISIBLE debajo del boton: un `title` no
+    se ve en touch ni navegando con teclado (R8.3).
+  */
+  const motivo = !voz
+    ? null
+    : !voz.disponible
+      ? voz.motivoNoDisponible
+      : !unido?.conReceta
+        ? unido?.motivo ?? null
+        : unido.desactualizado
+          ? `${unido.motivo} Volvé a unir antes de cambiar la voz.`
+          : voz.activa
+            ? "Hay un cambio de voz en curso en este proyecto."
+            : null;
+
+  return (
+    <section className="flex flex-col gap-2 border-t border-divider pt-3" aria-label="Voz">
+      <div className="flex flex-wrap items-center gap-2">
+        <Waveform aria-hidden className="size-4 shrink-0 text-fg-dim" />
+        <h2 className="flex-1 text-body font-medium text-fg">Voz</h2>
+        <Button size="sm" variant="primary" onClick={onCambiarVoz} disabled={!voz || motivo !== null}>
+          Cambiar voz
+        </Button>
+      </div>
+      {motivo && <p className="text-label text-fg-dim">{motivo}</p>}
+      {errorVoz && (
+        <p role="alert" className="flex items-start gap-2 rounded-sm bg-danger/10 px-3 py-2 text-body text-danger">
+          <WarningCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+          {errorVoz}
+        </p>
+      )}
+
+      <ul className="flex flex-col divide-y divide-divider rounded-md border border-divider">
+        <li className="flex flex-wrap items-center gap-2 px-3 py-2">
+          <span className="min-w-0 flex-1 text-body text-fg">
+            Original
+            <span className="text-label text-fg-dim">
+              {unido?.creadoEn ? ` · unido ${fechaCorta(unido.creadoEn)}` : ""}
+            </span>
+          </span>
+          <Button size="sm" variant="ghost" aria-pressed={elegida === null} onClick={() => onElegir(null)}>
+            Ver
+          </Button>
+        </li>
+        {(voz?.versiones ?? []).map((v) => {
+          const visual = estadoDeVersionDeVoz(v.estado);
+          const viva = voz?.activa?.id === v.id;
+          const vieja = v.estado === "lista" && unido?.creadoEn != null && v.recetaCreadaEn !== unido.creadoEn;
+          return (
+            <li key={v.id} className="flex flex-col gap-1.5 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone={visual.tone} punto animado={visual.animado}>
+                  {visual.label}
+                </Badge>
+                <span className="min-w-0 flex-1 truncate text-body text-fg">
+                  {v.prueba ? `Prueba 20 s · ${v.voz.nombre}` : v.voz.nombre}
+                  <span className="text-label text-fg-dim">
+                    {" · "}
+                    {fechaCorta(v.creadoEn)}
+                    {v.estado === "lista" && !v.prueba ? ` · ${totalDur}` : ""}
+                    {v.estado === "lista" && v.bytes ? ` · ${peso(v.bytes)}` : ""}
+                  </span>
+                </span>
+                {v.estado === "lista" && v.file && (
+                  <>
+                    <Button size="sm" variant="ghost" aria-pressed={elegida === v.id} onClick={() => onElegir(v.id)}>
+                      Ver
+                    </Button>
+                    {!v.prueba && (
+                      <Button asChild size="sm" variant="ghost">
+                        <a
+                          href={`/api/files/${projectId}/${v.file}?dl=1&name=${encodeURIComponent(nombreDescarga(v.file))}`}
+                          download
+                        >
+                          Descargar
+                        </a>
+                      </Button>
+                    )}
+                  </>
+                )}
+                {viva && (
+                  <Button size="sm" variant="ghost" onClick={onCancelar}>
+                    Cancelar
+                  </Button>
+                )}
+                {(v.estado === "fallida" || v.estado === "cancelada") && (
+                  <Button size="sm" variant="ghost" onClick={() => onRepetir(v)} disabled={Boolean(voz?.activa)}>
+                    Reintentar
+                  </Button>
+                )}
+                {!viva && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onBorrar(v)}
+                    aria-label={`Borrar la versión con la voz ${v.voz.nombre}`}
+                    icon={<Trash aria-hidden className="size-3.5" />}
+                  >
+                    Borrar
+                  </Button>
+                )}
+              </div>
+              {v.estado === "procesando" && (
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-label tnum text-fg-dim">
+                    tramo {Math.min(v.progreso.tramosListos + 1, v.progreso.tramosTotal)} de {v.progreso.tramosTotal}
+                  </span>
+                  <Progreso
+                    hechos={v.progreso.tramosListos}
+                    total={v.progreso.tramosTotal}
+                    tono="info"
+                    etiqueta={`Convirtiendo a ${v.voz.nombre}`}
+                    className="flex-1"
+                  />
+                </div>
+              )}
+              {v.estado === "fallida" && v.error && <p className="text-label text-danger">{v.error}</p>}
+              {vieja && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="attention">Hecha sobre un unido anterior</Badge>
+                  <Button size="sm" variant="ghost" onClick={() => onRepetir(v)} disabled={motivo !== null}>
+                    Rehacer con esta voz
+                  </Button>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

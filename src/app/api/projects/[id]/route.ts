@@ -12,6 +12,7 @@ import { purgeProject } from "@/lib/jobs/queue";
 import { buildJobs, estimateCost } from "@/lib/jobs/pipeline";
 import { requireProjectOwner } from "@/lib/ownership";
 import { badRequest, notFound, ok, serverError } from "@/lib/http";
+import { cancelarCorrida } from "@/lib/voz/corrida";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -122,6 +123,14 @@ export async function DELETE(
     // 1) Cortamos la cola primero: si el pipeline estaba corriendo, dejamos de
     //    tomar jobs nuevos de este proyecto antes de borrar los archivos.
     purgeProject(project.id);
+
+    /*
+      1b) Cancelar el cambio de voz ANTES de borrar la carpeta (D18 de
+      tasks/cambio-de-voz/02-DISENO.md). Si no, la corrida sigue escribiendo en
+      voz/_trabajo/ y su `mkdir({ recursive: true })` recrea la carpeta que se acaba de
+      borrar: queda un proyecto fantasma en disco.
+    */
+    cancelarCorrida(project.id);
 
     // 2) Archivos en disco (imagenes + videos). Si falla, avisamos pero igual
     //    limpiamos la DB para que el proyecto no quede fantasma en la lista.

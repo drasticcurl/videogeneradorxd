@@ -187,6 +187,21 @@ export interface ProjectRecord {
    * undefined = sin fase (corre todo, como siempre).
    */
   stage?: ProjectStage;
+  /**
+   * Receta del video unido: que clips entraron, en que orden, donde cae cada uno y la
+   * huella de cada archivo. La escribe el stitch (T04 del cambio de voz).
+   *
+   * OPCIONAL a proposito, mismo criterio que `owner?`: si fuera obligatorio, tsc
+   * romperia en cada lugar que arma un ProjectRecord. `undefined` = el proyecto nunca
+   * se unio, o se unio antes de este modulo; en ese caso el cambio de voz pide volver
+   * a unir una vez en lugar de adivinar la receta (D7 de tasks/cambio-de-voz/02-DISENO.md).
+   */
+  recetaUnido?: RecetaUnido;
+  /**
+   * Versiones del unido con otra voz, la MAS NUEVA PRIMERO. Opcional por lo mismo que
+   * `recetaUnido?`: los proyectos que no usan la funcion no ganan el campo.
+   */
+  versionesVoz?: VersionDeVoz[];
   /** path absoluto a la carpeta de salida del proyecto */
   outputDir: string;
   createdAt: string;
@@ -253,4 +268,146 @@ export interface Manifest {
   clips: ManifestClip[];
   final_video: string | null; // "<nombre-del-proyecto>.mp4" si se hizo stitch
   warnings: string[];
+}
+
+/* ─────────────────────── cambio de voz (ElevenLabs) ─────────────────────── */
+/*
+  Contrato de tasks/cambio-de-voz/02-DISENO.md §4. Viven aca y no en src/lib/voz/ porque
+  la UI los importa: el cliente trae TIPOS de types.ts y nunca un modulo que arrastra
+  node:fs o la config con la key.
+*/
+
+/** Ajustes de la voz, en el rango 0..1. Se mapean 1:1 a `voice_settings` de ElevenLabs. */
+export interface AjustesDeVoz {
+  estabilidad: number;      // stability
+  similitud: number;        // similarity_boost
+  estilo: number;           // style
+  realceHablante: boolean;  // use_speaker_boost
+}
+
+/**
+ * Un clip tal cual entro al unido. Sin esto no se sabe donde cae cada clip dentro del
+ * unido (para conservar los que no se convierten) ni si el clip cambio despues de unir.
+ */
+export interface ClipEnReceta {
+  id: string;
+  assetId: string;          // hoy no se usa: habilita "una voz por persona" sin volver a unir (D3)
+  etiqueta: string;         // "IA" | "FILMAR_REAL"
+  conDialogo: boolean;      // clip.dialogo.trim() !== "" al momento de unir
+  file: string;             // path relativo, ej "clips/03_c3.mp4"
+  mtimeMs: number;          // Math.trunc(stat.mtimeMs) ANTES de correr ffmpeg
+  bytes: number;
+  inicioSeg: number;        // dentro del unido
+  finSeg: number;
+}
+
+/** Lo que el stitch deja anotado al unir (D6). */
+export interface RecetaUnido {
+  file: string;             // el unido, relativo: "<slug>.mp4"
+  creadoEn: string;         // ISO. Identifica ESTE unido (las versiones lo guardan)
+  duracionSeg: number;      // = finSeg del ultimo clip
+  clips: ClipEnReceta[];    // en orden
+}
+
+/** Lo que la UI necesita saber del unido. */
+export interface EstadoUnido {
+  existe: boolean;
+  file: string | null;
+  conReceta: boolean;
+  desactualizado: boolean;
+  motivo: string | null;    // en castellano, listo para mostrar
+  creadoEn: string | null;  // RecetaUnido.creadoEn, o null sin receta
+}
+
+/** Ciclo de vida de una version de voz (§10.3 del diseño). */
+export type EstadoVersionDeVoz =
+  | "en_cola" | "procesando" | "lista" | "fallida" | "cancelada";
+
+/** Un .mp4 nuevo: el mismo video que el unido con el audio en otra voz. */
+export interface VersionDeVoz {
+  id: string;                               // randomUUID()
+  voz: { id: string; nombre: string };      // nombre = alias o nombre de la voz AL CONVERTIR
+  proveedor: "mock" | "elevenlabs";
+  modelo: string | null;                    // el que devolvio el proveedor
+  ajustes: AjustesDeVoz | null;             // null = los que la voz tiene guardados en ElevenLabs
+  quitarRuido: boolean;
+  incluirFilmados: boolean;
+  prueba: boolean;
+  estado: EstadoVersionDeVoz;
+  progreso: { tramosListos: number; tramosTotal: number };
+  segundosConvertidos: number;
+  file: string | null;                      // relativo: "voz/<...>.mp4", solo con estado "lista"
+  bytes: number | null;
+  error: string | null;
+  recetaCreadaEn: string;                   // RecetaUnido.creadoEn sobre la que se hizo
+  bootId: string;                           // D12
+  usuario: string;                          // quien la pidio
+  creadoEn: string;
+  actualizadoEn: string;
+}
+
+/** Una voz como la muestra la UI, normalizada desde ElevenLabs o el mock. */
+export interface VozResumen {
+  id: string;
+  nombre: string;
+  categoria: string | null;                 // premade | cloned | generated | professional | ...
+  etiquetas: Record<string, string>;        // labels tal cual: accent, gender, age, use_case...
+  descripcion: string | null;
+  previewUrl: string | null;                // SOLO https; cualquier otra cosa -> null
+  esPropia: boolean;
+}
+
+/** Una voz marcada en la APP (no en ElevenLabs), por usuario, con alias y ajustes (D14). */
+export interface VozFavorita {
+  voiceId: string;
+  proveedor: "mock" | "elevenlabs";
+  alias: string;                            // 1..60 caracteres
+  ajustes: AjustesDeVoz | null;
+  agregadaEn: string;
+}
+
+/** Una fila del selector: la voz + su favorita, si la hay. */
+export interface VozEnLista extends VozResumen {
+  favorita: VozFavorita | null;
+  disponible: boolean;                      // false = favorita que ya no esta en la cuenta
+}
+
+/** Creditos de la cuenta de ElevenLabs. Best-effort: la key puede no tener user_read. */
+export interface CreditosDeVoz {
+  usados: number;
+  limite: number;
+  seRenuevaEn: string | null;               // ISO
+  plan: string | null;
+}
+
+/** Lo que se muestra antes de confirmar: segundos, tramos y costo (R9). */
+export interface EstimacionDeVoz {
+  segundos: number;
+  tramos: number;
+  creditos: number;
+  usd: number;
+}
+
+/** GET /api/projects/:id/voz */
+export interface RespuestaEstadoVoz {
+  proveedor: "mock" | "elevenlabs";
+  disponible: boolean;
+  motivoNoDisponible: string | null;
+  unido: EstadoUnido;
+  estimacion: {
+    sinFilmados: EstimacionDeVoz;
+    conFilmados: EstimacionDeVoz | null;    // null si no hay FILMAR_REAL con dialogo
+    prueba: EstimacionDeVoz;
+  } | null;                                 // null sin receta vigente
+  filmadosConDialogo: number;
+  versiones: VersionDeVoz[];                // la mas nueva primero
+  activa: VersionDeVoz | null;
+}
+
+/** GET /api/voces */
+export interface RespuestaVoces {
+  proveedor: "mock" | "elevenlabs";
+  voces: VozEnLista[];
+  siguiente: string | null;
+  creditos: CreditosDeVoz | null;
 }

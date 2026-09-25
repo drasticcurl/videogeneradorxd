@@ -6,6 +6,77 @@ edita una entrada vieja, se agrega una nueva si hay que corregir algo.
 
 ---
 
+## 2026-09-25 — Cambio de voz (ElevenLabs) — T00 a T07
+
+**Pedido:** implementar el módulo "cambio de voz" con el plan de `tasks/cambio-de-voz/` (requisitos,
+diseño con contratos congelados y 9 tasks), empezando con todas las tareas.
+
+**Estado:** T00-T07 hechas, de a una en el orden del plan (T00 → T01 → T04 → T02 → T03 → T05 → T06 →
+T07). T08 (producción) queda para hacer con el usuario.
+
+### Lo que midió T00 (ElevenLabs real)
+
+Video `01_pregunta-2.mp4` (45 s de Veo, habla continua); los tramos de 60 y 270 s repiten ese audio.
+
+| Tramo | Δ duración | Corrimiento | Latencia |
+|---|---|---|---|
+| 20 s (quitar ruido on) | +16 ms (0,08 %) | -28 ms | 5,4 s |
+| 20 s (quitar ruido off) | +16 ms | -42 ms | 4,3 s |
+| 60 s | +22 ms (0,04 %) | -17 ms | 14,3 s |
+| 270 s (23,8 MB) | +15 ms (0,01 %) | -15 ms | 56,4 s |
+
+El diseño de piezas contiguas (D5) queda tal cual. La key de prueba no tiene `user_read` ni
+`models_read`: los créditos por pedido (P-01) quedaron sin medir y el diálogo no puede mostrar los
+créditos restantes con esa key. `wav_44100` → 403 `output_format_not_allowed` (P-03 resuelta: queda mp3).
+
+### Decisiones tomadas sin especificación explícita
+
+- **Paso 3 de §9 en dos pasadas:** primero se decodifica la salida (con el offset) para MEDIR su largo en
+  muestras, y después se corre el comando de §9 tal cual sobre el archivo original. §9 pide medir "con
+  ffprobe, después del offset"; la duración de formato de un mp3 es estimada por bitrate, así que se
+  mide sobre PCM.
+- **ffprobe sin `spawnSync` en el motor:** `audio.ts` usa `execFile` asincrónico para medir y un
+  `execFileSync` de `-version` (milisegundos, una vez por proceso) para saber si existe. El chequeo de
+  T03 prohíbe `spawnSync` en `audio.ts`/`corrida.ts`.
+- **Una versión "cancelada" no se vuelve a escribir:** si un tramo termina justo después del cancelar,
+  `actualizarVersion` no la revive. Sin eso, el progreso del tramo pisaba el "cancelada".
+- **El 403 de ElevenLabs cae en `otro`** con el mensaje de ElevenLabs: la tabla de §6.2 no lo tiene.
+  Anotado como P-07, no decidido en el código.
+- **Descarga con nombre legible:** sale del nombre del archivo sin el `-<id6>` final; así la UI no
+  necesita duplicar `slugify` (que vive en `storage.ts`, con `node:fs`).
+- **UI funcional:** Resultado se mide sobre un segundo proyecto sembrado con `autoApprove` propio y
+  unido; el primero sigue en modo manual para el editor de clip.
+
+### Lo que aprendí y conviene tener presente
+
+- **El atributo `hidden` pierde contra una clase de display.** El panel de ajustes con `hidden` y
+  `className="flex …"` se veía abierto con la flecha cerrada. Se vio en una captura, no en un chequeo.
+- **Mientras un clip se regenera no tiene archivo**, así que el unido figura "Se sacaron clips" hasta
+  que termina, y recién ahí "El clip 02 se regeneró". El E2E primero esperaba el primer estado; es
+  correcto que se vea así.
+- Los chequeos por grep (`process.env`, `AbortSignal.any`, `db.json`) también encuentran comentarios
+  que explican por qué NO se usan. Se reescribieron esos comentarios en vez de relajar el grep.
+
+### Números del E2E (mock)
+
+Unido de 30,06 s (4 clips): versión con md5 de video idéntico, las mismas muestras de audio, c1+c2 en
+275 Hz (convertidos), c3 filmado en 660 Hz y c4 sin diálogo en 220 Hz (conservados, más de 10 dB por
+encima de la otra banda). Prueba de 20,0 s. 409 al unir con conversión viva, cancelar sin
+`_trabajo/`, desactualizado → 400 → volver a unir, zip con la versión y sin la prueba, 404 para otro
+usuario, carpeta del proyecto borrada a mitad de una conversión que no reaparece.
+
+### Pendiente (T08, con el usuario)
+
+- **P-01:** créditos reales por pedido (la key de prueba no deja leerlos; mirar el panel de ElevenLabs).
+- **P-02:** listar modelos con una key con `models_read` (el vigente funciona).
+- **P-04:** unir un VSL largo sigue pasando los 100 s de Cloudflare (preexistente; hay mensaje honesto).
+- **P-05:** salto de volumen entre lo convertido y lo conservado: escucharlo en un proyecto real.
+- **P-06:** voces de la Voice Library en el plan del usuario.
+- **P-07:** mapeo del 403 de ElevenLabs.
+- La key usada en el spike se pegó en el chat de la sesión: **rotarla** antes de ponerla en producción.
+
+---
+
 ## 2026-09-23 (3) — Auditoría de UI (pantalla chica y normal)
 
 **Pedido:** "audita la ui en pantalla chica sacando screen y en pantalla normal, revisá que todo

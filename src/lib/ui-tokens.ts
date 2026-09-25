@@ -19,7 +19,7 @@
  * clases la hace `Badge` y nadie mas. Asi cambiar el color de un estado es una
  * linea en `Badge`, y no abrir las 8 pantallas.
  */
-import type { JobRecord } from "./types";
+import type { EstadoVersionDeVoz, JobRecord } from "./types";
 
 /**
  * Los cinco tonos del sistema. `attention` usa el color de acento porque en esta
@@ -94,5 +94,27 @@ export function estadoDeProyecto(status: string): EstadoVisual {
       return { tone: "neutral", label: "Pausado", animado: false };
     default:
       return { tone: "neutral", label: String(status), animado: false };
+  }
+}
+
+/**
+ * Estado de una VERSION DE VOZ (cambio de voz, tasks/cambio-de-voz/02-DISENO.md §12.1)
+ * -> como se ve. Mismos significados que en los jobs: `info` animado es "trabajando
+ * ahora", `neutral` es "esperando" o "no hay nada que hacer".
+ */
+export function estadoDeVersionDeVoz(estado: EstadoVersionDeVoz | string): EstadoVisual {
+  switch (estado) {
+    case "en_cola":
+      return { tone: "neutral", label: "En cola", animado: false };
+    case "procesando":
+      return { tone: "info", label: "Convirtiendo", animado: true };
+    case "lista":
+      return { tone: "ok", label: "Lista", animado: false };
+    case "fallida":
+      return { tone: "danger", label: "Falló", animado: false };
+    case "cancelada":
+      return { tone: "neutral", label: "Cancelada", animado: false };
+    default:
+      return { tone: "neutral", label: String(estado), animado: false };
   }
 }

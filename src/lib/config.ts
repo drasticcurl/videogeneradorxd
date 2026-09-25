@@ -142,6 +142,17 @@ function env(name: string, fallback?: string): string {
   return v;
 }
 
+/**
+ * Numero de env acotado a [min, max]. Si no es un numero, el default. Los limites de
+ * la voz no son decorativos: un VOICE_CHUNK_MAX_SEC de 400 manda tramos que
+ * ElevenLabs rechaza (tope 300 s), y uno de 0 haria un pedido por muestra.
+ */
+function envAcotado(name: string, fallback: number, min: number, max: number): number {
+  const n = Number(env(name, String(fallback)));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 /** Resuelve un path absoluto a partir de cwd (la app corre localmente en la PC). */
 function resolveFromCwd(p: string): string {
   return path.isAbsolute(p) ? p : path.join(process.cwd(), p);
@@ -315,6 +326,51 @@ export const config = {
   },
 
   /**
+   * Cambio de voz (ElevenLabs Voice Changer sobre el video unido). Contrato de
+   * tasks/cambio-de-voz/02-DISENO.md §5.
+   *
+   * La KEY no esta aca: la resuelve `elevenLabsKeyFor(usuario)` en cada llamada, porque
+   * puede ser por usuario y porque no tiene que quedar en un objeto que se pueda
+   * serializar por accidente a una respuesta.
+   */
+  voz: {
+    /** Default "mock" (D16): el default no gasta. Cualquier valor raro tambien cae a mock. */
+    proveedor: (env("VOICE_PROVIDER", "mock") === "elevenlabs" ? "elevenlabs" : "mock") as
+      | "mock"
+      | "elevenlabs",
+    elevenlabs: {
+      /** Sin "/" final: los paths se pegan con "/v1/...". */
+      baseUrl: env("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io").replace(/\/+$/, ""),
+      modelo: env("ELEVENLABS_STS_MODEL", "eleven_multilingual_sts_v2"),
+      /**
+       * Solo mp3_* o wav_* (D20): vienen con contenedor y ffmpeg los lee solos. Un
+       * pcm_* es audio crudo SIN cabecera, y leerlo obliga a adivinar frecuencia y
+       * canales: un error ahi no falla, deja la voz acelerada o lenta. Cualquier otra
+       * cosa cae al default, que acepta todo plan (wav_44100 pide Pro: medido en T00).
+       */
+      formatoSalida: /^(mp3|wav)_/.test(env("ELEVENLABS_OUTPUT_FORMAT"))
+        ? env("ELEVENLABS_OUTPUT_FORMAT")
+        : "mp3_44100_128",
+      timeoutMs: envAcotado("ELEVENLABS_TIMEOUT_MS", 180000, 10000, 900000),
+    },
+    /** Largo maximo de un tramo (D4). 270 deja margen bajo el tope de 300 s de ElevenLabs. */
+    tramoMaxSeg: envAcotado("VOICE_CHUNK_MAX_SEC", 270, 30, 290),
+    /** Largo de "Probar 20 s" (R4). */
+    pruebaSeg: envAcotado("VOICE_PREVIEW_SEC", 20, 5, 60),
+    /** Recorte al inicio de cada salida, si ElevenLabs agrega un corrimiento fijo (T00 midio 0). */
+    offsetMs: envAcotado("VOICE_OFFSET_MS", 0, 0, 500),
+    /**
+     * Como estimar creditos. Default "por_minuto": muestra el MAXIMO posible, asi el
+     * numero real nunca sorprende para arriba (P-01 sin medir todavia).
+     */
+    facturacion: (env("VOICE_BILLING", "por_minuto") === "proporcional"
+      ? "proporcional"
+      : "por_minuto") as "por_minuto" | "proporcional",
+    /** Solo informativo, para el costo que muestra el dialogo. */
+    precioPorMinUsd: Number(env("PRICE_VOICE_PER_MIN_USD", "0.12")) || 0.12,
+  },
+
+  /**
    * Auth de la app. La app corre en un subdominio publico, asi que el acceso se
    * cierra con un password-gate por usuario (ver src/lib/auth.ts).
    *
@@ -359,6 +415,25 @@ export function authUsers(): Map<string, string> {
     if (name) users.set(name, value);
   }
   return users;
+}
+
+/**
+ * API key de ElevenLabs para un usuario: `ELEVENLABS_API_KEY_<NOMBRE>` pisa a la
+ * compartida `ELEVENLABS_API_KEY`, con el mismo patron que `PASSWORD_<NOMBRE>`. ""
+ * si no hay ninguna.
+ *
+ * NO se cachea, por lo mismo que `authUsers()`: en el build de Next las vars de runtime
+ * no existen, y un valor cacheado vacio dejaria el modulo "sin configurar" para siempre.
+ *
+ * Este es el UNICO lugar de src/ que lee el valor de la key (chequeo A2 de
+ * tasks/cambio-de-voz/_verificacion-voz.sh). Nunca la loguees ni la devuelvas.
+ */
+export function elevenLabsKeyFor(usuario: string): string {
+  return (
+    process.env[`ELEVENLABS_API_KEY_${usuario.toUpperCase()}`] ||
+    process.env.ELEVENLABS_API_KEY ||
+    ""
+  );
 }
 
 /** Valida que un id de modelo pertenezca al catalogo del tipo dado. Si no, usa el default. */

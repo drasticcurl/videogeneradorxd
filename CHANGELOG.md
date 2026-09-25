@@ -6,6 +6,49 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-25 (2) — Cambio de voz (ElevenLabs Voice Changer) y "Volver a unir"
+
+**El problema:** Veo genera el audio clip por clip, cada uno como una generación independiente: la
+misma persona suena distinta de un clip a otro y el timbre no se elige. Y una vez unido el video, la
+pantalla Resultado no ofrecía volver a unir: si se regeneraba un clip, el unido quedaba viejo sin forma
+de rehacerlo desde la interfaz.
+
+**Qué cambió** (diseño y contratos en `tasks/cambio-de-voz/`):
+
+- **Resultado → "Cambiar voz":** elige una voz (favoritas de la app, las de la cuenta de ElevenLabs o
+  las predeterminadas), "Probar 20 s" antes de gastar, y genera un `.mp4` nuevo en `voz/` con todo el
+  diálogo en esa voz. El original no se pisa; las versiones se ven, se bajan con nombre legible y se
+  borran. Entran al zip (las pruebas no).
+- **El video no se re-encodea** (`-c:v copy`, md5 idéntico) y la pista nueva tiene **exactamente** las
+  mismas muestras que la original: cortes por muestra a 48 kHz y cada salida normalizada a su largo.
+  Sin eso, 20 ms de error por tramo se acumulan y el final queda corrido de la boca.
+- **Los clips sin diálogo y los `FILMAR_REAL` conservan su audio** (los filmados se pueden incluir).
+- **El stitch guarda la receta del unido** (`ProjectRecord.recetaUnido`): qué clips entraron, dónde
+  cae cada uno y su huella. Con eso Resultado detecta si un clip cambió después de unir, avisa cuál y
+  bloquea el cambio de voz hasta **"Volver a unir"**, que es el botón nuevo. Un unido de antes de este
+  cambio pide volver a unir una vez: reconstruir la receta a ojo daría números plausibles con el audio
+  pegado sobre otro video, sin un solo error.
+- **Asíncrono, una conversión a la vez en toda la app**, con cola propia en memoria (no la de Vertex).
+  El POST contesta 202 al instante: esperar el resultado se comería el corte de 100 s de Cloudflare.
+  Un reinicio marca la conversión fallida y no la retoma sola (retomarla gasta créditos).
+- **Volver a unir con una conversión viva → 409**, y **borrar el proyecto cancela la conversión antes
+  de borrar la carpeta** (si no, la corrida la recreaba con `mkdir -p` y quedaba un proyecto fantasma).
+- "Unir en un video" ahora distingue el 524 de Cloudflare ("el servidor sigue uniendo, recargá en unos
+  minutos") en vez de decir "No se pudo unir." con el stitch todavía corriendo.
+- **La API key vive solo en el server** (`ELEVENLABS_API_KEY`, o una por usuario), y `deploy.sh` aborta
+  (guard 3f) si `VOICE_PROVIDER=elevenlabs` y no hay ninguna. Default `VOICE_PROVIDER=mock`: no gasta.
+
+**Medido antes de escribir el motor (T00, ElevenLabs real con audio de Veo):** la salida dura 15-22 ms
+más que la entrada en 20, 60 y 270 s (0,01-0,08 %), sin corrimiento fijo; un tramo de 270 s tarda 56 s;
+`wav_44100` pide plan Pro. **Verificado:** `_verificacion-voz.sh` (48 verde, FALLO 0),
+`_verificacion-voz-mock.mjs` con 14 casos de punta a punta (`VOZ OK (mock)`) y
+`_verificacion-ui-funcional.mjs` con Resultado incluido (`UI OK`).
+
+De paso: el README y el steering todavía decían que los proyectos no estaban aislados por usuario. Lo
+están desde `e66bd83`; se corrigieron los dos.
+
+---
+
 ## 2026-09-25 — Cargar el avatar ANTES del brief, para que la IA no invente la cara
 
 **El problema:** la tarjeta de avatares vivía dentro de la sección Plan, que recién aparece cuando ya

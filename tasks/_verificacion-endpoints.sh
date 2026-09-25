@@ -62,6 +62,15 @@ cd "$(dirname "$0")/.." || exit 1
 # Ninguna linea de abajo se toco "para que pase": cada cambio esta arriba con su
 # motivo, y el conjunto de endpoints que la app llama es el mismo de antes mas el
 # /api/batch de lectura del punto 3.
+#
+# ─── ACTUALIZACION 2026-09-25: cambio de voz (tasks/cambio-de-voz/) ─────────────
+#
+# Se AGREGA una linea, la de `src/components/CambiarVozDialog.tsx`: es un archivo
+# NUEVO que llama a dos endpoints nuevos (/api/voces y /api/voces/favoritas) y al POST
+# de /api/projects/:id/voz. Va en la linea base para que la proxima refactorizacion no
+# le pueda sacar un fetch sin que esto salte. La linea de `result/page.tsx` NO cambia:
+# su llamada a /voz cae en el prefijo /api/projects/, que ya estaba. Ninguna otra
+# linea se toco.
 LINEA_BASE=$(cat <<'BASE'
 src/app/HomeProyectos.tsx|/api/batch /api/projects /api/projects/
 src/app/NuevoProyectoWizard.tsx|/api/projects /api/projects/
@@ -73,6 +82,7 @@ src/app/imagenes/page.tsx|/api/config
 src/app/login/LoginForm.tsx|/api/login
 src/app/project/[id]/pipeline/page.tsx|/api/files/ /api/jobs/ /api/projects/
 src/app/project/[id]/result/page.tsx|/api/files/ /api/projects/
+src/components/CambiarVozDialog.tsx|/api/projects/ /api/voces /api/voces/favoritas
 src/components/JobCard.tsx|/api/files/ /api/prompt-template
 src/store/useProjectStore.ts|/api/config /api/jobs/ /api/parse /api/projects/
 BASE

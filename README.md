@@ -14,22 +14,11 @@ base de datos ni storage externo.
 
 ---
 
-## Limitación conocida: los proyectos no están aislados por usuario
+## Aislamiento por usuario: hecho
 
-Hoy hay varios usuarios (`PASSWORD_IVAN`, `PASSWORD_LUCHO`) y **todos ven los proyectos de todos**.
-`ProjectRecord` no tiene campo de dueño y ninguna route handler compara la sesión contra el
-proyecto: el middleware sólo verifica que quien pide sea *alguien* válido.
-
-Hay cuatro caminos por los que se ve lo ajeno, no uno:
-
-| Camino | Por qué |
-|---|---|
-| `GET /api/projects` | devuelve **todos** los proyectos sin filtrar (`src/app/api/projects/route.ts:16`) |
-| `/batch?ids=a,b,c` | los ids del lote viajan en la URL; `/api/batch` los arma sin chequear nada |
-| `GET /api/files/<projectId>/<path>` | sirve cualquier archivo de cualquier proyecto y **ni consulta la DB** (`src/app/api/files/[...path]/route.ts:47`) |
-| `POST /api/jobs/<jobId>/*` | los ids de job son derivados: `<projectId>:img:<imageId>` y `<projectId>:vid:<clipId>` (`src/lib/jobs/pipeline.ts:43-48`), así que un projectId habilita aprobar, regenerar y editar prompts ajenos |
-
-El aislamiento por usuario está planificado en `tasks/aislamiento-por-usuario/`. Ver `CHANGELOG.md`.
+Cada usuario ve solo sus proyectos desde `e66bd83` (`ProjectRecord.owner` + `src/lib/ownership.ts`,
+con `requireProjectOwner` en toda ruta de `projects/[id]/`). El plan y el porqué de cada regla están
+en `tasks/aislamiento-por-usuario/`.
 
 ---
 
@@ -267,6 +256,10 @@ la UI no muestra.
 │   ├── 01_hook.mp4
 │   └── …
 ├── <nombre-del-proyecto>.mp4      # el video unido, si corriste el stitch
+├── voz/                           # versiones con otra voz (cambio de voz)
+│   ├── <proyecto>__voz-<voz>-<id6>.mp4
+│   ├── <proyecto>__prueba-voz-<voz>-<id6>.mp4
+│   └── _trabajo/<versionId>/      # temporales de una conversión en curso; se borran siempre
 ├── manifest.json                  # plan + estado + rutas + references[]
 └── pipeline.log
 ```
@@ -275,6 +268,8 @@ El video unido se llama **como el proyecto**, no `final.mp4`: con `final.mp4` ci
 bajaban cinco archivos con el mismo nombre y el browser los guardaba como `final-1.mp4`,
 `final-2.mp4`. Se sigue leyendo `final.mp4` para no perder de vista los que se unieron antes del
 cambio.
+
+Las favoritas de voz van aparte, en `<DATA_DIR>/voces-favoritas.json`, por usuario.
 
 Estado de proyectos/jobs/logs en `<DATA_DIR>/db.json`, con escritura atómica (tmp + rename) y
 singleton por `globalThis` para sobrevivir al HMR. La UI sirve los archivos por
@@ -346,9 +341,44 @@ que cualquier edición de prompt, diálogo o duración tiene que persistir en el
 
 ---
 
+## Cambio de voz
+
+Con el video ya unido, Resultado ofrece **"Cambiar voz"**: todo el diálogo pasa a una voz de
+ElevenLabs con el **Voice Changer** (speech-to-speech), que conserva tiempos, pausas y entonación,
+así el lip-sync de Veo no se rompe. Diseño completo en `tasks/cambio-de-voz/`.
+
+- **Qué hace:** extrae el audio del unido, manda a convertir los tramos con diálogo (cortados en el
+  borde entre clips, hasta 270 s por pedido), deja intactos los clips sin diálogo y, por defecto, los
+  `FILMAR_REAL`, y vuelve a montar la pista **sobre el mismo video** (`-c:v copy`: el video no se
+  re-encodea). Cada voz es un `.mp4` nuevo en `voz/`: el original no se pisa. "Probar 20 s" hace una
+  muestra corta antes de gastar en el video entero.
+- **Voces:** las de tu cuenta ("Mis voces": clonadas, diseñadas, profesionales y las agregadas desde
+  la Voice Library), las predeterminadas y **favoritas** propias de la app, con alias y ajustes, por
+  usuario.
+- **"Volver a unir":** el stitch ahora guarda una *receta* (qué clips, dónde cae cada uno y su huella).
+  Si un clip cambió después de unir, Resultado lo avisa y bloquea el cambio de voz hasta volver a unir.
+  Un unido hecho antes de este módulo pide volver a unir **una vez**.
+- **Configuración:** `VOICE_PROVIDER=elevenlabs` + `ELEVENLABS_API_KEY` en `.env.production` (nunca en
+  el repo). La key conviene **restringida**: Speech to Speech (obligatorio), Voices lectura
+  (obligatorio) y User lectura (opcional, solo para mostrar los créditos). `ELEVENLABS_API_KEY_<NOMBRE>`
+  da una key propia a un usuario. `deploy.sh` aborta si el proveedor es `elevenlabs` y no hay key.
+- **Mock:** `VOICE_PROVIDER=mock` (el default) no gasta: 4 voces fijas y una "conversión" que sube el
+  tono un 25 % con ffmpeg, sin cambiar la duración.
+- **Costo:** referencia de US$0,12 por minuto de audio convertido (1.000 créditos por minuto). El
+  diálogo muestra segundos, tramos, créditos y USD antes de confirmar.
+- **Privacidad:** el audio con diálogo **sale de la VPS hacia ElevenLabs** y queda en su historial (la
+  retención cero es solo Enterprise).
+- **Qué NO hace:** no corrige acento ni pronunciación (cambia el timbre, no lo que Veo dijo), no
+  traduce, y usa **una sola voz para todo el video** aunque hablen dos personas.
+- **Una conversión a la vez** en toda la app, en una cola en memoria (como la de jobs). Un reinicio
+  del server marca la conversión en curso como fallida: no se retoma sola, porque retomarla gasta
+  créditos.
+
+---
+
 ## API HTTP
 
-32 handlers en 26 archivos. Todas pasan por el middleware: sin cookie válida devuelven 401
+38 handlers en 29 archivos. Todas pasan por el middleware: sin cookie válida devuelven 401
 (`/api/*`) y las páginas redirigen a `/login`.
 
 | Método y ruta | Qué hace |
@@ -372,7 +402,13 @@ que cualquier edición de prompt, diálogo o duración tiene que persistir en el
 | `GET` `/api/projects/:id/references` | lista los avatares de referencia |
 | `POST` `/api/projects/:id/references` | sube un avatar de referencia |
 | `POST` `/api/projects/:id/stitch` | une los clips con ffmpeg |
-| `GET` `/api/projects/:id/download` | baja el proyecto (zip, o el archivo suelto) |
+| `GET` `/api/projects/:id/download` | baja el proyecto (zip, o el archivo suelto). Incluye las versiones de voz terminadas, no las pruebas |
+| `GET` `/api/projects/:id/voz` | estado del cambio de voz: unido, receta, estimación, versiones, la activa (polling) |
+| `POST` `/api/projects/:id/voz` | `{ accion: "convertir" \| "probar", voz, ajustes?, quitarRuido?, incluirFilmados? }` → **202**; `{ accion: "cancelar" }` |
+| `DELETE` `/api/projects/:id/voz?version=<id>` | borra una versión de voz (409 si está viva) |
+| `GET` `/api/voces?lista=favoritas\|mias\|predeterminadas&q=&cursor=` | voces para el selector (+ créditos si la key lo permite) |
+| `POST` `/api/voces/favoritas` | guarda una favorita `{ voiceId, alias?, ajustes? }` (por usuario) |
+| `DELETE` `/api/voces/favoritas?voiceId=<id>` | quita una favorita |
 | `GET` `/api/batch?ids=a,b,c` | snapshot del lote |
 | `POST` `/api/batch` | acciones sobre el lote |
 | `POST` `/api/imagenes` | crea un proyecto de sólo imágenes |
@@ -513,6 +549,17 @@ Ver `.env.example`. Las que importan:
 | `PASSWORD_<NOMBRE>` | — | **Al menos una.** Un usuario por variable |
 | `AUTH_SESSION_HOURS` | `72` | Vida de la sesión |
 | `NEXT_PUBLIC_SITE_URL` | — | URL canónica para el redirect al login |
+| `VOICE_PROVIDER` | `mock` | Cambio de voz: `mock` (no gasta) o `elevenlabs` |
+| `ELEVENLABS_API_KEY` | — | Key compartida de ElevenLabs. **Solo en `.env.production`/`.env.local`** |
+| `ELEVENLABS_API_KEY_<NOMBRE>` | — | Key de un usuario; pisa a la compartida |
+| `ELEVENLABS_STS_MODEL` | `eleven_multilingual_sts_v2` | Modelo del Voice Changer |
+| `ELEVENLABS_OUTPUT_FORMAT` | `mp3_44100_128` | Solo `mp3_*` o `wav_*` (`wav_44100` pide plan Pro) |
+| `ELEVENLABS_TIMEOUT_MS` | `180000` | Timeout por tramo |
+| `VOICE_CHUNK_MAX_SEC` | `270` | Largo máximo de un tramo (30..290; ElevenLabs acepta 300) |
+| `VOICE_PREVIEW_SEC` | `20` | Largo de "Probar 20 s" |
+| `VOICE_OFFSET_MS` | `0` | Recorte fijo al inicio de cada salida |
+| `VOICE_BILLING` | `por_minuto` | Cómo estimar créditos (`por_minuto` muestra el máximo) |
+| `PRICE_VOICE_PER_MIN_USD` | `0.12` | Solo informativo |
 
 ### Recetas
 
@@ -637,6 +684,10 @@ commit y explicá por qué. Nunca la toques "para que pase".
 | `final.mp4` sin audio o de mala calidad | falta ffmpeg | `apt-get install -y ffmpeg`. `deploy.sh` lo aborta |
 | Se perdieron proyectos tras un deploy | `DATA_DIR`/`OUTPUT_DIR` relativos | Tienen que ser absolutos y afuera de `releases/`. El guard 3c lo aborta |
 | Falla la autenticación de Vertex | ADC sin configurar | `gcloud auth application-default login`, o `GOOGLE_APPLICATION_CREDENTIALS` en el server |
+| Cambio de voz: *"No quedan créditos en ElevenLabs"* | la cuenta se quedó sin créditos | Cargá créditos o esperá a que se renueve el plan; después "Reintentar" |
+| Cambio de voz: *"no tiene permiso para esto"* | la key restringida no tiene Speech to Speech o Voices | Creá la key con Speech to Speech + Voices (lectura) |
+| "Volver a unir" contesta *"Hay un cambio de voz en curso"* (409) | hay una conversión viva en ese proyecto | Esperá a que termine o cancelala en el panel Voz |
+| *"Volvé a unir una vez para habilitarlo"* | el video se unió antes del módulo (sin receta) | "Volver a unir" una vez; desde ahí todo unido nace con receta |
 
 ---
 

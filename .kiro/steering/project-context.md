@@ -33,18 +33,12 @@ concurrencia, rate limit, backoff) sale de ahí.
 - El middleware contesta **401 en `/api/*`** (no un redirect: un 307 hace que el `fetch` parsee el
   HTML del login como JSON y el error real queda tapado por "Unexpected token <").
 
-## Limitación conocida: los proyectos NO están aislados por usuario
+## Aislamiento por usuario: hecho
 
-`ProjectRecord` no tiene campo de dueño y ninguna route handler compara la sesión contra el
-proyecto. Lucho e Ivan se ven todo. Son **cuatro** caminos, no uno:
-
-1. `GET /api/projects` devuelve todos sin filtrar.
-2. `/batch?ids=a,b,c` — los ids viajan en la URL y `/api/batch` no chequea nada.
-3. `GET /api/files/<projectId>/<path>` sirve cualquier archivo y **ni consulta la DB**.
-4. `/api/jobs/<jobId>/*` — los ids de job son derivados (`<projectId>:img:<imageId>`,
-   `<projectId>:vid:<clipId>`), así que un projectId habilita aprobar/regenerar/editar lo ajeno.
-
-Está planificado en `tasks/aislamiento-por-usuario/`. **Antes de tocar nada de esto, leé ese plan.**
+Implementado en `e66bd83`: `ProjectRecord.owner` + `src/lib/ownership.ts` (`requireProjectOwner`,
+`requireJobOwner`, `sessionUser`). Toda ruta nueva bajo `projects/[id]/` usa `requireProjectOwner`, y
+el usuario sale **siempre** de la cookie, nunca del body. El plan está en
+`tasks/aislamiento-por-usuario/`.
 
 ## Modelos — Gemini 3.x, y `GOOGLE_CLOUD_LOCATION=global`
 
@@ -105,11 +99,22 @@ Los cambios grandes se planifican antes de escribir código, en `tasks/<modulo>/
   (recibe `enqueueProject` como parámetro) para no crear un ciclo de import.
 - `src/lib/batch.ts` — `buildBatchSnapshot` (tablero, review FIFO, timeline de clips).
 - `deploy/deploy.sh` — build + activación, con todos los guards. Leerlo antes de tocar deploy.
+- `src/lib/voz/` — **cambio de voz** (ElevenLabs Voice Changer sobre el video unido). `tramos.ts`
+  es PURO (solo `import type`, lo prueban B15-B19 con node), `audio.ts` son los 7 pasos de ffmpeg
+  (cortes por muestra a 48 kHz, video con `-c:v copy`), `corrida.ts` la cola y el ciclo de vida.
+  `corrida.ts` NO importa `voz/index.ts`: el proveedor llega por parámetro. `elevenlabs.ts` es el
+  único archivo que escribe `xi-api-key`; la key solo la lee `config.elevenLabsKeyFor()`.
+  `src/lib/unido.ts` compara la receta del stitch (`ProjectRecord.recetaUnido`) con los clips en
+  disco. Diseño y contratos en `tasks/cambio-de-voz/`; verificación: `_verificacion-voz.sh` y
+  `_verificacion-voz-mock.mjs`. Variables clave: `VOICE_PROVIDER` (default `mock`) y
+  `ELEVENLABS_API_KEY`.
 
 ## Pistas para no romper nada
 
 - **Una sola instancia de PM2**, no negociable: la cola vive en memoria del proceso y `db.json` se
-  escribe sin locks entre procesos. Con 2+ se rompe el polling y hay escrituras concurrentes.
+  escribe sin locks entre procesos. Con 2+ se rompe el polling y hay escrituras concurrentes. La
+  cola del **cambio de voz** también vive en memoria (una conversión a la vez en toda la app), así
+  que la regla vale doble. No deployar con una conversión de voz corriendo: se marca fallida.
 - **`DATA_DIR`/`OUTPUT_DIR` absolutos y afuera de `releases/`.** Si quedan relativos se resuelven
   contra el cwd (`/srv/generador/current`, dentro de la release) y el próximo deploy los borra sin
   un solo error. El guard 3c de `deploy.sh` aborta.

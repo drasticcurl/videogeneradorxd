@@ -23,6 +23,7 @@
  * pasarlo a async con estado en la DB, como los jobs de la cola.
  */
 import {
+  spawn,
   spawnSync,
   type SpawnSyncOptionsWithBufferEncoding,
   type SpawnSyncReturns,
@@ -37,12 +38,23 @@ import {
   projectDir,
 } from "./storage";
 import { hasFfmpeg } from "./providers/placeholder";
+import type { RecetaUnido } from "./types";
 
 export interface StitchResult {
   ok: boolean;
   finalPath?: string; // relativo: "<nombre del proyecto>.mp4"
   skipped?: boolean;
   reason?: string;
+  /**
+   * Receta del unido: que clips entraron, donde cae cada uno y su huella. La usa el
+   * cambio de voz para conservar el audio de los clips que no convierte y para saber si
+   * el unido quedo viejo (D6 de tasks/cambio-de-voz/02-DISENO.md). La ruta la persiste
+   * en `ProjectRecord.recetaUnido`.
+   *
+   * Opcional: sin ffprobe las duraciones son las del plan (4/6/8) y no las reales, y
+   * una receta inexacta pega la voz corrida sin dar error. Mejor no tener receta.
+   */
+  receta?: RecetaUnido;
 }
 
 /**
@@ -151,8 +163,6 @@ export function runFfmpeg(
   args: string[],
   opts?: { cwd?: string }
 ): SpawnSyncReturns<Buffer> {
-  const n = coresParaFfmpeg();
-  const total = os.cpus().length || 1;
   /*
     `encoding: "buffer"` fija el overload de spawnSync que devuelve Buffer. Sin eso el
     tipo sale `string | Buffer` y los callers, que hacen res.stderr.toString(), quedan
@@ -164,23 +174,96 @@ export function runFfmpeg(
     cwd: opts?.cwd,
     encoding: "buffer",
   };
+  const [cmd, cmdArgs] = comandoFfmpeg(args);
+  return spawnSync(cmd, cmdArgs, comun);
+}
+
+/**
+ * Arma `[comando, args]` con el limite de cores. Lo comparten `runFfmpeg` y
+ * `runFfmpegAsync` para que las dos limiten EXACTAMENTE igual: si divergen, el cambio
+ * de voz terminaria usando los 4 cores de la VPS que comparte con los funnels.
+ */
+function comandoFfmpeg(args: string[]): [string, string[]] {
+  const n = coresParaFfmpeg();
+  const total = os.cpus().length || 1;
 
   if (n >= total) {
-    return spawnSync("ffmpeg", args, comun);
+    return ["ffmpeg", args];
   }
   if (hasTaskset()) {
-    return spawnSync("taskset", ["-c", `0-${n - 1}`, "ffmpeg", ...args], comun);
+    return ["taskset", ["-c", `0-${n - 1}`, "ffmpeg", ...args]];
   }
   /*
     Fallback sin taskset. `-threads` y `-filter_complex_threads` tienen que ir ANTES
     del primer -i para alcanzar a los decoders y al grafo de filtros; el encoder toma
     el `-threads` que ya va junto a libx264 mas abajo.
   */
-  return spawnSync(
+  return [
     "ffmpeg",
     ["-threads", String(n), "-filter_complex_threads", String(n), ...args],
-    comun
-  );
+  ];
+}
+
+/**
+ * `runFfmpeg` sin bloquear el event loop, para el cambio de voz (D10: un spawnSync de
+ * minutos congela la app entera para los dos usuarios). Mismo limite de cores.
+ *
+ * RESUELVE en `close` con el code que sea: quien llama decide que es un error (y arma
+ * el mensaje con el stderr). RECHAZA solo si el spawn falla (no hay ffmpeg) o si se
+ * aborto: con `signal` abortado mata el proceso con SIGKILL y rechaza con un Error de
+ * name "AbortError". Si el signal ya venia abortado, ni lo lanza.
+ *
+ * Guarda los ultimos 4.000 caracteres de stderr: lo util de un error de ffmpeg esta al
+ * final, y un encode largo escribe megas de progreso.
+ */
+export function runFfmpegAsync(
+  args: string[],
+  opts?: { cwd?: string; signal?: AbortSignal },
+): Promise<{ code: number | null; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const abortError = (): Error => {
+      const e = new Error("ffmpeg cancelado");
+      e.name = "AbortError";
+      return e;
+    };
+    const signal = opts?.signal;
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+
+    const [cmd, cmdArgs] = comandoFfmpeg(args);
+    const child = spawn(cmd, cmdArgs, {
+      stdio: ["ignore", "ignore", "pipe"],
+      cwd: opts?.cwd,
+    });
+
+    let stderr = "";
+    let terminado = false;
+    const onAbort = () => {
+      if (terminado) return;
+      terminado = true;
+      child.kill("SIGKILL");
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(-4000);
+    });
+    child.on("error", (err) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (terminado) return;
+      terminado = true;
+      reject(err);
+    });
+    child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
+      if (terminado) return;
+      terminado = true;
+      resolve({ code, stderr });
+    });
+  });
 }
 
 /** ¿hay ffprobe disponible? (viene con ffmpeg normalmente). */
@@ -333,7 +416,19 @@ export function stitchProject(projectId: string): StitchResult {
     const duration = ffprobeOk
       ? probeDuration(abs, clip.duracion_seg || 8)
       : clip.duracion_seg || 8;
-    return { videoIndex: i, hasAudio, duration, silenceIndex: -1 };
+    /*
+      Huella del clip ANTES de correr ffmpeg: si el archivo cambiara durante el stitch,
+      la receta tiene que describir lo que ffmpeg leyo, no lo que quedo despues.
+    */
+    const st = fs.statSync(abs);
+    return {
+      videoIndex: i,
+      hasAudio,
+      duration,
+      silenceIndex: -1,
+      mtimeMs: Math.trunc(st.mtimeMs),
+      bytes: st.size,
+    };
   });
 
   // Para clips sin audio, agregamos un input de silencio (anullsrc) de su duracion.
@@ -410,5 +505,34 @@ export function stitchProject(projectId: string): StitchResult {
     return { ok: false, reason: `ffmpeg fallo: ${stderr}` };
   }
 
-  return { ok: true, finalPath: finalRel };
+  /*
+    Receta (§7.1 del diseño de cambio de voz). inicio(i) = suma de las duraciones de
+    FORMATO de los clips anteriores: el concat usa el stream mas largo de cada clip como
+    largo del segmento (medido con clips cuyo audio dura 60 ms mas que su video), y
+    probeDuration lee justamente la duracion de formato, que es la del mas largo.
+  */
+  if (!ffprobeOk) return { ok: true, finalPath: finalRel };
+  let t = 0;
+  const clips = ordered.map((clip, i) => {
+    const inicioSeg = t;
+    t += clipMeta[i].duration;
+    return {
+      id: clip.id,
+      assetId: clip.asset_id,
+      etiqueta: clip.etiqueta,
+      conDialogo: Boolean(clip.dialogo?.trim()),
+      file: clip.file!,
+      mtimeMs: clipMeta[i].mtimeMs,
+      bytes: clipMeta[i].bytes,
+      inicioSeg,
+      finSeg: t,
+    };
+  });
+  const receta: RecetaUnido = {
+    file: finalRel,
+    creadoEn: new Date().toISOString(),
+    duracionSeg: t,
+    clips,
+  };
+  return { ok: true, finalPath: finalRel, receta };
 }

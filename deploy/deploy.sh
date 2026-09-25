@@ -192,6 +192,16 @@ else
   log "AVISO: falta 'zip' — la descarga de videos va a fallar. Instalalo: apt-get install -y zip"
 fi
 
+# 3f. Cambio de voz. VOICE_PROVIDER=elevenlabs sin key compila y arranca, pero cada conversion
+# falla en runtime con "no esta configurado". Mejor que el deploy se detenga y se vea.
+# El grep solo mira que haya ALGUNA key con valor: la key no se imprime nunca, ni en el
+# log ni en el fail (el log del deploy queda en disco y el repo es publico).
+if [[ "${VOICE_PROVIDER:-mock}" == "elevenlabs" ]]; then
+  grep -qE '^ELEVENLABS_API_KEY(_[A-Z0-9_]+)?=.+' "$RELEASE/.env.production" \
+    || fail "VOICE_PROVIDER=elevenlabs pero no hay ninguna ELEVENLABS_API_KEY en .env.production"
+  log "voz: elevenlabs"
+fi
+
 # ─── 4. Build ───────────────────────────────────────────────────────────────
 cd "$RELEASE"
 # `--include=dev` es OBLIGATORIO y no redundante. El paso 3 hace `source` del

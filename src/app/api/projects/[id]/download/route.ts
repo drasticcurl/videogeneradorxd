@@ -107,6 +107,14 @@ export async function GET(
         agregar(clip.file);
       }
       agregar(manifest.final_video);
+      /*
+        Las versiones con otra voz entran al zip (D19): el zip es "todo lo que produje".
+        No las pruebas de 20 s (R4.3) ni las que no terminaron. Al manifest.json NO van:
+        es lo que la gente copia a otras herramientas, y cambiar su forma rompe eso.
+      */
+      for (const v of project.versionesVoz ?? []) {
+        if (v.estado === "lista" && !v.prueba && v.file) agregar(v.file);
+      }
     }
     if (quiereImagenes) {
       // Solo las APROBADAS: los candidatos sin elegir son borradores y meterlos en el

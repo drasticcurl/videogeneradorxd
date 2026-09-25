@@ -69,6 +69,12 @@ const ESPERADOS = {
     presentes: ["Aprobar y seguir", "Regenerar", "Saltar"],
     selector: "button",
   },
+  // Cambio de voz (tasks/cambio-de-voz/T07): con video UNIDO, Resultado tiene que
+  // ofrecer las dos acciones nuevas. Sin unido no aparecen, y eso esta bien.
+  resultado: {
+    presentes: ["Cambiar voz", "Volver a unir"],
+    selector: "button",
+  },
 };
 
 const log = (...a) => console.log(...a);
@@ -123,10 +129,36 @@ async function sembrar() {
       });
     }
     if (jobs.some((j) => j.type === "video" && j.status === "awaiting_approval")) {
-      return { pid, cookie };
+      return { pid, pidUnido: await sembrarUnido(H, plan), cookie };
     }
   }
   throw new Error("ningun video llego a awaiting_approval: ¿PIPELINE_AUTO_APPROVE quedo en true?");
+}
+
+/*
+  Un SEGUNDO proyecto, unido, para Resultado. El primero esta en modo manual con clips
+  por aprobar (lo que necesita el editor de clip) y no tiene archivos que unir. Este
+  aprueba solo (autoApprove del proyecto pisa al global) y se une: es el caso de
+  Resultado con mas contenido, con el reproductor y el panel Voz del cambio de voz.
+*/
+async function sembrarUnido(H, plan) {
+  const cr = await fetch(`${BASE}/api/projects`, {
+    method: "POST", headers: H,
+    body: JSON.stringify({ name: `verif-ui-unido-${Date.now()}`, brief: "x", plan, imageVariants: 1, autoApprove: true }),
+  });
+  const pid = (await cr.json()).project.id;
+  await fetch(`${BASE}/api/projects/${pid}/generate`, { method: "POST", headers: H });
+  for (let i = 0; i < 80; i++) {
+    await new Promise((s) => setTimeout(s, 1500));
+    const jobs = (await (await fetch(`${BASE}/api/projects/${pid}/jobs`, { headers: H })).json()).jobs ?? [];
+    const videos = jobs.filter((j) => j.type === "video");
+    if (videos.length > 0 && videos.every((j) => j.status === "done")) {
+      const st = await (await fetch(`${BASE}/api/projects/${pid}/stitch`, { method: "POST", headers: H })).json();
+      if (!st.ok) throw new Error(`no se pudo unir el proyecto de Resultado: ${st.reason ?? "?"}`);
+      return pid;
+    }
+  }
+  throw new Error("los clips del proyecto de Resultado no terminaron");
 }
 
 /* ─── 2. Driver CDP minimo ──────────────────────────────────────────────────── */
@@ -219,7 +251,7 @@ const botonesDe = (selector) => `(() => JSON.stringify(
 /* ─── 3. El chequeo ─────────────────────────────────────────────────────────── */
 async function main() {
   log("sembrando un proyecto de video en modo manual…");
-  const { pid, cookie } = await sembrar();
+  const { pid, pidUnido, cookie } = await sembrar();
   const token = cookie.replace(/^gen_session=/, "");
   log(`  proyecto ${pid}\n`);
 
@@ -242,7 +274,8 @@ async function main() {
     await S("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false });
     for (const [nombre, url] of [
       ["pipeline", `${BASE}/project/${pid}/pipeline`],
-      ["result", `${BASE}/project/${pid}/result`],
+      // Con video unido y panel Voz: el Resultado con mas contenido.
+      ["result", `${BASE}/project/${pidUnido}/result`],
       ["revisar", `${BASE}/batch/videos?ids=${pid}`],
       ["imagenes", `${BASE}/imagenes`],
       ["home", `${BASE}/`],
@@ -278,6 +311,9 @@ async function main() {
 
   await ir(`${BASE}/batch/videos?ids=${pid}`);
   await chequear("revisar clips (/batch/videos)", evaluar);
+
+  await ir(`${BASE}/project/${pidUnido}/result`);
+  await chequear("resultado", evaluar);
 
   ws.close();
   proc.kill();
