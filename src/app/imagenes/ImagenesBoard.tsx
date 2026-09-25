@@ -52,20 +52,22 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Badge,
   Button,
   EmptyState,
   Segmented,
+  Select,
   SkeletonGrid,
   Textarea,
   type SelectOption,
 } from "@/components/ui";
+import { ignorarAtajo } from "@/lib/atajos";
 import { cn } from "@/lib/cn";
 import type { ModelOption } from "@/lib/config";
-import { estadoDeJob } from "@/lib/ui-tokens";
+import { estadoDeJob, estadoDeProyecto } from "@/lib/ui-tokens";
 
 import { CabeceraSidebar, type Tab } from "./ImagenesTabs";
 import NuevaTanda from "./NuevaTanda";
@@ -130,6 +132,9 @@ const EN_CURSO = new Set(["pending", "queued", "generating", "waiting"]);
 
 /** Cada cuanto se pregunta por el estado. Un solo lugar, para que no divergan. */
 const POLL_MS = 3000;
+
+/** Clave de localStorage para la vista Grilla/Visor de la galería. */
+const LS_VISTA = "imagenes_vista";
 
 export default function ImagenesBoard({
   modelos,
@@ -206,14 +211,46 @@ export default function ImagenesBoard({
   */
 
   // ─── Vista Grilla/Visor + hilo activo (nuevo estado del rediseño) ──────────
-  // No persiste (sin localStorage en la app, ver README): vuelve a "grilla" al
-  // recargar. Cada hilo tiene su propia variante seleccionada dentro de la grilla,
-  // asi que lo que hace falta acá es solo CUAL hilo esta activo (el "Hilo" de
-  // pastillas v1->v2 del spec reemplaza la lista apilada de antes).
-  const [modoVista, setModoVista] = useState<"grilla" | "visor">("grilla");
+  // Grilla/Visor persiste en localStorage (`imagenes_vista`, lo pide el README del
+  // handoff). Se LEE en un efecto y no en el `useState` inicial: en el server no
+  // hay localStorage, y arrancar distinto en cliente rompería la hidratación. Cada
+  // hilo tiene su propia variante seleccionada dentro de la grilla, asi que lo que
+  // hace falta acá es solo CUAL hilo esta activo (el "Hilo" de pastillas v1->v2
+  // del spec reemplaza la lista apilada de antes).
+  const [modoVista, setModoVistaEstado] = useState<"grilla" | "visor">("grilla");
+  const setModoVista = useCallback((v: "grilla" | "visor") => {
+    setModoVistaEstado(v);
+    try {
+      window.localStorage.setItem(LS_VISTA, v);
+    } catch {
+      // Navegador sin storage (modo privado estricto): la vista anda igual, solo
+      // no se recuerda.
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      const guardada = window.localStorage.getItem(LS_VISTA);
+      if (guardada === "grilla" || guardada === "visor") setModoVistaEstado(guardada);
+    } catch {
+      // Idem: sin storage se queda en "grilla".
+    }
+  }, []);
   const [hiloActivo, setHiloActivo] = useState(0);
+  /**
+   * Qué versión de la cadena activa se está mirando (v1, v2...). `null` = la
+   * última, y es el default a propósito: así, cuando llega un turno nuevo del chat
+   * por el polling, la pantalla lo sigue solo en vez de quedarse clavada en la
+   * versión que era la última hace un rato.
+   */
+  const [versionActiva, setVersionActiva] = useState<number | null>(null);
   const [promptAbierto, setPromptAbierto] = useState(false);
   const [lightbox, setLightbox] = useState<number | null>(null);
+  /**
+   * La variante con el FOCO del teclado (posición en `candidates`, no `c.index`).
+   * Separada de la elegida a propósito: moverse con ← → no aprueba nada, solo
+   * mueve este anillo. Ver el efecto de teclado.
+   */
+  const [enfocada, setEnfocada] = useState(0);
 
   // Para que el boton del estado vacio lleve al campo que hay que llenar (ahora abre
   // "Nueva tanda" en vez de hacer foco en un textarea que ya no esta siempre visible).
@@ -343,8 +380,9 @@ export default function ImagenesBoard({
   // Al cambiar de proyecto, el hilo activo vuelve al primero: el indice viejo podria
   // no existir en la tanda nueva.
   useEffect(() => {
+    // `modoVista` NO se resetea: es una preferencia guardada, no estado de la tanda.
     setHiloActivo(0);
-    setModoVista("grilla");
+    setVersionActiva(null);
     setPromptAbierto(false);
   }, [projectId]);
 
@@ -491,6 +529,8 @@ export default function ImagenesBoard({
         return;
       }
       setChatTexto((t) => ({ ...t, [fromImageId]: "" }));
+      // La imagen nueva pasa a ser la última de la cadena: se vuelve a seguirla.
+      setVersionActiva(null);
       await traerEstado(projectId);
       relanzarPolling(projectId);
     } catch (err) {
@@ -547,9 +587,25 @@ export default function ImagenesBoard({
   // de proyecto, o crecer al llegar un turno nuevo del polling).
   const indiceHiloValido = Math.min(hiloActivo, Math.max(hilos.length - 1, 0));
   const cadenaActiva: Job[] = hilos[indiceHiloValido] ?? [];
-  // El job "cabeza" de la cadena activa: la ultima imagen, que es la que se muestra
-  // en la grilla/visor y desde la que sigue el chat.
-  const jobActivo: Job | undefined = cadenaActiva[cadenaActiva.length - 1];
+  // La versión que se muestra en la grilla/visor y desde la que sigue el chat. Por
+  // defecto la última de la cadena; las pastillas v1 -> v2 -> v3 permiten abrir
+  // cualquier otra. Acotada por si la cadena cambió desde que se eligió.
+  const indiceVersionValido =
+    versionActiva === null
+      ? cadenaActiva.length - 1
+      : Math.min(versionActiva, cadenaActiva.length - 1);
+  const jobActivo: Job | undefined = cadenaActiva[indiceVersionValido];
+
+  // Al cambiar de imagen, el foco del teclado arranca en la elegida (o la primera).
+  // Depende del id y no del objeto: el polling trae un `jobActivo` nuevo cada 3s y
+  // si no el anillo volvería a la elegida mientras el usuario se mueve.
+  const jobActivoId = jobActivo?.id;
+  useEffect(() => {
+    if (!jobActivo) return;
+    const i = jobActivo.candidates.findIndex((c) => c.index === jobActivo.selectedIndex);
+    setEnfocada(i >= 0 ? i : 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobActivoId]);
 
   const listas = jobs.filter((j) => tono(j) === "ok").length;
   const esperandoDecision = jobs.filter((j) => tono(j) === "attention");
@@ -569,18 +625,20 @@ export default function ImagenesBoard({
   const proyectoAbierto = lista.find((p) => p.id === projectId);
   const formato = formatoGenerado ?? "9:16";
 
-  // ─── Teclado: flechas cambian de variante, Enter abre el lightbox, Esc cierra ──
+  // ─── Teclado: flechas mueven el foco, Enter abre el lightbox, Esc cierra ────
+  //
+  // Las flechas NO eligen: antes cada ← → llamaba a `elegir()`, que es un POST a
+  // /approve. Recorrer las variantes con el teclado terminaba aprobando varias
+  // veces y podía destrabar la cola sin que el usuario lo hubiera decidido. Ahora
+  // solo mueven `enfocada` (el anillo), y aprobar queda para el click en la tarjeta
+  // o Enter adentro del lightbox.
   useEffect(() => {
     if (vista !== "galeria" || !jobActivo) return;
     const candidatas = jobActivo.candidates;
     if (candidatas.length === 0) return;
 
-    function indiceSeleccionado() {
-      const i = candidatas.findIndex((c) => c.index === jobActivo!.selectedIndex);
-      return i >= 0 ? i : 0;
-    }
-
     function onKeyDown(e: KeyboardEvent) {
+      if (ignorarAtajo(e)) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === "textarea" || tag === "input") return;
 
@@ -606,20 +664,22 @@ export default function ImagenesBoard({
 
       if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
         e.preventDefault();
-        const actual = indiceSeleccionado();
         const paso = e.key === "ArrowRight" ? 1 : -1;
-        const siguiente = candidatas[(actual + paso + candidatas.length) % candidatas.length];
-        if (siguiente) void elegir(jobActivo!, siguiente.index);
+        setEnfocada((i) => (i + paso + candidatas.length) % candidatas.length);
       } else if (e.key === "Enter") {
+        // Enter sobre un botón con foco (Variar, Descargar...) es SU click, no el
+        // atajo: si no, abriría el lightbox además de hacer lo que dice el botón.
+        const t = e.target as HTMLElement | null;
+        if (t?.closest?.("button, a, [role='button']")) return;
         e.preventDefault();
-        setLightbox(indiceSeleccionado());
+        setLightbox(Math.min(enfocada, candidatas.length - 1));
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vista, jobActivo, lightbox]);
+  }, [vista, jobActivo, lightbox, enfocada]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -727,7 +787,7 @@ export default function ImagenesBoard({
                         </span>
                         <span className="code truncate text-label text-fg-dim">
                           {p.imageCount} {p.imageCount === 1 ? "img" : "img"} ·{" "}
-                          {estadoDeJob(p.status).label}
+                          {estadoDeProyecto(p.status).label}
                         </span>
                       </span>
                     </button>
@@ -740,7 +800,7 @@ export default function ImagenesBoard({
       </aside>
 
       {/* ─── Resultados de la tanda abierta ────────────────────────────────── */}
-      <main className="flex min-h-0 flex-col">
+      <section aria-label="Tanda abierta" className="flex min-h-0 flex-col">
         {!projectId ? (
           <div className="flex min-h-0 flex-1 items-center justify-center p-6">
             {/*
@@ -783,8 +843,8 @@ export default function ImagenesBoard({
                 >
                   {proyectoAbierto?.name ?? "Tanda"}
                 </h1>
-                <Badge tone={estadoDeJob(proyectoAbierto?.status ?? "").tone} punto>
-                  {estadoDeJob(proyectoAbierto?.status ?? "").label}
+                <Badge tone={estadoDeProyecto(proyectoAbierto?.status ?? "").tone} punto>
+                  {estadoDeProyecto(proyectoAbierto?.status ?? "").label}
                 </Badge>
                 {/*
                   `attempts > 1` es la unica señal de que hubo un 429 y la cola
@@ -797,6 +857,11 @@ export default function ImagenesBoard({
                     intento <span className="tnum">{jobActivo.attempts}</span>
                   </Badge>
                 )}
+                {/*
+                  El diseño muestra también la calidad (`9:16 · 1K · 4 variantes`), pero
+                  `manifest.global` no la trae (vive en `ProjectRecord.imageSize`) y
+                  esta pantalla no pide nada nuevo al server: no se inventa el dato.
+                */}
                 <span className="code text-label text-fg-dim">
                   {formato}
                   {jobActivo ? ` · ${jobActivo.variants} variantes` : ""}
@@ -858,28 +923,60 @@ export default function ImagenesBoard({
               </div>
             </div>
 
-            {/* Hilo: pastillas v1 -> v2 -> ... por cadena de chat */}
-            {hilos.length > 0 && (
+            {/*
+              Hilo: las VERSIONES de la cadena activa (v1 -> v2 -> v3), y se puede
+              abrir cualquiera. Antes había una pastilla por hilo raíz con su `refId`
+              y siempre se veía la última versión, sin forma de volver a mirar v1.
+              Si la tanda tiene más de un hilo raíz, se elige con el Select de la
+              izquierda.
+            */}
+            {cadenaActiva.length > 0 && (
               <div className="flex flex-none flex-wrap items-center gap-1.5 px-4 pb-3">
                 <span className="text-label text-fg-dim">Hilo</span>
-                {hilos.map((cadena, i) => {
-                  const activo = i === indiceHiloValido;
+                {hilos.length > 1 && (
+                  <Select
+                    label="Hilo de la tanda"
+                    labelOculto
+                    className="w-44"
+                    value={String(indiceHiloValido)}
+                    onValueChange={(v) => {
+                      setHiloActivo(Number(v));
+                      setVersionActiva(null);
+                    }}
+                    options={hilos.map((cadena, i) => ({
+                      value: String(i),
+                      label: `${i + 1} · ${cadena[0].refId}`,
+                    }))}
+                  />
+                )}
+                {cadenaActiva.map((job, i) => {
+                  const activa = i === indiceVersionValido;
                   return (
-                    <button
-                      key={cadena[0].id}
-                      type="button"
-                      onClick={() => setHiloActivo(i)}
-                      className={cn(
-                        "inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-label transition-colors",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                        activo
-                          ? "border-border bg-surface-hi text-fg"
-                          : "border-divider bg-transparent text-fg-dim hover:text-fg",
+                    <Fragment key={job.id}>
+                      {i > 0 && (
+                        <span aria-hidden className="text-label text-fg-dim">
+                          →
+                        </span>
                       )}
-                    >
-                      <span className="code tnum">{i + 1}</span>
-                      {cadena[0].refId}
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setVersionActiva(i === cadenaActiva.length - 1 ? null : i)
+                        }
+                        aria-pressed={activa}
+                        aria-label={`Versión ${i + 1} de ${cadenaActiva.length}: ${job.refId}`}
+                        title={job.refId}
+                        className={cn(
+                          "code tnum inline-flex h-7 items-center rounded-md border px-2.5 text-label transition-colors",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                          activa
+                            ? "border-accent bg-accent/10 text-fg"
+                            : "border-divider bg-transparent text-fg-dim hover:text-fg",
+                        )}
+                      >
+                        v{i + 1}
+                      </button>
+                    </Fragment>
                   );
                 })}
               </div>
@@ -985,6 +1082,7 @@ export default function ImagenesBoard({
                   job={jobActivo}
                   projectId={projectId}
                   formato={formato}
+                  enfocada={enfocada}
                   onElegir={(index) => void elegir(jobActivo, index)}
                   onAmpliar={(i) => setLightbox(i)}
                 />
@@ -993,6 +1091,7 @@ export default function ImagenesBoard({
                   job={jobActivo}
                   projectId={projectId}
                   formato={formato}
+                  enfocada={enfocada}
                   onElegir={(index) => void elegir(jobActivo, index)}
                   onAmpliar={(i) => setLightbox(i)}
                 />
@@ -1014,7 +1113,7 @@ export default function ImagenesBoard({
             />
           </>
         )}
-      </main>
+      </section>
 
       {/* ─── Lightbox ───────────────────────────────────────────────────────── */}
       {lightbox !== null && jobActivo && projectId && (
@@ -1057,12 +1156,15 @@ function GrillaVariantes({
   job,
   projectId,
   formato,
+  enfocada,
   onElegir,
   onAmpliar,
 }: {
   job: Job;
   projectId: string;
   formato: string;
+  /** Posición con el foco del teclado: anillo `ring-fg`, distinto del borde accent. */
+  enfocada: number;
   onElegir: (index: number) => void;
   onAmpliar: (i: number) => void;
 }) {
@@ -1078,20 +1180,23 @@ function GrillaVariantes({
           const elegida = job.selectedIndex === c.index;
           const url = urlDe(projectId, job, c.file);
           return (
-            <button
+            /*
+              La tarjeta es un `div` y no un `<button>`: antes ampliar y descargar
+              vivían ADENTRO del botón de elegir, que es HTML inválido (interactivo
+              dentro de interactivo) y el lector de pantalla anunciaba un solo botón.
+              Ahora "elegir" es un botón que cubre la tarjeta (`absolute inset-0`) y
+              ampliar/descargar son hermanos encima, con `z-10`.
+            */
+            <div
               key={c.index}
-              type="button"
-              onClick={() => onElegir(c.index)}
-              aria-pressed={elegida}
-              aria-label={`Elegir la variante ${i + 1} de ${job.refId}`}
               style={{
                 width: `min(calc((100cqw - ${gaps}px) / ${n}), calc(100cqh * 0.5625))`,
                 aspectRatio: "9 / 16",
               }}
               className={cn(
                 "group relative shrink-0 overflow-hidden rounded-lg border-2 transition-colors",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
                 elegida ? "border-accent" : "border-divider hover:border-border",
+                i === enfocada && "ring-2 ring-fg",
               )}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1103,40 +1208,6 @@ function GrillaVariantes({
                 decoding="async"
                 className="size-full bg-bg object-cover"
               />
-
-              {/* Ampliar / descargar, en hover arriba a la derecha */}
-              <span className="absolute right-2 top-2 flex gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                <span
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Ver la variante ${i + 1} en grande`}
-                  title="Ver en grande"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAmpliar(i);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onAmpliar(i);
-                    }
-                  }}
-                  className="inline-flex size-8 cursor-pointer items-center justify-center rounded-md bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  <ArrowsOut aria-hidden className="size-4" />
-                </span>
-                <a
-                  href={`${url}&dl=1&name=${encodeURIComponent(`${job.refId}_v${i + 1}.png`)}`}
-                  download
-                  aria-label={`Descargar la variante ${i + 1}`}
-                  title="Descargar esta imagen"
-                  onClick={(e) => e.stopPropagation()}
-                  className="inline-flex size-8 items-center justify-center rounded-md bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  <DownloadSimple aria-hidden className="size-4" />
-                </a>
-              </span>
 
               {/* Degradado + label + check */}
               <span className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-bg/85 to-transparent px-2.5 pb-2.5 pt-6">
@@ -1152,7 +1223,37 @@ function GrillaVariantes({
                   </span>
                 )}
               </span>
-            </button>
+
+              <button
+                type="button"
+                onClick={() => onElegir(c.index)}
+                aria-pressed={elegida}
+                aria-label={`Elegir la variante ${i + 1} de ${job.refId}`}
+                className="absolute inset-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+              />
+
+              {/* Ampliar / descargar, en hover arriba a la derecha */}
+              <span className="absolute right-2 top-2 z-10 flex gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                <button
+                  type="button"
+                  aria-label={`Ver la variante ${i + 1} en grande`}
+                  title="Ver en grande"
+                  onClick={() => onAmpliar(i)}
+                  className="inline-flex size-8 items-center justify-center rounded-md bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <ArrowsOut aria-hidden className="size-4" />
+                </button>
+                <a
+                  href={`${url}&dl=1&name=${encodeURIComponent(`${job.refId}_v${i + 1}.png`)}`}
+                  download
+                  aria-label={`Descargar la variante ${i + 1}`}
+                  title="Descargar esta imagen"
+                  className="inline-flex size-8 items-center justify-center rounded-md bg-bg/85 text-fg-dim hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <DownloadSimple aria-hidden className="size-4" />
+                </a>
+              </span>
+            </div>
           );
         })}
       </div>
@@ -1168,12 +1269,15 @@ function VisorVariantes({
   job,
   projectId,
   formato,
+  enfocada,
   onElegir,
   onAmpliar,
 }: {
   job: Job;
   projectId: string;
   formato: string;
+  /** Posición con el foco del teclado: anillo `ring-fg`, distinto del borde accent. */
+  enfocada: number;
   onElegir: (index: number) => void;
   onAmpliar: (i: number) => void;
 }) {
@@ -1200,6 +1304,7 @@ function VisorVariantes({
                 "relative w-16 shrink-0 overflow-hidden rounded-md border-2 transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
                 activa ? "border-border" : elegida ? "border-accent" : "border-divider",
+                i === enfocada && "ring-2 ring-fg",
               )}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}

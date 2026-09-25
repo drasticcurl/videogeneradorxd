@@ -105,6 +105,7 @@ import {
   Textarea,
   type SelectOption,
 } from "@/components/ui";
+import { ignorarAtajo } from "@/lib/atajos";
 import type { BatchTimelineItem } from "@/lib/batch";
 import { cn } from "@/lib/cn";
 import type { JobRecord } from "@/lib/types";
@@ -178,9 +179,8 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     regenerateMany,
   } = useProjectStore();
   const [loadError, setLoadError] = useState<string | null>(null);
-  // El clip abierto en el panel editor vive ACA y no dentro de `PipelineClips`
-  // porque el aviso de aprobacion ("Revisar uno por uno", justo arriba) necesita
-  // poder cambiarlo sin pasar por un ref: son hermanos en el arbol, no padre-hijo.
+  // El clip abierto en el panel editor. Vive ACA y no dentro de `PipelineClips`
+  // porque es estado de la pantalla: `PipelineClips` lo recibe y lo cambia por props.
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -494,11 +494,17 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
             <AvisoAprobacion
               cantidad={progress.awaiting}
               onRevisar={() => {
-                // "Revisar uno por uno" selecciona el primer clip que espera
-                // aprobacion y deja que el panel (mas abajo) lo abra: no hace
-                // falta cambiar de vista, porque ya no hay una vista separada.
-                const primero = timelineItems.find((it) => it.status === "awaiting_approval");
-                if (primero) setSelectedClipId(primero.clipId);
+                // "Revisar uno por uno" lleva a la pantalla Revisar, como en el
+                // diseño (antes solo seleccionaba el primer clip en el panel). En
+                // modo clips si hay algun video esperando; si lo que espera son
+                // imagenes, en modo imagenes: `progress.awaiting` cuenta los dos y
+                // mandar a clips sin clips pendientes seria un callejon sin salida.
+                const hayClips = jobs.some(
+                  (j) => j.type === "video" && j.status === "awaiting_approval",
+                );
+                router.push(
+                  `/batch/review?ids=${projectId}${hayClips ? "&modo=vid" : ""}`,
+                );
               }}
               onAprobarTodos={() => void approveBatch()}
             />
@@ -930,16 +936,32 @@ function PipelineClips({
   }, [timelineItems, selectedClipId]);
 
   // ─── El ancho del panel: localStorage + limites + doble-click reset ────────
-  const [asideW, setAsideW] = useState<number>(anchoInicial);
+  // Arranca en 480 FIJO, igual en server y cliente: con `useState(anchoInicial)` el
+  // server daba 480 y el cliente el 42% del viewport, y React tiraba un mismatch de
+  // hidratación. El ancho real se resuelve en el efecto de abajo.
+  const [asideW, setAsideW] = useState<number>(480);
   const [dragging, setDragging] = useState(false);
+  // El máximo, para `aria-valuemax` de la manija. Es estado y no `anchoMaximo()` en
+  // el render porque depende de `window`: en el server daría otro número.
+  const [anchoMax, setAnchoMax] = useState(1200);
   const arrastreRef = useRef<{ x0: number; w0: number } | null>(null);
 
   useEffect(() => {
-    const guardado = window.localStorage.getItem(LS_ASIDE_W);
-    if (guardado) {
-      const n = Number(guardado);
-      if (Number.isFinite(n)) setAsideW(Math.min(anchoMaximo(), Math.max(ASIDE_MIN, n)));
+    setAnchoMax(anchoMaximo());
+    const guardado = Number(window.localStorage.getItem(LS_ASIDE_W) ?? NaN);
+    const deseado = Number.isFinite(guardado) && guardado > 0 ? guardado : anchoInicial();
+    setAsideW(Math.min(anchoMaximo(), Math.max(ASIDE_MIN, deseado)));
+
+    // Si la ventana se achica, el panel se vuelve a acotar a `innerWidth - 360` para
+    // que la timeline no quede aplastada. No se persiste: el ancho guardado es la
+    // preferencia del usuario, no el que impuso una ventana chica.
+    function onResize() {
+      const max = anchoMaximo();
+      setAnchoMax(max);
+      setAsideW((w) => Math.min(max, w));
     }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   const persistAncho = useCallback((w: number) => {
@@ -947,31 +969,64 @@ function PipelineClips({
     window.localStorage.setItem(LS_ASIDE_W, String(w));
   }, []);
 
+  /*
+    Pointer events y no mouse events: con `mousedown`/`mousemove` la manija no andaba
+    con táctil y era errática con algunos trackpads. `setPointerCapture` hace que el
+    elemento siga recibiendo los `pointermove` aunque el puntero se salga de sus 8px,
+    así que ya no hace falta colgar listeners de `window`.
+  */
   const startDrag = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
       e.preventDefault();
+      const el = e.currentTarget;
+      const pointerId = e.pointerId;
+      el.setPointerCapture(pointerId);
       arrastreRef.current = { x0: e.clientX, w0: asideW };
       setDragging(true);
       const max = anchoMaximo();
-      function move(ev: MouseEvent) {
+      function move(ev: PointerEvent) {
         const st = arrastreRef.current;
         if (!st) return;
         const next = Math.min(max, Math.max(ASIDE_MIN, st.w0 + (st.x0 - ev.clientX)));
         setAsideW(next);
       }
       function up() {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
+        el.removeEventListener("pointermove", move);
+        el.removeEventListener("pointerup", up);
+        el.removeEventListener("pointercancel", up);
+        if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId);
+        arrastreRef.current = null;
         setDragging(false);
         setAsideW((w) => {
           window.localStorage.setItem(LS_ASIDE_W, String(w));
           return w;
         });
       }
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
+      el.addEventListener("pointermove", move);
+      el.addEventListener("pointerup", up);
+      el.addEventListener("pointercancel", up);
     },
     [asideW]
+  );
+
+  /*
+    Teclado sobre la manija: ← agranda y → achica de a 16px (la manija está en el
+    borde IZQUIERDO del panel, así que se mueve para el mismo lado que la flecha), y
+    Enter/Home vuelve al ancho inicial, igual que el doble click.
+  */
+  const tecladoManija = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const paso = e.key === "ArrowLeft" ? 16 : -16;
+        persistAncho(Math.min(anchoMaximo(), Math.max(ASIDE_MIN, asideW + paso)));
+      } else if (e.key === "Enter" || e.key === "Home") {
+        e.preventDefault();
+        persistAncho(anchoInicial());
+      }
+    },
+    [asideW, persistAncho]
   );
 
   const resetAncho = useCallback(() => persistAncho(anchoInicial()), [persistAncho]);
@@ -986,6 +1041,7 @@ function PipelineClips({
   // ─── Teclado: flechas arriba/abajo cambian de clip ──────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (ignorarAtajo(e)) return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === "textarea" || tag === "input") return;
       if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -1200,13 +1256,18 @@ function PipelineClips({
       */}
       <aside className="relative flex min-h-0 flex-col border-l border-divider">
         <div
-          onMouseDown={startDrag}
+          onPointerDown={startDrag}
           onDoubleClick={resetAncho}
+          onKeyDown={tecladoManija}
+          tabIndex={0}
           role="separator"
           aria-orientation="vertical"
-          aria-label="Ancho del panel del clip. Arrastrá para ajustar, doble click para volver al inicial."
-          title="Arrastrá para ajustar · doble click para volver al ancho inicial"
-          className="absolute -left-1 top-0 bottom-0 z-10 flex w-2 cursor-col-resize items-center justify-center hover:bg-accent/15"
+          aria-valuenow={asideW}
+          aria-valuemin={ASIDE_MIN}
+          aria-valuemax={anchoMax}
+          aria-label="Ancho del panel del clip. Arrastrá o usá las flechas para ajustar; doble click, Enter o Inicio vuelven al ancho inicial."
+          title="Arrastrá o usá ← → para ajustar · doble click o Enter para volver al ancho inicial"
+          className="absolute -left-1 top-0 bottom-0 z-10 flex w-2 cursor-col-resize touch-none items-center justify-center hover:bg-accent/15 focus-visible:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <span className="h-8 w-0.5 rounded-sm bg-border" aria-hidden />
         </div>
@@ -1301,7 +1362,23 @@ const FilaClip = memo(function FilaClip({
         )}
       </td>
       <td className="max-w-0 px-2 py-1.5 align-middle">
-        <span className="block truncate font-mono text-label text-fg">{item.label}</span>
+        {/*
+          El click en la fila sigue andando con mouse, pero un `<tr onClick>` no es
+          focuseable: con teclado no había forma de abrir un clip en el panel. Este
+          botón es la entrada accesible (Tab + Enter/Espacio).
+        */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(item.clipId);
+          }}
+          aria-current={activo ? "true" : undefined}
+          aria-label={`Abrir el clip ${item.orden}: ${item.label}`}
+          className="block w-full truncate rounded-sm text-left font-mono text-label text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          {item.label}
+        </button>
       </td>
       <td className="px-2 py-1.5 align-middle font-mono tnum text-label text-fg-dim">
         {item.duracionSeg}s

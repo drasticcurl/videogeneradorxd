@@ -48,6 +48,7 @@ const config: Config = {
         // estado `awaiting_approval` usa el mismo color: es coherente, no una
         // colision.
         accent: "#fbbf24", // amber-400
+        "accent-hi": "#fcd34d", // amber-300, hover del boton primario
         "on-accent": "#09090b", // texto sobre el acento
 
         // ─── Estados: escala FUNCIONAL, aparte del acento ───────────────────

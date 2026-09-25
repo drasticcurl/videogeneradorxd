@@ -41,8 +41,11 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Sin `reset()` acá: el store ya se resetea una vez al montar. Resetear al abrir
+  // el wizard borraba el brief a medio armar cada vez que el usuario iba al listado
+  // y volvía, y pisaba el brief de ejemplo que el EmptyState carga justo antes de
+  // llamar a esta función.
   function handleNuevoProyecto() {
-    reset();
     setVista("nuevo");
   }
 
@@ -50,9 +53,12 @@ export default function HomePage() {
     setRefreshKey((k) => k + 1);
   }
 
-  if (vista === "nuevo") {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
+  // Las dos vistas se renderizan SIEMPRE y se alternan con `hidden`. Antes era un
+  // early return, y "← Volver a proyectos" desmontaba el wizard: el paso, el nombre
+  // y todo lo que vive en su estado local se perdía (ver el header).
+  return (
+    <>
+      <div className={vista === "nuevo" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
         <div className="flex items-center gap-3 border-b border-divider px-4 py-3 sm:px-6">
           <Button variant="ghost" size="sm" onClick={() => setVista("lista")}>
             ← Volver a proyectos
@@ -61,12 +67,11 @@ export default function HomePage() {
         </div>
         <NuevoProyectoWizard onCreado={handleCreado} />
       </div>
-    );
-  }
-
-  return (
-    <PantallaScroll>
-      <HomeProyectos onNuevoProyecto={handleNuevoProyecto} refreshKey={refreshKey} />
-    </PantallaScroll>
+      <div className={vista === "lista" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
+        <PantallaScroll>
+          <HomeProyectos onNuevoProyecto={handleNuevoProyecto} refreshKey={refreshKey} />
+        </PantallaScroll>
+      </div>
+    </>
   );
 }

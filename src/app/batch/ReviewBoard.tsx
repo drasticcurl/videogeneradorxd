@@ -103,6 +103,7 @@ import type {
   BatchSnapshot,
   BatchTimelineItem,
 } from "@/lib/batch";
+import { ignorarAtajo } from "@/lib/atajos";
 import { cn } from "@/lib/cn";
 import { estadoDeJob, type Tone } from "@/lib/ui-tokens";
 
@@ -511,6 +512,7 @@ function ModoImagenes({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (ignorarAtajo(e)) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       // Ni con el foco en una pestaña: Radix usa las flechas para navegar entre
@@ -605,6 +607,8 @@ function ModoImagenes({
             onApprove={() => void approve()}
             onReject={() => void reject()}
             onSkip={skip}
+            puedeDeshacer={Boolean(lastApproved)}
+            onUndo={() => void undo()}
             onSaved={() => void load()}
             onRegenerated={(jobId) => {
               resolve(jobId);
@@ -732,6 +736,8 @@ function TarjetaImagen({
   onApprove,
   onReject,
   onSkip,
+  puedeDeshacer,
+  onUndo,
   onSaved,
   onRegenerated,
 }: {
@@ -746,6 +752,9 @@ function TarjetaImagen({
   onApprove: () => void;
   onReject: () => void;
   onSkip: () => void;
+  /** Hay una aprobación reciente que `Z` puede deshacer. */
+  puedeDeshacer: boolean;
+  onUndo: () => void;
   onSaved: () => void;
   onRegenerated: (jobId: string) => void;
 }) {
@@ -920,6 +929,18 @@ function TarjetaImagen({
           <Button variant="ghost" disabled={busy} onClick={onSkip} icon={<SkipForward aria-hidden className="size-4" />} title="La deja para el final de la cola · S">
             Saltar <Kbd>S</Kbd>
           </Button>
+          {/* Mismo botón que en clips: `Z` ya funcionaba acá, pero no se veía. */}
+          {puedeDeshacer && (
+            <Button
+              variant="ghost"
+              disabled={busy}
+              onClick={onUndo}
+              title="Vuelve a traer la última que aprobaste para decidir de nuevo. No regenera nada · Z"
+              icon={<ArrowUUpLeft aria-hidden className="size-4" />}
+            >
+              Deshacer <Kbd>Z</Kbd>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1317,6 +1338,7 @@ function ModoClips({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (ignorarAtajo(e)) return;
       if (regen) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;

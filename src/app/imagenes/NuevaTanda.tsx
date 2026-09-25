@@ -170,7 +170,7 @@ export default function NuevaTanda({
   const elegidoFormato = IMAGE_ASPECT_RATIOS.find((f) => f.id === formato);
 
   return (
-    <main className="flex min-h-0 flex-col">
+    <section aria-label="Nueva tanda" className="flex min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         {/*
           `id` en el form + `form={id}` en el boton de la barra inferior (que vive
@@ -466,6 +466,6 @@ export default function NuevaTanda({
           Cancelar
         </Button>
       </BarraInferior>
-    </main>
+    </section>
   );
 }

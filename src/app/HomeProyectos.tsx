@@ -191,13 +191,18 @@ export function HomeProyectos({
     return out;
   }, [projects]);
 
-  /** Clips que esperan aprobacion, sumados de todos los snapshots que llegaron. */
-  const clipsEsperando = useMemo(() => {
-    let total = 0;
+  /**
+   * Lo que espera aprobacion, sumado de todos los snapshots que llegaron. Clips e
+   * imagenes POR SEPARADO: antes se sumaban y todo se anunciaba como "clips".
+   */
+  const { clipsEsperando, imagenesEsperando } = useMemo(() => {
+    let clips = 0;
+    let imagenes = 0;
     for (const bp of Object.values(snapshots)) {
-      total += bp.images.awaiting + bp.videos.awaiting;
+      clips += bp.videos.awaiting;
+      imagenes += bp.images.awaiting;
     }
-    return total;
+    return { clipsEsperando: clips, imagenesEsperando: imagenes };
   }, [snapshots]);
 
   return (
@@ -216,6 +221,18 @@ export function HomeProyectos({
                 {clipsEsperando === 1 ? "clip espera" : "clips esperan"} tu aprobación
               </>
             )}
+            {imagenesEsperando > 0 && (
+              <>
+                {" · "}
+                <span className="code tnum text-accent">{imagenesEsperando}</span>{" "}
+                {imagenesEsperando === 1 ? "imagen" : "imágenes"}
+                {clipsEsperando > 0
+                  ? ""
+                  : imagenesEsperando === 1
+                    ? " espera tu aprobación"
+                    : " esperan tu aprobación"}
+              </>
+            )}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -229,7 +246,6 @@ export function HomeProyectos({
           )}
           <Button
             variant="primary"
-            className="bg-accent text-on-accent hover:bg-accent/90"
             onClick={onNuevoProyecto}
           >
             Nuevo proyecto
@@ -385,10 +401,29 @@ function ProjectCard({
   const fecha = new Date(project.createdAt);
   const fechaCorta = `${fecha.getDate()}/${fecha.getMonth() + 1}`;
 
-  // Cuantos clips esperan aprobacion (imagenes + videos) EN ESTE proyecto puntual,
-  // para el CTA "N clips esperan tu aprobación". Sin snapshot no hay como saberlo,
-  // asi que el CTA simplemente no aparece (no se inventa un numero).
-  const esperando = snapshot ? snapshot.images.awaiting + snapshot.videos.awaiting : 0;
+  // Que espera aprobacion EN ESTE proyecto puntual, para el CTA. Clips primero (y
+  // a Revisar en modo clips); si no hay, imagenes (a Revisar en modo imagenes).
+  // Antes se sumaban los dos, se anunciaban como "clips" y el link iba siempre al
+  // modo imagenes. Sin snapshot no hay como saberlo, asi que el CTA simplemente no
+  // aparece (no se inventa un numero).
+  const cta: { n: number; singular: string; plural: string; href: string } | null =
+    !snapshot
+      ? null
+      : snapshot.videos.awaiting > 0
+        ? {
+            n: snapshot.videos.awaiting,
+            singular: "clip espera",
+            plural: "clips esperan",
+            href: `/batch/review?ids=${project.id}&modo=vid`,
+          }
+        : snapshot.images.awaiting > 0
+          ? {
+              n: snapshot.images.awaiting,
+              singular: "imagen espera",
+              plural: "imágenes esperan",
+              href: `/batch/review?ids=${project.id}`,
+            }
+          : null;
 
   return (
     <li>
@@ -451,14 +486,14 @@ function ProjectCard({
         )}
 
         <div className="mt-auto flex items-center justify-between gap-2 border-t border-divider pt-3">
-          {esperando > 0 ? (
+          {cta ? (
             <Link
-              href={`/batch/review?ids=${project.id}`}
+              href={cta.href}
               className="inline-flex min-w-0 flex-1 items-center justify-between gap-2 rounded-sm bg-accent/10 px-2.5 py-1.5 text-label font-medium text-accent transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               <span className="truncate">
-                <span className="code tnum">{esperando}</span>{" "}
-                {esperando === 1 ? "clip espera" : "clips esperan"} tu aprobación
+                <span className="code tnum">{cta.n}</span>{" "}
+                {cta.n === 1 ? cta.singular : cta.plural} tu aprobación
               </span>
               <CaretRight className="size-3.5 shrink-0" aria-hidden />
             </Link>

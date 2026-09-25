@@ -15,7 +15,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 
 const LINKS = [
-  { href: "/", label: "Nuevo proyecto" },
+  { href: "/", label: "Videos" },
   { href: "/imagenes", label: "Imágenes" },
   { href: "/batch", label: "Tablero" },
 ] as const;
@@ -26,18 +26,23 @@ export default function NavLinks() {
   return (
     <>
       {LINKS.map((l) => {
-        // La home matchea exacto; el resto por prefijo, asi `/batch/review` deja
+        // "Videos" (la home) queda activo tambien adentro de un proyecto: el
+        // pipeline y el resultado son parte del flujo de video y antes no marcaban
+        // ningun link. El resto matchea por prefijo, asi `/batch/review` deja
         // marcado "Tablero".
-        const activo = l.href === "/" ? pathname === "/" : pathname.startsWith(l.href);
+        const activo =
+          l.href === "/"
+            ? pathname === "/" || pathname.startsWith("/project")
+            : pathname.startsWith(l.href);
         return (
           <Link
             key={l.href}
             href={l.href}
             aria-current={activo ? "page" : undefined}
             className={cn(
-              // `whitespace-nowrap`: el header mide 56px de alto fijo y "Nuevo
-              // proyecto" partia en dos lineas en un telefono. Ahora no corta y lo
-              // que no entra scrollea, que es para lo que el <nav> es overflow-x-auto.
+              // `whitespace-nowrap`: el header mide 56px de alto fijo y un label
+              // largo partia en dos lineas en un telefono. Ahora no corta y lo que
+              // no entra scrollea, que es para lo que el <nav> es overflow-x-auto.
               "shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-body transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
               activo

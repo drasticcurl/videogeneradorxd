@@ -25,10 +25,13 @@ const estilos = cva(
   {
     variants: {
       variant: {
-        // Primario neutro y no de color: en esta app el color esta reservado para
-        // los ESTADOS y para el contenido (imagenes y videos). Un primario blanco
-        // sobre fondo casi negro es lo mas legible que hay (19:1) y no compite.
-        primary: "bg-fg text-bg hover:bg-fg-dim",
+        // Primario con relleno de acento, como pide el handoff (antes era blanco,
+        // `bg-fg`, y `HomeProyectos` lo pisaba a mano para "Nuevo proyecto"). Va en
+        // las acciones que hacen avanzar el trabajo: Nueva tanda, Nuevo proyecto,
+        // Siguiente/Generar, Aprobar todos, Aprobar y seguir. Es coherente con que el
+        // acento signifique "esto espera algo de vos". Texto `on-accent` sobre ámbar:
+        // verificado en `tasks/_verificacion-contraste.mjs`, igual que el hover.
+        primary: "bg-accent text-on-accent hover:bg-accent-hi",
         secondary: "border border-border bg-transparent text-fg hover:bg-surface-hi",
         ghost: "bg-transparent text-fg-dim hover:bg-surface-hi hover:text-fg",
         // Para lo que cuesta plata o borra cosas.

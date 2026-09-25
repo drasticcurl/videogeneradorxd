@@ -396,7 +396,7 @@ export default function GeneradorMasivo({
       {tandaSeleccionada ? (
         <ProgresoTanda tanda={tandaSeleccionada} />
       ) : (
-        <main className="flex min-h-0 flex-col">
+        <section aria-label="Nueva tanda masiva" className="flex min-h-0 flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto">
             <form
               id="form-masivo"
@@ -673,7 +673,7 @@ export default function GeneradorMasivo({
             </Button>
             {resumenCosto && <p className="code text-label text-fg-dim">{resumenCosto}</p>}
           </BarraInferior>
-        </main>
+        </section>
       )}
     </>
   );
@@ -690,7 +690,7 @@ function ProgresoTanda({ tanda }: { tanda: BatchResumen }) {
   const nombre = tanda.proyectos[0]?.name.replace(/\s\d+$/, "") ?? "Tanda";
 
   return (
-    <main className="flex min-h-0 flex-col">
+    <section aria-label="Progreso de la tanda" className="flex min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-[1080px] flex-col gap-4 p-6">
           <div className="flex flex-wrap items-end justify-between gap-3">
@@ -752,6 +752,6 @@ function ProgresoTanda({ tanda }: { tanda: BatchResumen }) {
           </p>
         </div>
       </div>
-    </main>
+    </section>
   );
 }
