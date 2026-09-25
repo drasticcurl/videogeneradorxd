@@ -6,6 +6,27 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-25 — Cargar el avatar ANTES del brief, para que la IA no invente la cara
+
+**El problema:** la tarjeta de avatares vivía dentro de la sección Plan, que recién aparece cuando ya
+hay un plan. O sea: el avatar se subía después de interpretar, el interpretador nunca se enteraba y el
+PlanJSON salía con el protagonista generado con text2image y descripto físicamente. La foto quedaba
+"sin usar". Lo mismo con el prompt copiable para ChatGPT/Gemini: no llevaba los avatares.
+
+**Qué cambió:**
+
+- `NuevoProyectoWizard`: nueva sección **Avatares** entre Modelos y Brief (la tarjeta de antes, movida
+  y con botón "Cargar avatar"). Si hay plan y un avatar no figura en él, avisa que hay que volver a
+  interpretar.
+- `prompts.ts`: el interpretador ahora trata al avatar como EL personaje del brief (por nombre, o el
+  protagonista si hay uno solo), no crea otro asset para él y **no describe sus rasgos físicos**: sólo
+  encuadre, pose, acción, vestuario, set y luz. `buildStoryboardPrompt()` mete los avatares cargados en
+  el prompt copiable.
+- `/api/parse`: seguro por si el modelo igual arranca al avatar con text2image (se fuerza image2image
+  desde la foto, con warning) y warning si ningún plano usa un avatar subido.
+
+---
+
 ## 2026-09-23 (3) — Auditoría de UI en pantalla chica y normal: 3 defectos, ninguno de layout
 
 Auditoría pedida sobre el rediseño ya deployado. 10 pantallas x 4 tamaños (1680x1000, 1440x900,

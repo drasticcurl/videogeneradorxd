@@ -1,6 +1,6 @@
 /**
  * POST /api/parse
- * Body: { brief: string, model?: string, imageVariants?: number }
+ * Body: { brief: string, model?: string, imageVariants?: number, references?: {id,label}[] }
  * Interpreta el brief con la LLM (Gemini en vertex / mock) y devuelve el PlanJSON
  * estructurado + validado, junto con la estimacion de costo. NO crea proyecto todavia.
  */
@@ -48,6 +48,36 @@ export async function POST(req: Request) {
         }
       }
       plan.references = Array.from(existing.values());
+    }
+
+    // Seguro por si la LLM igual arranco al avatar con text2image: la foto subida es
+    // la identidad, asi que la imagen base de su asset (mismo id) parte SIEMPRE de ella.
+    // Sin esto, el primer plano sale con una cara inventada y todos los image2image
+    // que cuelgan de el heredan esa cara, no la de la foto.
+    for (const ref of references) {
+      const base = plan.assets.find((a) => a.id === ref.id)?.images[0];
+      if (base && base.modo === "text2image") {
+        base.modo = "image2image";
+        base.ref_image_id = ref.id;
+        plan.warnings = [
+          ...(plan.warnings ?? []),
+          `La imagen base "${base.id}" venia como text2image; se forzo image2image desde el avatar "${ref.id}".`,
+        ];
+      }
+    }
+    const sinUsar = references.filter(
+      (ref) =>
+        !plan.assets.some((a) =>
+          a.images.some(
+            (img) => img.ref_image_id === ref.id || img.ref_image_ids?.includes(ref.id),
+          ),
+        ),
+    );
+    if (sinUsar.length > 0) {
+      plan.warnings = [
+        ...(plan.warnings ?? []),
+        `Ninguna imagen usa el avatar ${sinUsar.map((r) => `"${r.id}"`).join(", ")}: revisá que el Nombre coincida con el personaje del brief.`,
+      ];
     }
 
     const variants = Math.min(4, Math.max(1, body.imageVariants ?? 1));

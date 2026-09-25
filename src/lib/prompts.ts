@@ -72,6 +72,12 @@ REGLAS OBLIGATORIAS DE CONSISTENCIA:
      la imagen base de ESE avatar o directamente su referencia.
    - El prompt SIEMPRE debe incluir "keep identity 100% consistent with the reference, same face, same person".
    - Si un plano necesita a DOS personas de referencia juntas, usá "ref_image_ids" con los dos ids.
+   - La persona de referencia ES el personaje del brief que coincide con su label (o, si hay un solo
+     avatar y el brief tiene un solo protagonista, ese protagonista). NO crees OTRO asset avatar
+     aparte para ese personaje ni lo generes con text2image.
+   - En los prompts de esa persona NO describas sus rasgos fisicos (cara, pelo, edad, etnia, cuerpo,
+     color de ojos): los define la foto. Si el brief los describe, IGNORALOS para ese personaje.
+     Describi SOLO encuadre, pose, expresion, accion, vestuario (si el brief lo pide), set y luz.
 1. Si un avatar NO tiene foto de referencia, su PRIMERA imagen es "text2image" (estado base, sin ref).
 2. Los estados POSTERIORES del MISMO avatar (otra ropa, mas desinflada, en el espejo, etc.) SIEMPRE son
    "image2image" con "ref_image_id" apuntando a una imagen previa del MISMO avatar (o a su referencia),
@@ -205,7 +211,29 @@ export function buildReferencesPromptBlock(
     "Para CADA uno: incluilo en \"references\", creá un asset \"avatar\" con el MISMO id, y hacé que su",
     "imagen base sea image2image con ref_image_id = ese id. Generá todos los planos como image2image",
     "manteniendo la identidad (same face, same person). NO inventes una cara nueva con text2image.",
+    "Ese avatar ES el personaje del brief con ese nombre (o el protagonista, si hay uno solo): NO crees",
+    "otro asset para el mismo personaje. En sus prompts NO describas rasgos fisicos (cara, pelo, edad,",
+    "cuerpo): los pone la foto. Describi solo encuadre, pose, expresion, accion, vestuario, set y luz.",
   ].join("\n");
+}
+
+/**
+ * El prompt copiable (STORYBOARD_PROMPT_TEMPLATE) con los avatares ya subidos
+ * escritos adentro, justo antes del brief. Sin avatares devuelve la plantilla tal cual.
+ *
+ * Sin esto, ChatGPT/Gemini no sabian que habia una foto: inventaban al protagonista
+ * con text2image y una descripcion fisica, y el PlanJSON pegado dejaba el avatar
+ * subido "sin usar".
+ */
+export function buildStoryboardPrompt(
+  references?: { id: string; label?: string }[]
+): string {
+  const block = buildReferencesPromptBlock(references);
+  if (!block) return STORYBOARD_PROMPT_TEMPLATE;
+  return STORYBOARD_PROMPT_TEMPLATE.replace(
+    "ESTE ES EL BRIEF:",
+    `${block}\n\nESTE ES EL BRIEF:`
+  );
 }
 
 
@@ -270,6 +298,9 @@ REGLAS QUE TENES QUE CUMPLIR SI O SI:
   asset "avatar" con el MISMO id por cada uno, y su imagen base tiene que ser "image2image" con
   "ref_image_id" = ese id (la foto es la fuente de identidad). NO uses text2image para una cara que ya
   tiene foto. Todos los planos posteriores: "image2image" manteniendo la identidad.
+  Ese avatar ES el personaje del brief con su nombre: no crees otro asset para el. En sus prompts NO
+  describas rasgos fisicos (cara, pelo, edad, cuerpo), los pone la foto: solo encuadre, pose, accion,
+  vestuario, set y luz.
 - Si un avatar NO tiene foto de referencia, su PRIMERA imagen es "text2image". Los demas estados del MISMO
   avatar son "image2image" con "ref_image_id" a una imagen previa, y el prompt tiene que incluir
   "keep identity 100% consistent with the reference, same face, same person".

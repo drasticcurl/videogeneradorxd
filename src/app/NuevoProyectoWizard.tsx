@@ -1,8 +1,9 @@
 "use client";
 /**
  * Pantalla de "Nuevo proyecto", en UN SOLO PASO: nombre, modelos y aprobacion,
- * brief/PlanJSON y el plan interpretado (clips, avatares, JSON y costo) viven en la
- * misma pantalla con scroll, y "Generar" queda fijo abajo.
+ * avatares, brief/PlanJSON y el plan interpretado (clips, JSON y costo) viven en la
+ * misma pantalla con scroll, y "Generar" queda fijo abajo. Los avatares van ANTES
+ * del brief porque el interpretador los necesita (ver SeccionAvatares).
  *
  * Antes era un wizard de 3 pasos y se bugeaba: el plan aparecia en el paso 3 y no
  * al lado del brief que lo generaba, se podia saltar pasos desde el stepper con
@@ -68,7 +69,7 @@ import {
   ToggleCard,
 } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { STORYBOARD_PROMPT_TEMPLATE } from "@/lib/prompts";
+import { buildStoryboardPrompt } from "@/lib/prompts";
 import { SAMPLE_BRIEF } from "@/lib/sampleBrief";
 import { validatePlan, type ProjectPlan } from "@/lib/schema";
 import type { Tone } from "@/lib/ui-tokens";
@@ -323,7 +324,11 @@ export function NuevoProyectoWizard({ onCreado }: { onCreado: () => void }) {
   }
 
   function copyPromptTemplate() {
-    navigator.clipboard?.writeText(STORYBOARD_PROMPT_TEMPLATE);
+    // Con los avatares ya cargados adentro: si no, ChatGPT inventa (y describe) una
+    // cara nueva para el protagonista y la foto subida queda sin usar.
+    navigator.clipboard?.writeText(
+      buildStoryboardPrompt(references.map((r) => ({ id: r.id, label: r.label }))),
+    );
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
   }
@@ -406,6 +411,18 @@ export function NuevoProyectoWizard({ onCreado }: { onCreado: () => void }) {
           <SeccionModelos autoApprove={autoApprove} setAutoApprove={setAutoApprove} />
 
           <section className="space-y-3">
+            <h2 className="text-title font-semibold text-fg">Avatares</h2>
+            <SeccionAvatares
+              hayPlan={Boolean(plan)}
+              references={references}
+              idsQueEsperaElPlan={idsQueEsperaElPlan}
+              addReferenceFile={addReferenceFile}
+              updateReference={updateReference}
+              removeReference={removeReference}
+            />
+          </section>
+
+          <section className="space-y-3">
             <h2 className="text-title font-semibold text-fg">Brief</h2>
             <SeccionBrief
               mode={mode}
@@ -441,11 +458,6 @@ export function NuevoProyectoWizard({ onCreado }: { onCreado: () => void }) {
             <SeccionPlan
               plan={plan}
               estimate={estimate}
-              references={references}
-              idsQueEsperaElPlan={idsQueEsperaElPlan}
-              addReferenceFile={addReferenceFile}
-              updateReference={updateReference}
-              removeReference={removeReference}
               setPlan={setPlan}
               autoApprove={autoApprove}
             />
@@ -577,7 +589,13 @@ function SeccionBrief({
             }
             title="Copiá este prompt, pegalo en ChatGPT o Gemini con tu brief, y te devuelve el JSON exacto"
           >
-            {copied ? "Prompt copiado" : "Copiar prompt para ChatGPT o Gemini"}
+            {copied
+              ? "Prompt copiado"
+              : references.length > 0
+                ? `Copiar prompt para ChatGPT o Gemini (con ${references.length} ${
+                    references.length === 1 ? "avatar" : "avatares"
+                  })`
+                : "Copiar prompt para ChatGPT o Gemini"}
           </Button>
         )}
       </div>
@@ -822,21 +840,26 @@ function SeccionModelos({
   );
 }
 
-/* ═══════════════════════════════ Plan ═══════════════════════════════ */
+/* ═══════════════════════════════ Avatares ═══════════════════════════════ */
 
-function SeccionPlan({
-  plan,
-  estimate,
+/**
+ * Fotos de las personas del anuncio. Vive ARRIBA del brief, no dentro del plan.
+ *
+ * Antes estaba en la sección Plan, que solo existe cuando ya hay un plan: el avatar
+ * se subia DESPUES de interpretar, la IA nunca se enteraba y describia (e inventaba
+ * con text2image) una cara nueva para el protagonista. La foto quedaba "sin usar".
+ * Ahora se sube primero y `parseBrief` del store ya le manda los ids al parser, asi
+ * el plan sale con esa persona como image2image desde su foto.
+ */
+function SeccionAvatares({
+  hayPlan,
   references,
   idsQueEsperaElPlan,
   addReferenceFile,
   updateReference,
   removeReference,
-  setPlan,
-  autoApprove,
 }: {
-  plan: ProjectPlan | null;
-  estimate: import("@/store/useProjectStore").CostEstimate | null;
+  hayPlan: boolean;
   references: import("@/store/useProjectStore").ReferenceDraft[];
   idsQueEsperaElPlan: { id: string; label?: string }[];
   addReferenceFile: (f: File) => Promise<void>;
@@ -845,6 +868,154 @@ function SeccionPlan({
     patch: Partial<Pick<import("@/store/useProjectStore").ReferenceDraft, "id" | "label">>,
   ) => void;
   removeReference: (uid: string) => void;
+}) {
+  // Fotos subidas que el plan actual no conoce: se subieron despues de interpretar.
+  const fueraDelPlan = hayPlan
+    ? references.filter((r) => !idsQueEsperaElPlan.some((p) => p.id === r.id))
+    : [];
+
+  return (
+    <Card className="space-y-4">
+      <CardHeader>
+        <div className="min-w-0">
+          <CardTitle className="flex items-center gap-2">
+            <UsersThree className="size-4 shrink-0 text-fg-dim" aria-hidden />
+            Avatares de referencia
+            <span className="text-label font-normal text-fg-dim">opcional</span>
+          </CardTitle>
+          <CardDescription className="mt-1 max-w-prose text-label">
+            Subí la foto de la persona <b className="font-medium text-fg">antes de
+            interpretar el brief</b>. La IA la usa como la cara del personaje: todos
+            los planos salen de esa foto (image2image) y{" "}
+            <b className="font-medium text-fg">no inventa ni describe una cara nueva</b>{" "}
+            en el JSON. En <b className="font-medium text-fg">Nombre</b> poné cómo se
+            llama el personaje en el brief, así sabe a quién corresponde.
+          </CardDescription>
+        </div>
+        <BotonDeArchivo
+          accept="image/png,image/jpeg,image/webp"
+          multiple
+          onChange={async (e) => {
+            const files = Array.from(e.target.files ?? []);
+            for (const f of files) await addReferenceFile(f);
+            e.target.value = "";
+          }}
+        >
+          <Plus className="size-4" aria-hidden />
+          Cargar avatar
+        </BotonDeArchivo>
+      </CardHeader>
+
+      {idsQueEsperaElPlan.length > 0 && (
+        <div className="space-y-1.5 rounded-sm bg-surface-hi p-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-label text-fg-dim">El plan espera estos ids:</span>
+            {idsQueEsperaElPlan.map((r) => {
+              const ok = references.some((d) => d.id === r.id);
+              return (
+                <Badge key={r.id} tone={ok ? "ok" : "attention"} punto={!ok}>
+                  {ok && <Check className="size-3.5 shrink-0" aria-hidden />}
+                  <span className="code">{r.id}</span>
+                  {r.label ? <span className="font-normal">({r.label})</span> : null}
+                </Badge>
+              );
+            })}
+          </div>
+          <p className="text-label text-fg-dim">
+            El tilde es una foto ya subida con ese id. El punto es una que falta: esos
+            planos se van a generar sin la cara de referencia.
+          </p>
+        </div>
+      )}
+
+      {fueraDelPlan.length > 0 && (
+        <p
+          role="status"
+          className="flex gap-2 rounded-sm bg-accent/10 p-2.5 text-label text-accent"
+        >
+          <Warning className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            El plan se armó antes de subir{" "}
+            {fueraDelPlan.map((r) => r.label || r.id).join(", ")}. Volvé a interpretar
+            el brief (o a copiar el prompt) para que lo use en vez de generar una cara
+            nueva.
+          </span>
+        </p>
+      )}
+
+      {references.length > 0 ? (
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {references.map((r) => {
+            const usadaPorElPlan = idsQueEsperaElPlan.some((p) => p.id === r.id);
+            return (
+              <li key={r.uid} className="space-y-2 rounded-lg bg-surface-hi p-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={r.dataUrl}
+                  alt={r.label || r.id}
+                  className="aspect-[3/4] w-full rounded-sm object-cover"
+                />
+                <Input
+                  label="id (tiene que matchear el plan)"
+                  placeholder="ej. natalia"
+                  value={r.id}
+                  onChange={(e) => updateReference(r.uid, { id: e.target.value })}
+                  className="code"
+                />
+                <Input
+                  label="Nombre (como aparece en el brief)"
+                  placeholder="ej. Natalia"
+                  value={r.label}
+                  onChange={(e) => updateReference(r.uid, { label: e.target.value })}
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {hayPlan ? (
+                    usadaPorElPlan ? (
+                      <Badge tone="ok">
+                        <Check className="size-3.5 shrink-0" aria-hidden />
+                        en el plan
+                      </Badge>
+                    ) : (
+                      <Badge tone="attention" punto>
+                        sin usar
+                      </Badge>
+                    )
+                  ) : (
+                    <span />
+                  )}
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    icon={<X className="size-3.5" aria-hidden />}
+                    onClick={() => removeReference(r.uid)}
+                  >
+                    Quitar
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="text-label text-fg-dim">
+          Todavía no subiste ninguno. Si el anuncio no tiene una persona fija, dejalo
+          vacío: la IA describe al personaje y cada imagen se genera desde su prompt.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/* ═══════════════════════════════ Plan ═══════════════════════════════ */
+
+function SeccionPlan({
+  plan,
+  estimate,
+  setPlan,
+  autoApprove,
+}: {
+  plan: ProjectPlan | null;
+  estimate: import("@/store/useProjectStore").CostEstimate | null;
   setPlan: (p: ProjectPlan) => void;
   autoApprove: boolean;
 }) {
@@ -874,7 +1045,7 @@ function SeccionPlan({
       )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-        {/* ── columna izquierda: tabla de clips + avatares ── */}
+        {/* ── columna izquierda: tabla de clips + JSON (los avatares viven arriba del brief) ── */}
         <div className="space-y-6">
           <section className="space-y-2">
             <h2 className="text-title font-semibold text-fg">Clips del plan</h2>
@@ -923,127 +1094,6 @@ function SeccionPlan({
               </table>
             </div>
           </section>
-
-          {/* ── avatares de referencia (VSL) ── */}
-          <Card className="space-y-4">
-            <CardHeader>
-              <div className="min-w-0">
-                <CardTitle className="flex items-center gap-2">
-                  <UsersThree className="size-4 shrink-0 text-fg-dim" aria-hidden />
-                  Avatares de referencia
-                  <span className="text-label font-normal text-fg-dim">
-                    VSL · opcional
-                  </span>
-                </CardTitle>
-                <CardDescription className="mt-1 max-w-prose text-label">
-                  Subí las fotos de las personas. Se usan como fuente de identidad:
-                  todos los planos se generan manteniendo{" "}
-                  <b className="font-medium text-fg">la misma cara</b> (image2image).
-                  El <code className="code text-fg">id</code> de cada foto tiene que
-                  coincidir con el de <code className="code text-fg">references[]</code>{" "}
-                  en el plan.
-                </CardDescription>
-              </div>
-              <BotonDeArchivo
-                accept="image/png,image/jpeg,image/webp"
-                multiple
-                onChange={async (e) => {
-                  const files = Array.from(e.target.files ?? []);
-                  for (const f of files) await addReferenceFile(f);
-                  e.target.value = "";
-                }}
-              >
-                <Plus className="size-4" aria-hidden />
-                Agregar foto
-              </BotonDeArchivo>
-            </CardHeader>
-
-            {idsQueEsperaElPlan.length > 0 && (
-              <div className="space-y-1.5 rounded-sm bg-surface-hi p-2.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-label text-fg-dim">El plan espera estos ids:</span>
-                  {idsQueEsperaElPlan.map((r) => {
-                    const ok = references.some((d) => d.id === r.id);
-                    return (
-                      <Badge key={r.id} tone={ok ? "ok" : "attention"} punto={!ok}>
-                        {ok && <Check className="size-3.5 shrink-0" aria-hidden />}
-                        <span className="code">{r.id}</span>
-                        {r.label ? (
-                          <span className="font-normal">({r.label})</span>
-                        ) : null}
-                      </Badge>
-                    );
-                  })}
-                </div>
-                <p className="text-label text-fg-dim">
-                  El tilde es una foto ya subida con ese id. El punto es una que
-                  falta: esos planos se van a generar sin la cara de referencia.
-                </p>
-              </div>
-            )}
-
-            {references.length > 0 ? (
-              <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                {references.map((r) => {
-                  const usadaPorElPlan = idsQueEsperaElPlan.some((p) => p.id === r.id);
-                  return (
-                    <li key={r.uid} className="space-y-2 rounded-lg bg-surface-hi p-2">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={r.dataUrl}
-                        alt={r.label || r.id}
-                        className="aspect-[3/4] w-full rounded-sm object-cover"
-                      />
-                      <Input
-                        label="id (tiene que matchear el plan)"
-                        placeholder="ej. natalia"
-                        value={r.id}
-                        onChange={(e) => updateReference(r.uid, { id: e.target.value })}
-                        className="code"
-                      />
-                      <Input
-                        label="Nombre"
-                        placeholder="ej. Natalia"
-                        value={r.label}
-                        onChange={(e) =>
-                          updateReference(r.uid, { label: e.target.value })
-                        }
-                      />
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        {idsQueEsperaElPlan.length > 0 ? (
-                          usadaPorElPlan ? (
-                            <Badge tone="ok">
-                              <Check className="size-3.5 shrink-0" aria-hidden />
-                              en el plan
-                            </Badge>
-                          ) : (
-                            <Badge tone="attention" punto>
-                              sin usar
-                            </Badge>
-                          )
-                        ) : (
-                          <span />
-                        )}
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          icon={<X className="size-3.5" aria-hidden />}
-                          onClick={() => removeReference(r.uid)}
-                        >
-                          Quitar
-                        </Button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <p className="text-label text-fg-dim">
-                Todavía no subiste ninguna. Si el anuncio no tiene una persona fija,
-                dejalo vacío: cada imagen se genera desde su prompt.
-              </p>
-            )}
-          </Card>
 
           {/* JSON crudo, editable: mismo mecanismo que antes (JsonEditor validaba y
               llamaba setPlan). Se deja como textarea simple con validacion en vivo
