@@ -182,6 +182,9 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
   // El clip abierto en el panel editor. Vive ACA y no dentro de `PipelineClips`
   // porque es estado de la pantalla: `PipelineClips` lo recibe y lo cambia por props.
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  // A donde mandar la columna de clips cuando se toca una card de Etapas. `n` cambia
+  // en cada click para que tocar dos veces la misma etapa vuelva a llevar ahi.
+  const [irA, setIrA] = useState<IrA | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -435,14 +438,46 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
     const hayPlan = Boolean(project);
     const listoExport =
       groups.vids.length > 0 && vidsDone === groups.vids.length ? 1 : 0;
+    // Cada card lleva a su etapa. Las de imagenes solo si hay imagenes de ese tipo:
+    // un click que abre una seccion vacia parece roto.
+    const ir = (destino: IrA["destino"]) => () =>
+      setIrA((prev) => ({ destino, n: (prev?.n ?? 0) + 1 }));
     return [
       { label: "Brief → Plan", hechos: hayPlan ? 1 : 0, total: 1 },
-      { label: "Imágenes base", hechos: t2iDone, total: groups.t2i.length },
-      { label: "Imágenes derivadas", hechos: i2iDone, total: groups.i2i.length },
-      { label: "Videos", hechos: vidsDone, total: groups.vids.length },
-      { label: "Unir y exportar", hechos: listoExport, total: 1 },
+      {
+        label: "Imágenes base",
+        hechos: t2iDone,
+        total: groups.t2i.length,
+        ...(groups.t2i.length > 0 && {
+          onClick: ir("base"),
+          destino: "Ver las imágenes base",
+        }),
+      },
+      {
+        label: "Imágenes derivadas",
+        hechos: i2iDone,
+        total: groups.i2i.length,
+        ...(groups.i2i.length > 0 && {
+          onClick: ir("derivadas"),
+          destino: "Ver las imágenes derivadas",
+        }),
+      },
+      {
+        label: "Videos",
+        hechos: vidsDone,
+        total: groups.vids.length,
+        onClick: ir("videos"),
+        destino: "Ir a la lista de clips",
+      },
+      {
+        label: "Unir y exportar",
+        hechos: listoExport,
+        total: 1,
+        onClick: () => router.push(`/project/${projectId}/result`),
+        destino: "Unir, descargar y subir el video final",
+      },
     ];
-  }, [project, groups]);
+  }, [project, groups, router, projectId]);
 
   return (
     <PantallaFija>
@@ -603,6 +638,7 @@ export default function PipelinePage({ params }: { params: { id: string } }) {
           resolutionOptions={resolutionOptions}
           selectedClipId={selectedClipId}
           onSelectClip={setSelectedClipId}
+          irA={irA}
           onSave={onChangePrompt}
           onRegenerate={onRegenerate}
           onRegenerateMany={onRegenerateMany}
@@ -647,6 +683,28 @@ interface GroupHandlers {
   onExtend: (id: string) => void;
 }
 
+/** Destino de un click en una card de Etapas (ver `irA` en la pagina). */
+interface IrA {
+  destino: "base" | "derivadas" | "videos";
+  n: number;
+}
+
+/**
+ * Scrollea SOLO el contenedor scrolleable mas cercano hasta `el`. No se usa
+ * `scrollIntoView` porque mueve todos los ancestros, incluido el shell de alto fijo
+ * (`PantallaFija`), y se lleva puesto el header de la app.
+ */
+function scrollearHasta(el: HTMLElement) {
+  let cont = el.parentElement;
+  while (cont && !/auto|scroll/.test(getComputedStyle(cont).overflowY)) {
+    cont = cont.parentElement;
+  }
+  if (!cont) return;
+  const top =
+    el.getBoundingClientRect().top - cont.getBoundingClientRect().top + cont.scrollTop;
+  cont.scrollTo({ top: Math.max(0, top - 8), behavior: "smooth" });
+}
+
 interface JobMeta {
   promptByRef: Map<string, string>;
   dialogueByRef: Map<string, string>;
@@ -675,6 +733,7 @@ function ImagenesYClips({
   resolutionOptions,
   selectedClipId,
   onSelectClip,
+  irA,
   onSave,
   onRegenerate,
   onRegenerateMany,
@@ -697,6 +756,7 @@ function ImagenesYClips({
   resolutionOptions: string[];
   selectedClipId: string | null;
   onSelectClip: (clipId: string | null) => void;
+  irA: IrA | null;
   onSave: (jobId: string, payload: SavePayload) => void;
   onRegenerate: (jobId: string) => void;
   onRegenerateMany: (jobIds: string[]) => void;
@@ -715,6 +775,28 @@ function ImagenesYClips({
   */
   const [imagenesAbiertas, setImagenesAbiertas] = useState(false);
   const totalImagenes = groups.t2i.length + groups.i2i.length;
+
+  /*
+    Click en una card de Etapas. Las de imagenes abren la seccion y la llevan al
+    grupo; "Videos" la cierra y vuelve a la tabla de clips. El scroll va en un
+    requestAnimationFrame porque la seccion recien se monta en este mismo render.
+  */
+  useEffect(() => {
+    if (!irA) return;
+    const abrir = irA.destino !== "videos";
+    setImagenesAbiertas(abrir);
+    const id = requestAnimationFrame(() => {
+      const el = document.getElementById(
+        irA.destino === "base"
+          ? "grupo-imagenes-base"
+          : irA.destino === "derivadas"
+            ? "grupo-imagenes-derivadas"
+            : "tabla-clips",
+      );
+      if (el) scrollearHasta(el);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [irA]);
 
   /*
     ─── POR QUE IMAGENES Y LOG VAN ADENTRO DEL SCROLL DE LOS CLIPS ────────────
@@ -768,6 +850,7 @@ function ImagenesYClips({
         {imagenesAbiertas && (
           <div id="seccion-imagenes" className="mt-3 flex flex-col gap-4">
             <GrupoImagenes
+              id="grupo-imagenes-base"
               title="Imágenes base (text2image)"
               jobs={groups.t2i}
               projectId={projectId}
@@ -775,6 +858,7 @@ function ImagenesYClips({
               meta={imageMeta}
             />
             <GrupoImagenes
+              id="grupo-imagenes-derivadas"
               title="Imágenes derivadas (image2image · misma identidad)"
               jobs={groups.i2i}
               projectId={projectId}
@@ -812,12 +896,14 @@ function ImagenesYClips({
 }
 
 function GrupoImagenes({
+  id,
   title,
   jobs,
   projectId,
   handlers,
   meta,
 }: {
+  id: string;
   title: string;
   jobs: JobRecord[];
   projectId: string;
@@ -826,7 +912,7 @@ function GrupoImagenes({
 }) {
   if (jobs.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2">
+    <div id={id} className="flex flex-col gap-2">
       <h3 className="text-label font-medium uppercase tracking-wide text-fg-dim">
         {title} <span className="font-mono tnum">({jobs.length})</span>
       </h3>
@@ -1194,7 +1280,7 @@ function PipelineClips({
         */}
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 py-2 sm:px-4">
           {encabezado}
-          <table className="w-full text-body">
+          <table id="tabla-clips" className="w-full text-body">
             <caption className="sr-only">Clips del proyecto, en orden de timeline</caption>
             <thead>
               <tr className="border-b border-divider text-left text-label uppercase tracking-wide text-fg-dim">

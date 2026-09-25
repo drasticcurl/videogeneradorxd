@@ -1,7 +1,14 @@
 "use client";
 /**
- * Wizard de 3 pasos para armar un proyecto nuevo: brief/PlanJSON -> modelos y
- * aprobacion -> revision final y generar.
+ * Pantalla de "Nuevo proyecto", en UN SOLO PASO: nombre, modelos y aprobacion,
+ * brief/PlanJSON y el plan interpretado (clips, avatares, JSON y costo) viven en la
+ * misma pantalla con scroll, y "Generar" queda fijo abajo.
+ *
+ * Antes era un wizard de 3 pasos y se bugeaba: el plan aparecia en el paso 3 y no
+ * al lado del brief que lo generaba, se podia saltar pasos desde el stepper con
+ * cosas a medio cargar, y el modelo que interpreta el brief se elegia en el paso 2,
+ * DESPUES de haber interpretado. Ahora el orden de la pantalla es el orden real:
+ * primero los modelos, despues el brief, y el plan aparece debajo apenas existe.
  *
  * ─── LO QUE NO CAMBIA ────────────────────────────────────────────────────────
  *
@@ -28,7 +35,6 @@
  *   - el indicador compara `d.id === r.id` EXACTO, sin normalizar de nuevo.
  */
 import {
-  ArrowLeft,
   ArrowRight,
   Check,
   ClipboardText,
@@ -69,7 +75,6 @@ import type { Tone } from "@/lib/ui-tokens";
 import { useProjectStore } from "@/store/useProjectStore";
 
 type Mode = "ia" | "json";
-type Paso = 1 | 2 | 3;
 
 /**
  * Un PlanJSON leido de un archivo al importar una carpeta en lote.
@@ -104,20 +109,6 @@ const IMPORT_VISUAL: Record<
   error: { tone: "danger", label: "Error al crear" },
 };
 
-const PASOS: { n: Paso; label: string; hint: string }[] = [
-  { n: 1, label: "Brief", hint: "Interpretá un brief con IA o pegá un PlanJSON." },
-  {
-    n: 2,
-    label: "Modelos y aprobación",
-    hint: "Elegí los modelos y si cada job se aprueba solo.",
-  },
-  {
-    n: 3,
-    label: "Revisá el plan y generá",
-    hint: "Chequeá los clips y el costo antes de gastar.",
-  },
-];
-
 export function NuevoProyectoWizard({ onCreado }: { onCreado: () => void }) {
   const router = useRouter();
   const {
@@ -143,7 +134,6 @@ export function NuevoProyectoWizard({ onCreado }: { onCreado: () => void }) {
     uploadReferences,
   } = useProjectStore();
 
-  const [paso, setPaso] = useState<Paso>(1);
   const [name, setName] = useState("");
   const [mode, setMode] = useState<Mode>("ia");
   const [jsonText, setJsonText] = useState("");
@@ -381,64 +371,43 @@ export function NuevoProyectoWizard({ onCreado }: { onCreado: () => void }) {
     (i) => i.plan && (i.status === "listo" || i.status === "error"),
   ).length;
 
-  // Avanzar de paso no valida nada mas que "hay algo cargado": el plan puede venir
-  // incompleto (JSON pegado a mano) y el paso 3 ya deja verlo y arreglarlo, como
-  // hacia el formulario largo original.
-  const puedeAvanzarDePaso1 = mode === "ia" ? brief.trim().length > 0 || !!plan : true;
+  // Cuando aparece un plan (recien interpretado o recien cargado), se lleva la
+  // pantalla hasta el: si no, queda debajo del brief y parece que no paso nada.
+  //
+  // Se scrollea SOLO el contenedor del formulario, a mano. `scrollIntoView` mueve
+  // todos los ancestros scrolleables, incluido el shell de alto fijo de la app:
+  // se iba el header de arriba y la barra de "Generar" quedaba flotando.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const planRef = useRef<HTMLElement>(null);
+  const habiaPlan = useRef(false);
+  useEffect(() => {
+    const cont = scrollRef.current;
+    const destino = planRef.current;
+    if (plan && !habiaPlan.current && cont && destino) {
+      const top =
+        destino.getBoundingClientRect().top - cont.getBoundingClientRect().top + cont.scrollTop;
+      cont.scrollTo({ top: top - 16, behavior: "smooth" });
+    }
+    habiaPlan.current = Boolean(plan);
+  }, [plan]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* ─────────────────────────── stepper ─────────────────────────── */}
-      <div className="border-b border-divider px-4 py-4 sm:px-6">
-        <ol className="flex flex-wrap items-center gap-2">
-          {PASOS.map((p, i) => {
-            const activo = p.n === paso;
-            const completado = p.n < paso;
-            return (
-              <li key={p.n} className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPaso(p.n)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-md px-3 py-1.5 text-body font-medium transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                    activo
-                      ? "bg-accent/10 text-fg"
-                      : "text-fg-dim hover:bg-surface-hi hover:text-fg",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "code tnum flex size-5 shrink-0 items-center justify-center rounded-full text-label",
-                      completado
-                        ? "bg-ok/20 text-ok"
-                        : activo
-                          ? "text-accent"
-                          : "bg-surface-hi text-fg-dim",
-                    )}
-                  >
-                    {completado ? <Check className="size-3.5" aria-hidden /> : p.n}
-                  </span>
-                  {p.label}
-                </button>
-                {i < PASOS.length - 1 && (
-                  <span aria-hidden className="text-fg-dim/40">
-                    /
-                  </span>
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      </div>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+        <div className="mx-auto max-w-[1080px] space-y-10">
+          <Input
+            label="Nombre del proyecto"
+            hint="Opcional. Vacío queda como “Proyecto” más la fecha."
+            placeholder="ej. VSL Natalia"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
 
-      {/* ─────────────────────────── contenido del paso ─────────────────────────── */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-        <div className="mx-auto max-w-[1080px] space-y-6">
-          {paso === 1 && (
-            <PasoBrief
-              name={name}
-              setName={setName}
+          <SeccionModelos autoApprove={autoApprove} setAutoApprove={setAutoApprove} />
+
+          <section className="space-y-3">
+            <h2 className="text-title font-semibold text-fg">Brief</h2>
+            <SeccionBrief
               mode={mode}
               setMode={setMode}
               brief={brief}
@@ -465,14 +434,11 @@ export function NuevoProyectoWizard({ onCreado }: { onCreado: () => void }) {
               setImportError={setImportError}
               references={references}
             />
-          )}
+          </section>
 
-          {paso === 2 && (
-            <PasoModelos autoApprove={autoApprove} setAutoApprove={setAutoApprove} />
-          )}
-
-          {paso === 3 && (
-            <PasoRevision
+          <section ref={planRef} className="space-y-3">
+            <h2 className="text-title font-semibold text-fg">Plan</h2>
+            <SeccionPlan
               plan={plan}
               estimate={estimate}
               references={references}
@@ -481,60 +447,42 @@ export function NuevoProyectoWizard({ onCreado }: { onCreado: () => void }) {
               updateReference={updateReference}
               removeReference={removeReference}
               setPlan={setPlan}
-              creating={creating}
-              createError={createError}
               autoApprove={autoApprove}
-              handleGenerateAll={handleGenerateAll}
             />
-          )}
+          </section>
         </div>
       </div>
 
       {/* ─────────────────────────── footer fijo ─────────────────────────── */}
       <BarraInferior className="justify-between">
-        <p className="min-w-0 text-label text-fg-dim">
-          {PASOS.find((p) => p.n === paso)?.hint}
-        </p>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="ghost"
-            icon={<ArrowLeft className="size-4" aria-hidden />}
-            disabled={paso === 1}
-            onClick={() => setPaso((p) => (p > 1 ? ((p - 1) as Paso) : p))}
-          >
-            Atrás
-          </Button>
-          {paso < 3 ? (
-            <Button
-              variant="primary"
-              icon={<ArrowRight className="size-4" aria-hidden />}
-              disabled={paso === 1 && !puedeAvanzarDePaso1}
-              onClick={() => setPaso((p) => (p < 3 ? ((p + 1) as Paso) : p))}
-            >
-              Siguiente
-            </Button>
-          ) : (
-            <Button
-              variant="primary"
-              icon={<Play className="size-4" aria-hidden />}
-              loading={creating}
-              disabled={!plan}
-              onClick={() => void handleGenerateAll()}
-            >
-              Generar
-            </Button>
-          )}
-        </div>
+        {createError ? (
+          <p role="alert" className="min-w-0 text-label text-danger">
+            {createError}
+          </p>
+        ) : (
+          <p className="min-w-0 text-label text-fg-dim">
+            {plan
+              ? "Revisá los clips y el costo antes de gastar."
+              : "Interpretá un brief con IA o cargá un PlanJSON para poder generar."}
+          </p>
+        )}
+        <Button
+          variant="primary"
+          icon={<Play className="size-4" aria-hidden />}
+          loading={creating}
+          disabled={!plan}
+          onClick={() => void handleGenerateAll()}
+        >
+          Generar
+        </Button>
       </BarraInferior>
     </div>
   );
 }
 
-/* ═══════════════════════════════ Paso 1 · Brief ═══════════════════════════════ */
+/* ═══════════════════════════════ Brief ═══════════════════════════════ */
 
-function PasoBrief({
-  name,
-  setName,
+function SeccionBrief({
   mode,
   setMode,
   brief,
@@ -561,8 +509,6 @@ function PasoBrief({
   setImportError,
   references,
 }: {
-  name: string;
-  setName: (v: string) => void;
   mode: Mode;
   setMode: (v: Mode) => void;
   brief: string;
@@ -591,14 +537,6 @@ function PasoBrief({
 }) {
   return (
     <div className="space-y-6">
-      <Input
-        label="Nombre del proyecto"
-        hint="Opcional. Vacío queda como “Proyecto” más la fecha."
-        placeholder="ej. VSL Natalia"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Segmented
           etiqueta="Modo de armar el plan"
@@ -648,7 +586,7 @@ function PasoBrief({
         <div className="space-y-3">
           <Textarea
             label="Brief del anuncio"
-            hint={`Lo interpreta ${modeloDelBrief}. Se cambia en el paso "Modelos y aprobación".`}
+            hint={`Lo interpreta ${modeloDelBrief}. Se cambia en "Modelos", arriba.`}
             placeholder="Pegá acá tu brief largo con avatares, b-roll y clips en orden…"
             value={brief}
             onChange={(e) => setBrief(e.target.value)}
@@ -835,9 +773,9 @@ function PasoBrief({
   );
 }
 
-/* ═══════════════════ Paso 2 · Modelos y aprobación ═══════════════════ */
+/* ═══════════════════════ Modelos y aprobación ═══════════════════════ */
 
-function PasoModelos({
+function SeccionModelos({
   autoApprove,
   setAutoApprove,
 }: {
@@ -884,9 +822,9 @@ function PasoModelos({
   );
 }
 
-/* ═══════════════ Paso 3 · Revisá el plan y generá ═══════════════ */
+/* ═══════════════════════════════ Plan ═══════════════════════════════ */
 
-function PasoRevision({
+function SeccionPlan({
   plan,
   estimate,
   references,
@@ -895,10 +833,7 @@ function PasoRevision({
   updateReference,
   removeReference,
   setPlan,
-  creating,
-  createError,
   autoApprove,
-  handleGenerateAll,
 }: {
   plan: ProjectPlan | null;
   estimate: import("@/store/useProjectStore").CostEstimate | null;
@@ -911,18 +846,15 @@ function PasoRevision({
   ) => void;
   removeReference: (uid: string) => void;
   setPlan: (p: ProjectPlan) => void;
-  creating: boolean;
-  createError: string | null;
   autoApprove: boolean;
-  handleGenerateAll: () => Promise<void>;
 }) {
   if (!plan) {
     return (
       <Card className="flex flex-col items-start gap-1 border border-dashed border-divider bg-transparent px-5 py-8">
         <p className="text-title font-semibold text-fg">Todavía no hay un plan cargado</p>
         <p className="max-w-prose text-body text-fg-dim">
-          Volvé al paso 1: interpretá un brief con IA o pegá un PlanJSON para poder
-          revisarlo acá antes de generar.
+          Interpretá el brief con IA o cargá un PlanJSON (arriba) y el plan aparece
+          acá para revisarlo antes de generar.
         </p>
       </Card>
     );
@@ -1120,7 +1052,7 @@ function PasoRevision({
           <EditorDePlan plan={plan} setPlan={setPlan} />
         </div>
 
-        {/* ── columna derecha: estimacion STICKY + generar ── */}
+        {/* ── columna derecha: estimacion STICKY ── */}
         <div className="space-y-4 lg:sticky lg:top-0 lg:self-start">
           {estimate ? (
             <CostEstimatePanel estimate={estimate} />
@@ -1135,21 +1067,8 @@ function PasoRevision({
             </Card>
           )}
 
+          {/* "Generar" vive en la barra fija de abajo: siempre a mano, sin scrollear. */}
           <Card className="space-y-3">
-            <Button
-              variant="primary"
-              className="w-full"
-              icon={<Play className="size-4" aria-hidden />}
-              loading={creating}
-              onClick={() => void handleGenerateAll()}
-            >
-              Generar todo
-            </Button>
-            {createError && (
-              <p role="alert" className="rounded-sm bg-danger/10 p-2 text-label text-danger">
-                {createError}
-              </p>
-            )}
             <p className="text-label text-fg-dim">
               {autoApprove ? (
                 <>
@@ -1173,7 +1092,7 @@ function PasoRevision({
 
 /**
  * Editor de texto plano del PlanJSON, con la misma validacion en vivo del modo
- * JSON del paso 1. Reemplaza a `<JsonEditor>` en este paso puntual: JsonEditor esta
+ * JSON de la sección Brief. Reemplaza a `<JsonEditor>` en la sección Plan: JsonEditor esta
  * pensado para un layout de dos columnas fijo, y aca la columna derecha la ocupa la
  * estimacion sticky. La logica (parsear, validar con el MISMO Zod, y solo llamar
  * `setPlan` si es valido) es la misma que hacia JsonEditor.

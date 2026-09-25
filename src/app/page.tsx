@@ -1,11 +1,11 @@
 "use client";
 /**
- * Home `/`: lista de proyectos de video, o el wizard de "Nuevo proyecto".
+ * Home `/`: lista de proyectos de video, o la pantalla de "Nuevo proyecto".
  *
  * Rediseño VISUAL: este archivo pasa de ser un formulario largo de ~1160 lineas a
  * ser un orquestador chico que alterna entre dos pantallas:
  *   - `HomeProyectos`      el listado con filtros, seleccion y cards con progreso.
- *   - `NuevoProyectoWizard` el wizard de 3 pasos que reemplaza al formulario largo.
+ *   - `NuevoProyectoWizard` la pantalla de un solo paso que reemplaza al formulario largo.
  *
  * Ningun fetch, payload ni accion del store cambio de lugar: se MOVIERON de archivo,
  * no de comportamiento. Ver el header de cada uno para el detalle.

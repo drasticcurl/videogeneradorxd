@@ -31,6 +31,13 @@ export interface EtapaResumen {
   label: string;
   hechos: number;
   total: number;
+  /**
+   * Si viene, la card es un BOTON que lleva a esa etapa (la seccion de imagenes, la
+   * lista de clips, el resultado). Sin esto es una card de solo lectura, como antes.
+   */
+  onClick?: () => void;
+  /** Tooltip y nombre accesible del boton: a donde lleva. */
+  destino?: string;
 }
 
 /**
@@ -58,8 +65,8 @@ function EtapaCard({ etapa }: { etapa: EtapaResumen }) {
   const pct = total > 0 ? Math.round((hechos / total) * 100) : 0;
   const txt = total === 1 ? (hechos >= total ? "listo" : "—") : `${hechos}/${total}`;
 
-  return (
-    <div className="flex flex-[1_0_140px] flex-col gap-1.5 rounded-md bg-surface p-2.5">
+  const contenido = (
+    <>
       <div className="flex items-center justify-between gap-2 text-label">
         <span className="truncate text-fg-dim">{label}</span>
         <span className="code tnum shrink-0 text-fg">{txt}</span>
@@ -73,7 +80,25 @@ function EtapaCard({ etapa }: { etapa: EtapaResumen }) {
           style={{ width: `${pct}%` }}
         />
       </div>
-    </div>
+    </>
+  );
+
+  const base = "flex flex-[1_0_140px] flex-col gap-1.5 rounded-md bg-surface p-2.5";
+  if (!etapa.onClick) return <div className={base}>{contenido}</div>;
+  return (
+    <button
+      type="button"
+      onClick={etapa.onClick}
+      title={etapa.destino}
+      aria-label={`${label}: ${txt}. ${etapa.destino ?? ""}`.trim()}
+      className={cn(
+        base,
+        "text-left transition-shadow hover:ring-1 hover:ring-border",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+      )}
+    >
+      {contenido}
+    </button>
   );
 }
 
