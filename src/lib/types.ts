@@ -443,3 +443,18 @@ export interface EstadoCuentaVertex {
 export type PruebaCuentaVertex =
   | { ok: true }
   | { ok: false; motivo: string; ayuda: { texto: string; url: string } | null };
+
+/* ─── Preferencias por usuario (src/lib/preferencias.ts) ─────────────────── */
+
+/** GET y PUT /api/preferencias. */
+export interface PreferenciasDeUsuario {
+  /**
+   * Clips de video que se generan SIN APROBAR antes de frenar, en los proyectos con
+   * aprobacion manual. 0 = sin limite: genera todos de una.
+   */
+  loteVideos: number;
+  /** El que rige si el usuario no eligio uno (`PIPELINE_APPROVAL_BATCH_VIDEOS`). */
+  loteVideosDefault: number;
+  /** true si el usuario eligio el suyo; false si rige el default. */
+  loteVideosPropio: boolean;
+}

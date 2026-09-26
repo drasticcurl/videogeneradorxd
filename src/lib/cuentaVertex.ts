@@ -1,6 +1,7 @@
 /**
- * La cuenta de Vertex de cada usuario: la que cargo desde la app (el header, "Tu cuenta
- * de Vertex"), y si no cargo ninguna, la del environment (`vertexCuentaDelEnv`).
+ * La cuenta de Vertex de cada usuario: la que cargo desde la app (el header, "Tu
+ * configuración" → "Cuenta de Vertex"), y si no cargo ninguna, la del environment
+ * (`vertexCuentaDelEnv`).
  *
  *   vertexCuentaFor(usuario)  →  1. la cargada desde la app
  *                                2. `GOOGLE_*_<NOMBRE>` del .env (la configuro el admin)

@@ -6,6 +6,34 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-26 (3) — El lote de clips antes de pedir aprobación es de cada usuario
+
+**El problema:** en modo manual, la cola genera hasta 5 clips sin aprobar por proyecto y frena hasta que
+alguien los apruebe. Ese 5 era uno solo para todos (`PIPELINE_APPROVAL_BATCH_VIDEOS`) y cambiarlo era
+tocar el `.env` del server y desplegar. Cuánto se gasta en Veo sin mirar es una decisión de cada uno.
+
+**Qué cambió:**
+
+- **"Tu configuración", en el nombre del header**, con dos pestañas: *Cuenta de Vertex* (lo de antes) y
+  **Aprobación**, donde cada uno elige cuántos clips se generan antes de frenar en SUS proyectos: 1 a 50,
+  o 0 = sin límite (con aviso). "Volver al default" lo borra y rige el del `.env`.
+- **La cola lo lee del dueño del proyecto** (`loteDeAprobacion`, `src/lib/preferencias.ts`), tanto para
+  frenar como para el aviso "Lote de N clips listo… (de a N)". Se guarda en `DATA_DIR/preferencias.json`.
+  Las imágenes siguen con el global (0: se generan todas y se revisan en bloque).
+- **Guardar no arranca nada:** un proyecto ya frenado toma el número nuevo cuando se aprueba un clip o se
+  reanuda. Si guardar bombeara la cola, subir el número arrancaría clips de golpe sin que nadie apriete
+  Generar.
+- El diálogo de la cuenta pasó a ser una pestaña (`CuentaVertexDialog` → `CuentaVertexPanel`, adentro de
+  `ConfiguracionDialog`).
+
+**Verificado en mock**, con aprobación manual y dos usuarios: Lucho con lote 2 frenó con 2 clips esperando
+aprobación (aviso "de a 2") y al aprobarlos siguió con 2 más; Ivan, con el default, generó sus 5 sin
+frenar. La API rechaza 51, -1, 2.5 y texto, y `null` vuelve al default. La pestaña en Chrome: carga el
+valor, guarda con Enter, avisa con 0, y "Volver al default". `_verificacion-endpoints.sh` (con las líneas
+de `CuentaVertexPanel` y `AprobacionPanel`), `_verificacion-aislamiento.sh` y typecheck en verde.
+
+---
+
 ## 2026-09-26 (2) — `deploy.sh` ya no le pasa las variables de la app a PM2
 
 **El problema:** el paso 3 de `deploy.sh` hace `source` del `.env.production` (para los guards) y después

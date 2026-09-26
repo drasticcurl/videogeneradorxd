@@ -13,6 +13,7 @@
  */
 import { config } from "../config";
 import { vertexCuentaFor } from "../cuentaVertex";
+import { loteDeAprobacion } from "../preferencias";
 import { jobsDb, projectsDb } from "../db";
 import type { JobRecord, JobType, ProjectStatus } from "../types";
 import { ProviderHttpError } from "../providers/types";
@@ -381,8 +382,9 @@ function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   // Gate por LOTES (modo manual): no arrancamos mas de N jobs del MISMO tipo que
   // esten "sin aprobar" (generando + esperando aprobacion). El limite es por TIPO:
   // las imagenes van sin limite (se genera la tanda entera y se revisa en bloque) y
-  // los videos de a 5, porque cada clip de Veo son varios USD. Ver config.pipeline.
-  const limit = approvalBatchFor(job.type);
+  // los videos de a N, porque cada clip de Veo son varios USD. N lo elige el dueño
+  // del proyecto en su configuracion (default 5). Ver preferencias.ts.
+  const limit = approvalBatchFor(job);
   if (limit > 0 && inFlightUnapproved(job.projectId, job.type) >= limit) {
     return "wait";
   }
@@ -402,11 +404,12 @@ function depReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   return "wait"; // dep pending/generating/awaiting_approval
 }
 
-/** Tamaño del lote de aprobacion para un tipo de job (0 = sin limite). */
-function approvalBatchFor(type: JobRecord["type"]): number {
-  return type === "video"
-    ? config.pipeline.approvalBatchVideos
-    : config.pipeline.approvalBatchImages;
+/**
+ * Tamaño del lote de aprobacion para un job (0 = sin limite). Los videos usan el del
+ * DUEÑO del proyecto, las imagenes el global (ver `loteDeAprobacion`).
+ */
+function approvalBatchFor(job: JobRecord): number {
+  return loteDeAprobacion(projectsDb.get(job.projectId)?.owner ?? null, job.type);
 }
 
 /** Jobs del mismo tipo que estan generandose o esperando aprobacion (sin aprobar aun). */
@@ -651,13 +654,13 @@ function finalizeProjects(): void {
       const frenadoPorLote = jobs.find(
         (j) =>
           j.status === "pending" &&
-          approvalBatchFor(j.type) > 0 &&
+          approvalBatchFor(j) > 0 &&
           !isStageBlocked(j) &&
           depReason(j) === "run" &&
-          inFlightUnapproved(projectId, j.type) >= approvalBatchFor(j.type)
+          inFlightUnapproved(projectId, j.type) >= approvalBatchFor(j)
       );
       if (frenadoPorLote && !conReintentoProgramado) {
-        const limite = approvalBatchFor(frenadoPorLote.type);
+        const limite = approvalBatchFor(frenadoPorLote);
         const tipo = frenadoPorLote.type === "video" ? "clips" : "imágenes";
         const enEspera = jobs.filter(
           (j) => j.type === frenadoPorLote.type && j.status === "awaiting_approval"

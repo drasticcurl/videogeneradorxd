@@ -10,15 +10,16 @@
  * El rediseño toco SOLO el JSX. La funcion `salir()` quedo igual, incluido el
  * `window.location.assign`: ver el comentario adentro, es un bug conocido.
  *
- * El nombre es ademas el boton de "Tu cuenta de Vertex" (CuentaVertexDialog): el color
- * dice de un vistazo si generás con la tuya o con la compartida. Los fetch de la cuenta
- * viven en el dialogo y no aca, asi este archivo sigue llamando solo a /api/login.
+ * El nombre es ademas el boton de "Tu configuración" (ConfiguracionDialog: cuenta de
+ * Vertex y lote de aprobacion): el color dice de un vistazo si generás con la cuenta
+ * tuya o con la compartida. Los fetch viven en las pestañas del dialogo y no aca, asi
+ * este archivo sigue llamando solo a /api/login.
  */
 
 import { SignOut } from "@phosphor-icons/react";
 import { useState } from "react";
 
-import CuentaVertexDialog from "@/components/CuentaVertexDialog";
+import ConfiguracionDialog from "@/components/ConfiguracionDialog";
 import { Badge, Button } from "@/components/ui";
 import type { EstadoCuentaVertex } from "@/lib/types";
 import { estadoDeCuentaVertex } from "@/lib/ui-tokens";
@@ -33,7 +34,7 @@ export default function SessionBar({
 }) {
   const [saliendo, setSaliendo] = useState(false);
   const [cuenta, setCuenta] = useState(cuentaVertex);
-  const [verCuenta, setVerCuenta] = useState(false);
+  const [verConfiguracion, setVerConfiguracion] = useState(false);
   // En mock no se gasta nada: el nombre queda neutro para no pedir una accion que no hace falta.
   const visual =
     cuenta.modo === "vertex"
@@ -73,19 +74,19 @@ export default function SessionBar({
         variant="ghost"
         size="sm"
         className="px-1"
-        onClick={() => setVerCuenta(true)}
-        aria-label={resumen}
+        onClick={() => setVerConfiguracion(true)}
+        aria-label={`Tu configuración. ${resumen}`}
         title={resumen}
       >
         <Badge tone={visual.tone} punto={cuenta.modo === "vertex"} className="code">
           {usuario.toUpperCase()}
         </Badge>
       </Button>
-      <CuentaVertexDialog
-        abierto={verCuenta}
-        onCambio={setVerCuenta}
-        estado={cuenta}
-        onEstado={setCuenta}
+      <ConfiguracionDialog
+        abierto={verConfiguracion}
+        onCambio={setVerConfiguracion}
+        cuenta={cuenta}
+        onCuenta={setCuenta}
       />
       {/*
         `loading` deshabilita y pone el spinner PERO no cambia el texto (§5, regla 1):

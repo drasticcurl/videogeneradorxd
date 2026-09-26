@@ -191,8 +191,8 @@ Por default todos generan con **la cuenta compartida** (`GOOGLE_CLOUD_PROJECT` +
 puede tener **la suya**: lo que genera se factura a su proyecto de Google Cloud y gasta su cuota, no
 la del otro.
 
-**Cada uno la carga solo, desde la app:** click en su nombre, arriba a la derecha → *Tu cuenta de
-Vertex*. Ahí ve con qué cuenta genera hoy, sube el JSON de la suya y tiene el **tutorial paso a paso**
+**Cada uno la carga solo, desde la app:** click en su nombre, arriba a la derecha → *Tu
+configuración* → *Cuenta de Vertex*. Ahí ve con qué cuenta genera hoy, sube el JSON de la suya y tiene el **tutorial paso a paso**
 para sacarlo (proyecto con facturación → habilitar la Vertex AI API → cuenta de servicio con el rol
 *Usuario de Vertex AI* → clave JSON). El color del nombre lo dice de un vistazo: **verde** = cuenta
 propia, **ámbar** = la compartida, **rojo** = ninguna (no puede generar).
@@ -584,7 +584,7 @@ Ver `.env.example`. Las que importan:
 | `PIPELINE_CONCURRENCY` | `3` | Jobs en paralelo |
 | `PIPELINE_AUTO_APPROVE` | `true` | Auto-aprueba cada job al terminar |
 | `PIPELINE_APPROVAL_BATCH_IMAGES` | `0` | Lote manual de imágenes (0 = sin límite) |
-| `PIPELINE_APPROVAL_BATCH_VIDEOS` | `5` | Lote manual de videos |
+| `PIPELINE_APPROVAL_BATCH_VIDEOS` | `5` | Lote manual de videos: el **default**. Cada usuario elige el suyo en *Tu configuración → Aprobación* |
 | `PIPELINE_MAX_ATTEMPTS` | `3` | Reintentos por job (errores reales) |
 | `PIPELINE_BACKOFF_MS` | `1500` | Backoff base |
 | `PIPELINE_RATE_LIMIT_BACKOFF_MS` | `45000` | Backoff específico para 429 |
@@ -636,6 +636,13 @@ PIPELINE_AUTO_APPROVE=false
 PIPELINE_APPROVAL_BATCH_IMAGES=0
 PIPELINE_APPROVAL_BATCH_VIDEOS=5
 ```
+
+**El lote de videos es de cada usuario.** En *Tu configuración → Aprobación* (click en tu nombre) cada
+uno elige cuántos clips se generan sin aprobar antes de frenar en SUS proyectos: 1 a 50, o 0 = sin
+límite (con un aviso, porque genera todos los clips de una). El que no elige usa
+`PIPELINE_APPROVAL_BATCH_VIDEOS`. Se guarda en `DATA_DIR/preferencias.json` y la cola lo lee del dueño
+de cada proyecto. Guardar no arranca nada: un proyecto ya frenado toma el número nuevo cuando se aprueba
+un clip o se reanuda. Las imágenes siguen con el global.
 
 ---
 
@@ -748,7 +755,7 @@ commit y explicá por qué. Nunca la toques "para que pase".
 | *"No se pudo usar la cuenta de Vertex que cargó ivan"* | se borró la clave en Google, o el login de gcloud expiró | Que la pruebe y la vuelva a cargar desde su nombre, arriba a la derecha |
 | *"No se pudieron usar las credenciales de Vertex de ivan"* | el JSON de `GOOGLE_APPLICATION_CREDENTIALS_IVAN` no existe, no se puede leer o la clave se borró en Google | Revisá el path y los permisos (`deploy`, 600); si borraron la clave, generá otra |
 | *"ivan tiene credenciales propias … pero falta GOOGLE_CLOUD_PROJECT_IVAN"* | JSON propio sin proyecto propio | Agregá `GOOGLE_CLOUD_PROJECT_IVAN`. No cae al compartido a propósito |
-| 403 *"requires billing to be enabled"* / *"Permission denied"* | el proyecto propio sin facturación, sin la Vertex AI API o sin el rol en la cuenta de servicio | *Probar conexión* en *Tu cuenta de Vertex* (click en tu nombre) dice cuál falta y da el link |
+| 403 *"requires billing to be enabled"* / *"Permission denied"* | el proyecto propio sin facturación, sin la Vertex AI API o sin el rol en la cuenta de servicio | *Probar conexión* en *Tu configuración → Cuenta de Vertex* (click en tu nombre) dice cuál falta y da el link |
 | Cambio de voz: *"No quedan créditos en ElevenLabs"* | la cuenta se quedó sin créditos | Cargá créditos o esperá a que se renueve el plan; después "Reintentar" |
 | Cambio de voz: *"no tiene permiso para esto"* | la key restringida no tiene Speech to Speech o Voices | Creá la key con Speech to Speech + Voices (lectura) |
 | "Volver a unir" contesta *"Hay un cambio de voz en curso"* (409) | hay una conversión viva en ese proyecto | Esperá a que termine o cancelala en el panel Voz |

@@ -249,7 +249,8 @@ export const config = {
      *
      *  - VIDEOS (5). Aca el freno es a proposito y se queda: cada clip de Veo son
      *    varios USD y hay rate limit por minuto. Un tablero con 95 clips no puede
-     *    comprometer todo el gasto de una; se revisan de a 5.
+     *    comprometer todo el gasto de una; se revisan de a 5. Es el DEFAULT: cada
+     *    usuario elige el suyo en su configuracion (src/lib/preferencias.ts).
      *
      * PIPELINE_APPROVAL_BATCH (el nombre viejo, uno solo para los dos tipos) sigue
      * andando como fallback para no romper un .env que ya lo tenga seteado.

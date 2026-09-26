@@ -121,7 +121,7 @@ export function estadoDeVersionDeVoz(estado: EstadoVersionDeVoz | string): Estad
 
 /**
  * De donde sale la cuenta de Vertex de un usuario (src/lib/cuentaVertex.ts) -> como se
- * ve en el header y en "Tu cuenta de Vertex". La compartida va en `attention` por lo
+ * ve en el header y en "Tu configuración → Cuenta de Vertex". La compartida va en `attention` por lo
  * mismo que todo lo demas: el acento es "esto espera algo de vos", y lo que espera es
  * que cargue la suya para que no se le facture a otro.
  */
