@@ -684,6 +684,11 @@ Lo que el script garantiza:
 - **`npm ci --include=dev` es obligatorio**: el guard hace `source` del `.env.production`, que setea
   `NODE_ENV=production`, y con eso `npm ci` saltea las devDependencies — donde viven `typescript`,
   `tailwind` y `postcss`. Sin el flag el typecheck muere con `tsc: not found`.
+- **Llama a PM2 con el environment limpio** (`env -i`, función `pm2_limpio`). El paso 3 hace `source`
+  del `.env.production`, y un `pm2 reload --update-env` desde ese shell le copiaba todas las variables al
+  proceso, fusionadas con las viejas: una variable borrada del `.env.production` seguía viva (sacar una
+  `PASSWORD_<NOMBRE>` no le quitaba el acceso a nadie). Las variables las lee Next del `.env.production`
+  del standalone; PM2 no lleva ninguna.
 - **Completa el standalone a mano**: Next no copia `.next/static`, `public/`, `.env.production` ni
   `prompts/` adentro de `.next/standalone`. Sin eso la app sale sin CSS.
 - **Swap atómico** con `mv -T` (un solo `rename(2)`). `ln -sfn` hace unlink + symlink, y en esa

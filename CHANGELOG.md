@@ -6,6 +6,25 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-26 (2) — `deploy.sh` ya no le pasa las variables de la app a PM2
+
+**El problema:** el paso 3 de `deploy.sh` hace `source` del `.env.production` (para los guards) y después
+`pm2 reload --update-env` desde ese mismo shell, así que PM2 guardaba todas las variables de la app en el
+proceso. PM2 las **fusiona** con las que ya tenía: una variable borrada del `.env.production` seguía viva en
+el proceso, y como `process.env` le gana al `.env` que lee Next, la app la seguía usando. Apareció al
+apagar la cuenta de Vertex compartida en producción: con `GOOGLE_CLOUD_PROJECT` comentada, Ivan seguía
+generando con ella. Con `PASSWORD_<NOMBRE>` era peor: **borrarla para sacarle el acceso a alguien no lo
+sacaba**. Y `pm2 save` dejaba los secretos escritos en `~/.pm2/dump.pm2`.
+
+**Qué cambió:** `deploy.sh` llama a PM2 con `env -i` (solo `HOME` y `PATH`); las variables las lee Next del
+`.env.production` del standalone, como ya decía `ecosystem.config.js`. En producción se hizo una vez
+`pm2 delete` + `pm2 start` limpio + `pm2 save` para sacar las que habían quedado guardadas.
+
+**Verificado en producción:** después del reinicio limpio, `pm2 env` muestra solo `NODE_ENV`, `PORT` y
+`HOSTNAME`; Lucho y Nahuel ven su cuenta y la prueba contra Google da OK; Ivan ve "Sin cuenta".
+
+---
+
 ## 2026-09-26 — Una cuenta de Vertex por usuario, que cada uno carga desde la app
 
 **El problema:** todos generaban con la misma cuenta de Google Cloud (`GOOGLE_CLOUD_PROJECT` + un solo

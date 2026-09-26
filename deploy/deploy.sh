@@ -299,11 +299,31 @@ mv -Tf "$BASE/current.tmp" "$BASE/current"
 ACTIVATED=1
 log "current → $STANDALONE"
 
+# PM2 SIEMPRE con el environment limpio, nunca con el de este script.
+#
+# El paso 3 hace `set -a; . .env.production`, asi que este shell tiene TODAS las vars
+# de la app exportadas. Un `pm2 reload --update-env` desde aca se las copia al
+# environment que PM2 guarda del proceso, y PM2 las FUSIONA con las que ya tenia:
+# una var que se borra del .env.production queda viva en el proceso para siempre, y
+# como process.env le gana al .env que lee Next, la app la sigue usando. Paso de
+# verdad (2026-09-26): se comento GOOGLE_CLOUD_PROJECT para dejar a un usuario sin la
+# cuenta compartida, y el proceso la siguio usando. Con PASSWORD_<NOMBRE> es peor:
+# borrarla para echar a alguien no lo echaba. Y `pm2 save` escribia los secretos en
+# ~/.pm2/dump.pm2.
+#
+# Las vars de la app las lee Next del .env.production del standalone (paso 5); PM2 no
+# tiene que llevar ninguna. `env -i` le pasa solo lo que necesita para encontrar su
+# daemon. Si algun dia hubiera que limpiar un proceso que ya quedo sucio: `pm2 delete`
+# + `pm2 start` del ecosystem con este mismo `env -i`, y `pm2 save`.
+pm2_limpio() {
+  env -i HOME="$HOME" PATH="$PATH" ${PM2_HOME:+PM2_HOME="$PM2_HOME"} pm2 "$@"
+}
+
 rollback_to_previous() {
   if [[ -n "$PREVIOUS" && -f "$PREVIOUS/server.js" ]]; then
     ln -sfn "$PREVIOUS" "$BASE/current.tmp"
     mv -Tf "$BASE/current.tmp" "$BASE/current"
-    pm2 reload "$APP" --update-env || true
+    pm2_limpio reload "$APP" --update-env || true
     log "revertido a $PREVIOUS"
   else
     log "sin release anterior valida para revertir (¿primer deploy?)"
@@ -315,10 +335,10 @@ rollback_to_previous() {
 # jobs en vuelo se pierden (los archivos ya escritos quedan; el progreso no).
 # No deployes con una generacion corriendo.
 if pm2 describe "$APP" >/dev/null 2>&1; then
-  pm2 reload "$APP" --update-env || { rollback_to_previous; fail "pm2 reload falló"; }
+  pm2_limpio reload "$APP" --update-env || { rollback_to_previous; fail "pm2 reload falló"; }
 else
   log "$APP no existe en PM2 — primer arranque"
-  pm2 start "$ECOSYSTEM" || { rollback_to_previous; fail "pm2 start falló"; }
+  pm2_limpio start "$ECOSYSTEM" || { rollback_to_previous; fail "pm2 start falló"; }
 fi
 
 # Se chequea /login y no /: `/` redirige al login con 307 cuando no hay cookie,
@@ -339,9 +359,9 @@ fi
 log "health check ok (/login → 200)"
 
 # El guard de mas arriba mira el .env; esto mira lo que el proceso VE de verdad.
-# Un .env correcto con un proceso que quedo con el environment viejo (reload sin
-# --update-env, o un pm2 de otro usuario) da exactamente el mismo sintoma que no
-# tener el archivo: se generan videos que nadie encuentra despues.
+# Un .env correcto con un proceso que quedo con el environment viejo (vars viejas
+# guardadas en PM2, ver `pm2_limpio`, o un pm2 de otro usuario) da exactamente el
+# mismo sintoma que no tener el archivo: se generan videos que nadie encuentra despues.
 VISTO="$(curl -s "http://127.0.0.1:$PORT/api/config" || true)"
 case "$VISTO" in
   *"$OUTPUT_DIR"*) log "el proceso ve OUTPUT_DIR=$OUTPUT_DIR" ;;
