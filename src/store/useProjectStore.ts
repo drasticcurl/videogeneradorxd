@@ -56,6 +56,8 @@ export interface AppConfig {
   defaultResolution: string;
   location: string;
   project: string | null;
+  /** true si el usuario genera con su propia cuenta de Vertex y no con la compartida. */
+  cuentaPropia: boolean;
   outputDir: string;
   dataDir: string;
   ffmpeg: boolean;

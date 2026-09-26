@@ -164,14 +164,57 @@ log "estado persistente: DATA_DIR=$DATA_DIR OUTPUT_DIR=$OUTPUT_DIR"
 
 # 3d. Credenciales de Vertex. En modo vertex, sin esto cada job falla en runtime
 # con un error de ADC y la UI muestra los jobs en rojo sin explicar por que.
+#
+# Se chequea POR USUARIO, con el mismo orden que `vertexCuentaFor` (src/lib/cuentaVertex.ts):
+#   1. la cuenta que cargo desde la app (DATA_DIR/cuentas-vertex/cuentas.json): ya se probo
+#      contra Google al cargarla, asi que aca no se mira nada mas;
+#   2. GOOGLE_CLOUD_PROJECT_<NOMBRE> (+ opcional GOOGLE_APPLICATION_CREDENTIALS_<NOMBRE>);
+#   3. la compartida (GOOGLE_CLOUD_PROJECT + GOOGLE_APPLICATION_CREDENTIALS).
+#
+# Lo que esta MAL configurado corta (un JSON ilegible, un JSON propio sin proyecto). Un
+# usuario SIN NINGUNA cuenta solo avisa: con la carga desde la app, el usuario nuevo entra
+# primero y carga la suya despues, y cortar el deploy por eso no lo dejaria entrar nunca.
 if [[ "${PROVIDER_MODE:-mock}" == "vertex" ]]; then
-  [[ -n "${GOOGLE_CLOUD_PROJECT:-}" ]] || fail "PROVIDER_MODE=vertex pero falta GOOGLE_CLOUD_PROJECT"
-  cred="${GOOGLE_APPLICATION_CREDENTIALS:-}"
-  [[ -n "$cred" ]] || fail "PROVIDER_MODE=vertex pero falta GOOGLE_APPLICATION_CREDENTIALS"
-  [[ -r "$cred" ]] || fail "no se puede leer GOOGLE_APPLICATION_CREDENTIALS='$cred' como $(id -un)"
-  python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$cred" \
-    || fail "'$cred' no es JSON valido"
-  log "vertex: proyecto $GOOGLE_CLOUD_PROJECT, credenciales en $cred"
+  chequear_json() { # $1 = nombre de la var, $2 = path
+    [[ -r "$2" ]] || fail "no se puede leer $1='$2' como $(id -un)"
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$2" \
+      || fail "$1='$2' no es JSON valido"
+  }
+  if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+    chequear_json GOOGLE_APPLICATION_CREDENTIALS "$GOOGLE_APPLICATION_CREDENTIALS"
+  fi
+  # Usuarios con cuenta cargada desde la app, en minusculas. Vacio si no hay ninguno o si
+  # el indice no se puede leer (ahi cada uno cae a las reglas del .env, que es lo mismo
+  # que haria la app).
+  CARGADAS=" $(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["porUsuario"]))' \
+    "$DATA_DIR/cuentas-vertex/cuentas.json" 2>/dev/null || true) "
+  for u in $USUARIOS; do
+    u_min="$(printf '%s' "$u" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$CARGADAS" == *" $u_min "* ]]; then
+      log "vertex: $u → cuenta cargada desde la app"
+      continue
+    fi
+    var_proy="GOOGLE_CLOUD_PROJECT_$u"
+    var_cred="GOOGLE_APPLICATION_CREDENTIALS_$u"
+    proy="${!var_proy:-}"
+    cred="${!var_cred:-}"
+    if [[ -n "$cred" ]]; then
+      # Sin proyecto propio la app NO cae al compartido (le facturaria a otro): corta.
+      [[ -n "$proy" ]] || fail "$var_cred esta pero falta $var_proy"
+      chequear_json "$var_cred" "$cred"
+      log "vertex: $u → cuenta propia, proyecto $proy, credenciales en $cred"
+    elif [[ -z "$proy" && -z "${GOOGLE_CLOUD_PROJECT:-}" ]]; then
+      log "AVISO: $u no tiene cuenta de Vertex y no hay compartida: no va a poder generar hasta cargar la suya desde la app (su nombre, arriba a la derecha)"
+    else
+      [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] \
+        || fail "PROVIDER_MODE=vertex: $u usa las credenciales compartidas pero falta GOOGLE_APPLICATION_CREDENTIALS (o dale $var_cred)"
+      if [[ -n "$proy" ]]; then
+        log "vertex: $u → proyecto propio $proy, credenciales compartidas"
+      else
+        log "vertex: $u → cuenta compartida, proyecto $GOOGLE_CLOUD_PROJECT"
+      fi
+    fi
+  done
 fi
 
 # 3e. Binarios del sistema que la app usa por spawn.

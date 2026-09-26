@@ -6,6 +6,58 @@ entender el estado sin leer 70 commits.
 
 ---
 
+## 2026-09-26 — Una cuenta de Vertex por usuario, que cada uno carga desde la app
+
+**El problema:** todos generaban con la misma cuenta de Google Cloud (`GOOGLE_CLOUD_PROJECT` + un solo
+`adc.json`), así que las imágenes y los videos de cada uno se facturaban juntos y gastaban la misma cuota.
+No había forma de separar quién pagaba qué, y cambiarlo pedía entrar al server.
+
+**Qué cambió:**
+
+- **"Tu cuenta de Vertex", en el nombre del header.** El nombre es ahora un botón con color (verde = cuenta
+  propia, ámbar = la compartida, rojo = ninguna) que abre un diálogo: con qué cuenta generás hoy, cargar
+  (o reemplazar, o quitar) el JSON de la tuya, y un **tutorial paso a paso** para sacarlo en la consola de
+  Google, con links a cada pantalla.
+- **"Probar y guardar" prueba antes de guardar, sin gastar** (token + `countTokens`, que es gratis). Si
+  falta la facturación, la Vertex AI API o el permiso, o si la llave está mal, dice cuál con el link a
+  donde se arregla, y no guarda nada: una cuenta rota guardada dejaba los jobs en rojo sin explicación.
+  *Probar conexión* prueba la que se usa hoy.
+- **La llave queda solo en el server** (`DATA_DIR/cuentas-vertex/`, carpeta 700, archivos 600, afuera de lo
+  que sirve `/api/files`) y ninguna respuesta la devuelve, ni su path. Se aceptan solo `service_account` y
+  `authorized_user`, reescritos con los campos necesarios: un `external_account` le puede hacer leer un
+  archivo al server, correr un ejecutable o pegarle a una URL, y eso no puede entrar por un upload.
+- **El ID de proyecto se valida** (va adentro del path de la URL de Vertex) y se completa solo con el
+  `project_id` del JSON.
+- **Orden de resolución** (`vertexCuentaFor`, `src/lib/cuentaVertex.ts`): la cargada desde la app, después
+  `GOOGLE_CLOUD_PROJECT_<NOMBRE>` / `GOOGLE_APPLICATION_CREDENTIALS_<NOMBRE>` del `.env` (la alternativa del
+  admin, mismo patrón que `PASSWORD_<NOMBRE>`), y por último la compartida. Sin tocar nada, todo sigue igual.
+- **Los jobs usan la cuenta del dueño del proyecto** (`project.owner`): la cola corre sin sesión.
+  `/api/parse` usa la de quien está logueado. `usuario` es **obligatorio** en las interfaces de los
+  proveedores: un camino nuevo que se olvide de pasarlo no compila, en vez de generar con la compartida.
+- **JSON propio del `.env` sin proyecto propio corta** y no cae al compartido: las credenciales de uno
+  generarían en el proyecto del otro y la factura le llegaría a quien no generó nada, sin error.
+- **La ventana de "N videos por minuto" es por cuenta** (clave: el proyecto de GCP), porque la cuota de Veo
+  es por proyecto. Con la ventana global, los videos de uno frenaban los del otro.
+- **El polling de Veo y la descarga de GCS usan la misma cuenta que lanzó la operación.**
+- **`deploy.sh` (guard 3d) chequea cada usuario:** reconoce la cuenta cargada desde la app, corta si algo
+  del `.env` está mal (JSON ilegible, JSON propio sin proyecto) y solo **avisa** si alguien no tiene
+  ninguna: el usuario nuevo tiene que poder entrar para cargar la suya.
+- `/api/config` devuelve el proyecto de quien pregunta (`project` + `cuentaPropia`).
+
+**Verificado:** 12 combinaciones de vars del `.env` dan la cuenta esperada; 30 chequeos de la API con la
+app levantada (validaciones, llave falsa rechazada por Google y no guardada, proyecto sin facturación con
+su link, cuenta real guardada con permisos 600/700 y solo los campos de la lista, *Probar conexión* por el
+mismo camino que un job, cada usuario ve solo la suya, reemplazar borra la llave vieja, quitar vuelve a la
+compartida); una llave con `token_uri` a otro dominio igual va a Google; el guard 3d en 18 casos; en mock
+con dos usuarios y 1 video por minuto, con una cuenta cada uno los primeros videos arrancan juntos (0,4 s)
+y con la misma cuenta el segundo espera turno; el diálogo en Chrome (estado compartida, error de llave,
+cuenta propia, probar, quitar con confirmación). `_verificacion-aislamiento.sh` (AISLAMIENTO COMPLETO,
+31/0/0), `_verificacion-endpoints.sh` (SIN REGRESIONES, con la línea nueva del diálogo) y
+`_verificacion-inventario.sh`. **No verificado:** el diálogo a ancho de teléfono (la ventana de Chrome no
+se dejó achicar).
+
+---
+
 ## 2026-09-25 (2) — Cambio de voz (ElevenLabs Voice Changer) y "Volver a unir"
 
 **El problema:** Veo genera el audio clip por clip, cada uno como una generación independiente: la

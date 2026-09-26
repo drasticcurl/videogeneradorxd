@@ -19,7 +19,7 @@
  * clases la hace `Badge` y nadie mas. Asi cambiar el color de un estado es una
  * linea en `Badge`, y no abrir las 8 pantallas.
  */
-import type { EstadoVersionDeVoz, JobRecord } from "./types";
+import type { EstadoCuentaVertex, EstadoVersionDeVoz, JobRecord } from "./types";
 
 /**
  * Los cinco tonos del sistema. `attention` usa el color de acento porque en esta
@@ -116,5 +116,26 @@ export function estadoDeVersionDeVoz(estado: EstadoVersionDeVoz | string): Estad
       return { tone: "neutral", label: "Cancelada", animado: false };
     default:
       return { tone: "neutral", label: String(estado), animado: false };
+  }
+}
+
+/**
+ * De donde sale la cuenta de Vertex de un usuario (src/lib/cuentaVertex.ts) -> como se
+ * ve en el header y en "Tu cuenta de Vertex". La compartida va en `attention` por lo
+ * mismo que todo lo demas: el acento es "esto espera algo de vos", y lo que espera es
+ * que cargue la suya para que no se le facture a otro.
+ */
+export function estadoDeCuentaVertex(origen: EstadoCuentaVertex["origen"] | string): EstadoVisual {
+  switch (origen) {
+    case "app":
+      return { tone: "ok", label: "Cuenta propia", animado: false };
+    case "servidor":
+      return { tone: "ok", label: "Cuenta propia (del servidor)", animado: false };
+    case "compartida":
+      return { tone: "attention", label: "Cuenta compartida", animado: false };
+    case "ninguna":
+      return { tone: "danger", label: "Sin cuenta", animado: false };
+    default:
+      return { tone: "neutral", label: String(origen), animado: false };
   }
 }

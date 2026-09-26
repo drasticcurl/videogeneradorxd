@@ -12,7 +12,9 @@ import {
   resolveModel,
   ASPECT_RATIO,
   snapDuration,
+  type CuentaVertex,
 } from "../../config";
+import { vertexCuentaFor } from "../../cuentaVertex";
 import { buildVeoVideoPrompt } from "../../prompts";
 import { loadVeoPromptTemplateText } from "../../promptTemplate.server";
 import type {
@@ -47,9 +49,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class VertexVideoProvider implements VideoProvider {
   async generate(input: VideoGenInput): Promise<VideoGenResult> {
-    assertVertexConfig();
+    const cuenta = vertexCuentaFor(input.usuario);
+    assertVertexConfig(cuenta);
     const model = resolveModel("video", input.model);
-    const startUrl = `${vertexBaseUrl()}/${model}:predictLongRunning`;
+    const startUrl = `${vertexBaseUrl(cuenta)}/${model}:predictLongRunning`;
 
     // Prompt final con estilo UGC/selfie + acento rioplatense argentino (siempre que haya dialogo).
     // Si el clip trae un override, se manda EXACTAMENTE ese texto (sin armado automatico).
@@ -86,7 +89,7 @@ export class VertexVideoProvider implements VideoProvider {
 
     const startRes = await fetch(startUrl, {
       method: "POST",
-      headers: await authHeaders(),
+      headers: await authHeaders(cuenta),
       body: JSON.stringify(body),
     });
     if (!startRes.ok) {
@@ -102,7 +105,7 @@ export class VertexVideoProvider implements VideoProvider {
       throw new Error("Veo no devolvio el nombre de la operacion (LRO).");
     }
 
-    return this.pollOperation(model, start.name);
+    return this.pollOperation(cuenta, model, start.name);
   }
 
   /**
@@ -111,9 +114,10 @@ export class VertexVideoProvider implements VideoProvider {
    * La extension siempre es a 7s (lo fija el pipeline).
    */
   async extend(input: VideoExtendInput): Promise<VideoGenResult> {
-    assertVertexConfig();
+    const cuenta = vertexCuentaFor(input.usuario);
+    assertVertexConfig(cuenta);
     const model = resolveModel("video", input.model);
-    const startUrl = `${vertexBaseUrl()}/${model}:predictLongRunning`;
+    const startUrl = `${vertexBaseUrl(cuenta)}/${model}:predictLongRunning`;
 
     const continuation =
       " Continue seamlessly from the provided video, keeping the same person, " +
@@ -154,7 +158,7 @@ export class VertexVideoProvider implements VideoProvider {
 
     const startRes = await fetch(startUrl, {
       method: "POST",
-      headers: await authHeaders(),
+      headers: await authHeaders(cuenta),
       body: JSON.stringify(body),
     });
     if (!startRes.ok) {
@@ -169,21 +173,26 @@ export class VertexVideoProvider implements VideoProvider {
     if (!start.name) {
       throw new Error("Veo no devolvio el nombre de la operacion (LRO) al extender.");
     }
-    return this.pollOperation(model, start.name);
+    return this.pollOperation(cuenta, model, start.name);
   }
 
+  /**
+   * La operacion se consulta con la MISMA cuenta que la lanzo: vive en su proyecto, y
+   * otra cuenta no la ve (404) o no tiene permiso (403).
+   */
   private async pollOperation(
+    cuenta: CuentaVertex,
     model: string,
     operationName: string
   ): Promise<VideoGenResult> {
-    const pollUrl = `${vertexBaseUrl()}/${model}:fetchPredictOperation`;
+    const pollUrl = `${vertexBaseUrl(cuenta)}/${model}:fetchPredictOperation`;
     const deadline = Date.now() + config.pipeline.veoPollTimeoutMs;
 
     while (Date.now() < deadline) {
       await sleep(config.pipeline.veoPollIntervalMs);
       const res = await fetch(pollUrl, {
         method: "POST",
-        headers: await authHeaders(),
+        headers: await authHeaders(cuenta),
         body: JSON.stringify({ operationName }),
       });
       if (!res.ok) {
@@ -199,7 +208,7 @@ export class VertexVideoProvider implements VideoProvider {
         throw new Error(`Veo LRO error: ${poll.error.message ?? "desconocido"}`);
       }
       if (poll.done) {
-        return this.extractVideo(poll);
+        return this.extractVideo(cuenta, poll);
       }
     }
     throw new Error(
@@ -209,7 +218,10 @@ export class VertexVideoProvider implements VideoProvider {
     );
   }
 
-  private async extractVideo(poll: LroPoll): Promise<VideoGenResult> {
+  private async extractVideo(
+    cuenta: CuentaVertex,
+    poll: LroPoll
+  ): Promise<VideoGenResult> {
     const v = poll.response?.videos?.[0];
     if (v?.bytesBase64Encoded) {
       return {
@@ -223,22 +235,22 @@ export class VertexVideoProvider implements VideoProvider {
     }
     const gcsUri = v?.gcsUri ?? poll.response?.generatedSamples?.[0]?.video?.uri;
     if (gcsUri) {
-      const bytes = await downloadGcs(gcsUri);
+      const bytes = await downloadGcs(cuenta, gcsUri);
       return { bytes, mimeType: v?.mimeType ?? "video/mp4", gcsUri };
     }
     throw new Error("Veo no devolvio video (ni bytes ni gcsUri).");
   }
 }
 
-/** Descarga un objeto gs://bucket/object usando el token ADC. */
-async function downloadGcs(gsUri: string): Promise<Uint8Array> {
+/** Descarga un objeto gs://bucket/object con el token de la cuenta que genero el video. */
+async function downloadGcs(cuenta: CuentaVertex, gsUri: string): Promise<Uint8Array> {
   const m = /^gs:\/\/([^/]+)\/(.+)$/.exec(gsUri);
   if (!m) throw new Error(`gcsUri invalido: ${gsUri}`);
   const [, bucket, object] = m;
   const url = `https://storage.googleapis.com/download/storage/v1/b/${bucket}/o/${encodeURIComponent(
     object
   )}?alt=media`;
-  const token = await getAccessToken();
+  const token = await getAccessToken(cuenta);
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) {
     const t = await res.text();

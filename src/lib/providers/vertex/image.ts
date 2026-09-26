@@ -13,6 +13,7 @@ import {
   ASPECT_RATIO,
   config,
 } from "../../config";
+import { vertexCuentaFor } from "../../cuentaVertex";
 import type { ImageGenInput, ImageGenResult, ImageProvider } from "../types";
 import { ProviderHttpError, parseRetryAfter } from "../types";
 import { buildImageInstruction } from "../../prompts";
@@ -36,9 +37,10 @@ function toBytes(b64: string): Uint8Array {
 
 export class VertexImageProvider implements ImageProvider {
   async generate(input: ImageGenInput): Promise<ImageGenResult> {
-    assertVertexConfig();
+    const cuenta = vertexCuentaFor(input.usuario);
+    assertVertexConfig(cuenta);
     const model = resolveModel("image", input.model);
-    const url = `${vertexBaseUrl()}/${model}:generateContent`;
+    const url = `${vertexBaseUrl(cuenta)}/${model}:generateContent`;
 
     const aspect = input.aspectRatio ?? ASPECT_RATIO;
 
@@ -95,7 +97,7 @@ export class VertexImageProvider implements ImageProvider {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: await authHeaders(),
+      headers: await authHeaders(cuenta),
       body: JSON.stringify(body),
       // Si la conexion se cuelga, abortamos y dejamos que la cola reintente
       // (en vez de bloquear un slot de concurrencia para siempre).

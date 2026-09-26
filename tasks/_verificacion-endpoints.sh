@@ -71,6 +71,13 @@ cd "$(dirname "$0")/.." || exit 1
 # le pueda sacar un fetch sin que esto salte. La linea de `result/page.tsx` NO cambia:
 # su llamada a /voz cae en el prefijo /api/projects/, que ya estaba. Ninguna otra
 # linea se toco.
+#
+# ─── ACTUALIZACION 2026-09-26: una cuenta de Vertex por usuario ─────────────────
+#
+# Se AGREGA una linea, la de `src/components/CuentaVertexDialog.tsx`: archivo NUEVO que
+# llama al endpoint nuevo /api/cuenta-vertex (GET, POST y DELETE). Lo abre el nombre del
+# header, pero los fetch viven en el dialogo a proposito: asi la linea de
+# `SessionBar.tsx` NO cambia y sigue siendo solo /api/login. Ninguna otra linea se toco.
 LINEA_BASE=$(cat <<'BASE'
 src/app/HomeProyectos.tsx|/api/batch /api/projects /api/projects/
 src/app/NuevoProyectoWizard.tsx|/api/projects /api/projects/
@@ -83,6 +90,7 @@ src/app/login/LoginForm.tsx|/api/login
 src/app/project/[id]/pipeline/page.tsx|/api/files/ /api/jobs/ /api/projects/
 src/app/project/[id]/result/page.tsx|/api/files/ /api/projects/
 src/components/CambiarVozDialog.tsx|/api/projects/ /api/voces /api/voces/favoritas
+src/components/CuentaVertexDialog.tsx|/api/cuenta-vertex
 src/components/JobCard.tsx|/api/files/ /api/prompt-template
 src/store/useProjectStore.ts|/api/config /api/jobs/ /api/parse /api/projects/
 BASE

@@ -9,15 +9,37 @@
  *
  * El rediseño toco SOLO el JSX. La funcion `salir()` quedo igual, incluido el
  * `window.location.assign`: ver el comentario adentro, es un bug conocido.
+ *
+ * El nombre es ademas el boton de "Tu cuenta de Vertex" (CuentaVertexDialog): el color
+ * dice de un vistazo si generás con la tuya o con la compartida. Los fetch de la cuenta
+ * viven en el dialogo y no aca, asi este archivo sigue llamando solo a /api/login.
  */
 
 import { SignOut } from "@phosphor-icons/react";
 import { useState } from "react";
 
-import { Button } from "@/components/ui";
+import CuentaVertexDialog from "@/components/CuentaVertexDialog";
+import { Badge, Button } from "@/components/ui";
+import type { EstadoCuentaVertex } from "@/lib/types";
+import { estadoDeCuentaVertex } from "@/lib/ui-tokens";
 
-export default function SessionBar({ usuario }: { usuario: string }) {
+export default function SessionBar({
+  usuario,
+  cuentaVertex,
+}: {
+  usuario: string;
+  /** Resuelta en el server por el layout; el dialogo la actualiza al cargar o quitar. */
+  cuentaVertex: EstadoCuentaVertex;
+}) {
   const [saliendo, setSaliendo] = useState(false);
+  const [cuenta, setCuenta] = useState(cuentaVertex);
+  const [verCuenta, setVerCuenta] = useState(false);
+  // En mock no se gasta nada: el nombre queda neutro para no pedir una accion que no hace falta.
+  const visual =
+    cuenta.modo === "vertex"
+      ? estadoDeCuentaVertex(cuenta.origen)
+      : { tone: "neutral" as const, label: "Modo de prueba (mock)" };
+  const resumen = `Tu cuenta de Vertex: ${visual.label}${cuenta.proyecto ? ` · ${cuenta.proyecto}` : ""}`;
 
   async function salir() {
     setSaliendo(true);
@@ -43,8 +65,28 @@ export default function SessionBar({ usuario }: { usuario: string }) {
       {/*
         El nombre en mono: son usuarios de dos o tres letras en mayuscula y con la
         proporcional quedaban con el interletrado desparejo al lado del boton.
+        `px-1`: el badge ya trae su relleno, y con el del boton el nombre quedaba lejos
+        del divisor.
       */}
-      <span className="code text-label text-fg-dim">{usuario.toUpperCase()}</span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="px-1"
+        onClick={() => setVerCuenta(true)}
+        aria-label={resumen}
+        title={resumen}
+      >
+        <Badge tone={visual.tone} punto={cuenta.modo === "vertex"} className="code">
+          {usuario.toUpperCase()}
+        </Badge>
+      </Button>
+      <CuentaVertexDialog
+        abierto={verCuenta}
+        onCambio={setVerCuenta}
+        estado={cuenta}
+        onEstado={setCuenta}
+      />
       {/*
         `loading` deshabilita y pone el spinner PERO no cambia el texto (§5, regla 1):
         antes pasaba de "Salir" a "Saliendo…", cambiaba de ancho y corria el header

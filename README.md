@@ -185,6 +185,57 @@ LRO verificado). Si alguien lo vuelve a poner en una región, todos los jobs emp
 
 De paso, Google recomienda `global` para reducir los 429: rutea a la región con más capacidad libre.
 
+### Una cuenta de Vertex por usuario
+
+Por default todos generan con **la cuenta compartida** (`GOOGLE_CLOUD_PROJECT` + ADC). Cada usuario
+puede tener **la suya**: lo que genera se factura a su proyecto de Google Cloud y gasta su cuota, no
+la del otro.
+
+**Cada uno la carga solo, desde la app:** click en su nombre, arriba a la derecha → *Tu cuenta de
+Vertex*. Ahí ve con qué cuenta genera hoy, sube el JSON de la suya y tiene el **tutorial paso a paso**
+para sacarlo (proyecto con facturación → habilitar la Vertex AI API → cuenta de servicio con el rol
+*Usuario de Vertex AI* → clave JSON). El color del nombre lo dice de un vistazo: **verde** = cuenta
+propia, **ámbar** = la compartida, **rojo** = ninguna (no puede generar).
+
+- **"Probar y guardar" prueba antes de guardar**, sin gastar: pide un token y hace un `countTokens`
+  (gratis) contra el proyecto. Si falta la facturación, la API, el permiso o la llave está mal, lo dice
+  con el link a la página de la consola donde se arregla, y **no guarda nada**. *Probar conexión* hace
+  lo mismo con la cuenta que se usa hoy.
+- **Dónde queda:** `DATA_DIR/cuentas-vertex/` (carpeta `700`, archivos `600`), afuera de `OUTPUT_DIR`,
+  que es lo que sirve `/api/files`. La llave no vuelve a salir del server: ninguna respuesta la trae,
+  ni el path. Se aceptan solo dos tipos de JSON, `service_account` y `authorized_user` (el login de
+  gcloud), y se guardan **reescritos con los campos necesarios**: un `external_account` le puede pedir
+  al server que lea un archivo, corra un ejecutable o le pegue a una URL, y eso no puede venir de un
+  archivo subido por la web.
+- **Orden** (`vertexCuentaFor` en `src/lib/cuentaVertex.ts`): 1) la cargada desde la app, 2) la del
+  `.env` por usuario, 3) la compartida. La de la app gana porque la eligió el propio usuario.
+- **Los jobs usan la cuenta del dueño del proyecto**, no la de la sesión: la cola corre sin cookie.
+  Interpretar el brief (`/api/parse`) usa la de quien está logueado, porque ahí todavía no hay proyecto.
+- **El límite de videos por minuto es por cuenta** (`PIPELINE_VIDEO_RATE_MAX`): la cuota de Veo es por
+  proyecto, así que los videos de uno no frenan los del otro. Los que comparten cuenta comparten límite.
+- **Si todos tienen la suya**, borrá `GOOGLE_CLOUD_PROJECT` y `GOOGLE_APPLICATION_CREDENTIALS`: el que
+  no tenga cuenta no puede generar, con un error que le dice que cargue la suya. `deploy.sh` lo avisa
+  pero no corta: el usuario nuevo tiene que poder entrar para cargarla.
+- **Si algún día se hace backup de `storage/`, lleva las llaves adentro:** tratalo como un secreto. Si
+  se pierden, cada uno vuelve a cargar la suya (o genera una clave nueva en Google).
+
+**Alternativa del admin, por `.env`** (mismo patrón que `PASSWORD_<NOMBRE>`), para dejarle una cuenta a
+alguien sin que la cargue él:
+
+```bash
+GOOGLE_CLOUD_PROJECT_IVAN=proyecto-de-ivan                                # a quién se le factura
+GOOGLE_APPLICATION_CREDENTIALS_IVAN=/srv/generador/shared/vertex-ivan.json  # con qué credenciales (600, dueño deploy)
+```
+
+Cada var pisa a su compartida. La excepción: con JSON propio el **proyecto propio es obligatorio**. No
+cae al compartido, porque las credenciales de uno generarían en el proyecto del otro (anda si tienen
+acceso, que entre socios es lo normal) y la factura le llegaría a quien no generó nada, sin un solo
+error. El guard 3d de `deploy.sh` chequea que el JSON se pueda leer y sea válido.
+
+Una cuenta nueva arranca con **cuota baja de Veo**: si ven muchos 429, pedí aumento en **IAM →
+Cuotas** del proyecto. Y antes de un lote grande probá con una imagen: si al proyecto le falta algún
+modelo del catálogo, el error sale ahí y no a mitad de la tanda.
+
 ---
 
 ## Catálogo de modelos
@@ -520,8 +571,10 @@ Ver `.env.example`. Las que importan:
 | Variable | Default | Descripción |
 |---|---|---|
 | `PROVIDER_MODE` | `mock` | `mock` o `vertex` |
-| `GOOGLE_CLOUD_PROJECT` | — | Project ID (requerido en `vertex`) |
+| `GOOGLE_CLOUD_PROJECT` | — | Project ID de la cuenta compartida (en `vertex`, si alguien la usa) |
 | `GOOGLE_CLOUD_LOCATION` | `global` | **`global`, no una región** |
+| `GOOGLE_CLOUD_PROJECT_<NOMBRE>` | — | Proyecto propio de un usuario; pisa al compartido |
+| `GOOGLE_APPLICATION_CREDENTIALS_<NOMBRE>` | — | Path al JSON propio de un usuario. Pide también su `GOOGLE_CLOUD_PROJECT_<NOMBRE>` |
 | `LLM_MODEL` | `gemini-3.6-flash` | Chat |
 | `IMAGE_MODEL` | `gemini-3.1-flash-image` | Nano Banana 2 |
 | `VIDEO_MODEL` | `veo-3.1-lite-generate-001` | Veo |
@@ -602,8 +655,10 @@ Layout en el server:
 ├── repo/                       # clon de git (main)
 ├── shared/
 │   ├── .env.production         # secretos (chmod 600)
-│   └── adc.json                # credenciales de Vertex (chmod 600)
+│   ├── adc.json                # credenciales de Vertex compartidas (chmod 600)
+│   └── vertex-<nombre>.json    # cuenta de un usuario puesta por el admin (600, opcional)
 ├── storage/{data,output}       # ESTADO PERSISTENTE, afuera de las releases
+│                               #   data/cuentas-vertex/ = las cuentas que cargó cada usuario
 ├── releases/<timestamp>/       # se conservan las últimas 5
 └── current -> <release>/.next/standalone
 ```
@@ -623,7 +678,8 @@ Lo que el script garantiza:
   y ejecuta líneas cortadas. Pasó en el primer deploy.
 - **Guards antes del build**, para no dejar una release a medias: `AUTH_SECRET` presente, al menos
   una `PASSWORD_*`, `NEXT_PUBLIC_SITE_URL` presente, `DATA_DIR`/`OUTPUT_DIR` absolutos y
-  escribibles, credenciales de Vertex legibles y JSON válido, y `ffmpeg`/`ffprobe` instalados
+  escribibles, credenciales de Vertex legibles y JSON válido **para cada usuario** (la propia o la
+  compartida), y `ffmpeg`/`ffprobe` instalados
   (`zip` es warning: sólo rompe la descarga en zip).
 - **`npm ci --include=dev` es obligatorio**: el guard hace `source` del `.env.production`, que setea
   `NODE_ENV=production`, y con eso `npm ci` saltea las devDependencies — donde viven `typescript`,
@@ -684,6 +740,10 @@ commit y explicá por qué. Nunca la toques "para que pase".
 | `final.mp4` sin audio o de mala calidad | falta ffmpeg | `apt-get install -y ffmpeg`. `deploy.sh` lo aborta |
 | Se perdieron proyectos tras un deploy | `DATA_DIR`/`OUTPUT_DIR` relativos | Tienen que ser absolutos y afuera de `releases/`. El guard 3c lo aborta |
 | Falla la autenticación de Vertex | ADC sin configurar | `gcloud auth application-default login`, o `GOOGLE_APPLICATION_CREDENTIALS` en el server |
+| *"No se pudo usar la cuenta de Vertex que cargó ivan"* | se borró la clave en Google, o el login de gcloud expiró | Que la pruebe y la vuelva a cargar desde su nombre, arriba a la derecha |
+| *"No se pudieron usar las credenciales de Vertex de ivan"* | el JSON de `GOOGLE_APPLICATION_CREDENTIALS_IVAN` no existe, no se puede leer o la clave se borró en Google | Revisá el path y los permisos (`deploy`, 600); si borraron la clave, generá otra |
+| *"ivan tiene credenciales propias … pero falta GOOGLE_CLOUD_PROJECT_IVAN"* | JSON propio sin proyecto propio | Agregá `GOOGLE_CLOUD_PROJECT_IVAN`. No cae al compartido a propósito |
+| 403 *"requires billing to be enabled"* / *"Permission denied"* | el proyecto propio sin facturación, sin la Vertex AI API o sin el rol en la cuenta de servicio | *Probar conexión* en *Tu cuenta de Vertex* (click en tu nombre) dice cuál falta y da el link |
 | Cambio de voz: *"No quedan créditos en ElevenLabs"* | la cuenta se quedó sin créditos | Cargá créditos o esperá a que se renueve el plan; después "Reintentar" |
 | Cambio de voz: *"no tiene permiso para esto"* | la key restringida no tiene Speech to Speech o Voices | Creá la key con Speech to Speech + Voices (lectura) |
 | "Volver a unir" contesta *"Hay un cambio de voz en curso"* (409) | hay una conversión viva en ese proyecto | Esperá a que termine o cancelala en el panel Voz |

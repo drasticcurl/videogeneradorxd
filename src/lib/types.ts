@@ -411,3 +411,35 @@ export interface RespuestaVoces {
   siguiente: string | null;
   creditos: CreditosDeVoz | null;
 }
+
+/* ─── Cuenta de Vertex por usuario (src/lib/cuentaVertex.ts) ─────────────── */
+
+/**
+ * La cuenta de Vertex de un usuario, como la ve la UI (GET /api/cuenta-vertex). NUNCA
+ * trae la llave ni el path al JSON: solo lo que hace falta para que cada uno sepa a
+ * quien se le factura lo que genera.
+ */
+export interface EstadoCuentaVertex {
+  /** "mock": la app no llama a Vertex, asi que la cuenta todavia no se usa. */
+  modo: "mock" | "vertex";
+  /**
+   * "app" = la cargo el usuario desde el header, "servidor" = la configuro el admin en
+   * el .env (`GOOGLE_CLOUD_PROJECT_<NOMBRE>`), "compartida" = la de todos, "ninguna" =
+   * no tiene propia y no hay compartida: no puede generar.
+   */
+  origen: "app" | "servidor" | "compartida" | "ninguna";
+  proyecto: string | null;
+  /** Email de la cuenta de servicio. null si es un login de gcloud o no se sabe. */
+  email: string | null;
+  tipo: "service_account" | "authorized_user" | null;
+  /** ISO. Solo en "app". */
+  cargadaEn: string | null;
+}
+
+/**
+ * Resultado de probar una cuenta (POST /api/cuenta-vertex). `ayuda` lleva al lugar de
+ * la consola de Google donde se arregla lo que fallo.
+ */
+export type PruebaCuentaVertex =
+  | { ok: true }
+  | { ok: false; motivo: string; ayuda: { texto: string; url: string } | null };

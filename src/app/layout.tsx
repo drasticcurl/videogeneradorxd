@@ -7,6 +7,7 @@ import "./globals.css";
 
 import { currentUser } from "@/lib/auth";
 import { cn } from "@/lib/cn";
+import { estadoCuentaVertex } from "@/lib/cuentaVertex";
 
 import NavLinks from "./NavLinks";
 import SessionBar from "./SessionBar";
@@ -109,7 +110,14 @@ export default function RootLayout({
                   >
                     Docs Vertex
                   </a>
-                  <SessionBar usuario={usuario} />
+                  {/*
+                    La cuenta de Vertex llega resuelta del server: el punto de estado
+                    del nombre se pinta sin un fetch al abrir cada pantalla.
+                  */}
+                  <SessionBar
+                    usuario={usuario}
+                    cuentaVertex={estadoCuentaVertex(usuario)}
+                  />
                 </span>
               </>
             )}

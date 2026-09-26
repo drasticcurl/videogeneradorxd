@@ -373,6 +373,9 @@ async function runImageGeneration(
     for (let intento = 1; intento <= maxIntentos && !salio; intento++) {
       try {
         const result = await getImageProvider().generate({
+          // La cola corre sin sesion (no hay cookie que leer): la cuenta de Vertex
+          // sale del DUEÑO del proyecto. Igual en los dos videos de mas abajo.
+          usuario: project.owner ?? null,
           prompt: promptVariante,
           refImages: refImages.length > 0 ? refImages : undefined,
           negativePrompt,
@@ -556,6 +559,7 @@ async function runVideoGeneration(
   });
 
   const result = await getVideoProvider().generate({
+    usuario: project.owner ?? null,
     imageBytes,
     imageMimeType: "image/png",
     prompt: clip.video_prompt,
@@ -720,6 +724,7 @@ export async function extendVideoJob(jobId: string): Promise<JobRecord | undefin
   );
 
   const extended = await getVideoProvider().extend({
+    usuario: project.owner ?? null,
     videoBytes: baseBytes,
     videoMimeType: "video/mp4",
     prompt: clip.video_prompt,

@@ -4,17 +4,24 @@
  * Interpreta el brief con la LLM (Gemini en vertex / mock) y devuelve el PlanJSON
  * estructurado + validado, junto con la estimacion de costo. NO crea proyecto todavia.
  */
+import { cookies } from "next/headers";
 import { getLlmProvider } from "@/lib/providers";
 import { estimateCost } from "@/lib/jobs/pipeline";
 import { resolveModel } from "@/lib/config";
 import { slugify } from "@/lib/storage";
 import { badRequest, ok, serverError } from "@/lib/http";
+import { currentUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
+    // Todavia no hay proyecto (ni dueño): la cuenta de Vertex sale de la sesion. Es
+    // IDENTIDAD (auth.ts), no un chequeo de dueño: aca no hay nada que autorizar.
+    const usuario = currentUser(cookies());
+    if (!usuario) return ok({ error: "No autenticado. Volvé a entrar." }, { status: 401 });
+
     const body = (await req.json()) as {
       brief?: string;
       model?: string;
@@ -32,6 +39,7 @@ export async function POST(req: Request) {
 
     const model = resolveModel("llm", body.model);
     const plan = await getLlmProvider().parseBrief(brief, {
+      usuario,
       model,
       references: references.length > 0 ? references : undefined,
     });

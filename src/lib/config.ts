@@ -4,8 +4,10 @@
  * Toda la config de modelos/proveedor/almacenamiento vive aca. NO hardcodees
  * endpoints ni IDs de modelo en otros archivos: importalos desde este modulo.
  *
- * Las variables sensibles (identidad de Google Cloud) NO viven aca: se resuelven
- * via Application Default Credentials (ADC) en el backend. Ver src/lib/providers/vertex/auth.ts
+ * Las credenciales de Google Cloud NO viven aca. Aca se resuelve la cuenta que sale del
+ * environment (`vertexCuentaDelEnv`); la resolucion completa, que antes mira la que el
+ * usuario cargo desde la app, es `vertexCuentaFor` en src/lib/cuentaVertex.ts. El token
+ * lo saca src/lib/providers/vertex/auth.ts.
  */
 import path from "node:path";
 
@@ -163,6 +165,10 @@ export const config = {
   providerMode: (env("PROVIDER_MODE", "mock") as ProviderMode) satisfies ProviderMode,
 
   google: {
+    /**
+     * Proyecto de la cuenta COMPARTIDA: la usa quien no tiene una propia. No lo leas
+     * directo para armar una URL: pasá por `vertexCuentaFor(usuario)` (cuentaVertex.ts).
+     */
     project: env("GOOGLE_CLOUD_PROJECT"),
     /**
      * `global` y NO una region. No es un detalle de performance: es lo que hace
@@ -436,6 +442,57 @@ export function elevenLabsKeyFor(usuario: string): string {
   );
 }
 
+/** Cuenta de Google Cloud con la que genera un usuario: lo que sale por ella se factura a `proyecto`. */
+export interface CuentaVertex {
+  /** Proyecto de GCP al que se factura y cuya cuota se gasta. "" si no hay ninguno. */
+  proyecto: string;
+  /**
+   * Path al JSON de credenciales propio del usuario. "" = las compartidas, que salen
+   * de ADC (`gcloud auth application-default login` en local,
+   * `GOOGLE_APPLICATION_CREDENTIALS` en el server).
+   */
+  credenciales: string;
+  /** El usuario si la cuenta es suya, `null` si es la compartida. */
+  usuario: string | null;
+  /**
+   * De donde salio: "app" la cargo el usuario desde el header (cuentaVertex.ts),
+   * "servidor" son sus vars `_<NOMBRE>` del .env, "compartida" las vars sin sufijo.
+   */
+  origen: "app" | "servidor" | "compartida";
+}
+
+/**
+ * Cuenta de Vertex de un usuario SEGUN EL ENVIRONMENT: `GOOGLE_CLOUD_PROJECT_<NOMBRE>` y
+ * `GOOGLE_APPLICATION_CREDENTIALS_<NOMBRE>` pisan a las compartidas, con el mismo patron
+ * que `PASSWORD_<NOMBRE>` y `ELEVENLABS_API_KEY_<NOMBRE>`. `usuario` null (un proyecto
+ * viejo sin dueño) usa la compartida.
+ *
+ * Hay UNA excepcion a "la propia pisa a la compartida": con JSON propio y sin proyecto
+ * propio, `proyecto` queda VACIO y no cae al compartido. Si cayera, las credenciales de
+ * uno generarian en el proyecto del otro (anda si tienen acceso, que entre socios es lo
+ * normal) y la factura le llegaria a quien no genero nada, sin un solo error. Vacio,
+ * `assertVertexConfig` corta antes de gastar y dice que var falta.
+ *
+ * La cuenta que el usuario carga desde la app pisa a todo esto: no llames a esta
+ * funcion para generar, llamá a `vertexCuentaFor` (cuentaVertex.ts).
+ *
+ * NO se cachea, por lo mismo que `authUsers()`.
+ */
+export function vertexCuentaDelEnv(usuario: string | null): CuentaVertex {
+  const nombre = usuario?.toUpperCase();
+  const proyectoPropio = nombre ? env(`GOOGLE_CLOUD_PROJECT_${nombre}`) : "";
+  const credencialesPropias = nombre ? env(`GOOGLE_APPLICATION_CREDENTIALS_${nombre}`) : "";
+  if (proyectoPropio || credencialesPropias) {
+    return {
+      proyecto: proyectoPropio,
+      credenciales: credencialesPropias,
+      usuario,
+      origen: "servidor",
+    };
+  }
+  return { proyecto: config.google.project, credenciales: "", usuario: null, origen: "compartida" };
+}
+
 /** Valida que un id de modelo pertenezca al catalogo del tipo dado. Si no, usa el default. */
 export function resolveModel(kind: ModelKind, requested?: string): string {
   if (requested && MODEL_CATALOG[kind].some((m) => m.id === requested)) {
@@ -444,25 +501,34 @@ export function resolveModel(kind: ModelKind, requested?: string): string {
   return config.models[kind];
 }
 
-/** URL base de la API REST de Vertex AI para el proyecto/region configurados. */
-export function vertexBaseUrl(): string {
-  const { location, project } = config.google;
+/** URL base de la API REST de Vertex AI para el proyecto de la cuenta y la region configurada. */
+export function vertexBaseUrl(cuenta: CuentaVertex): string {
+  const { location } = config.google;
   const host =
     location === "global"
       ? "aiplatform.googleapis.com"
       : `${location}-aiplatform.googleapis.com`;
-  return `https://${host}/v1/projects/${project}/locations/${location}/publishers/google/models`;
+  return `https://${host}/v1/projects/${cuenta.proyecto}/locations/${location}/publishers/google/models`;
 }
 
-/** Valida que la config necesaria para Vertex este presente. Lanza error claro si falta. */
-export function assertVertexConfig(): void {
+/** Valida que la cuenta tenga lo necesario para llamar a Vertex. Lanza error claro si falta. */
+export function assertVertexConfig(cuenta: CuentaVertex): void {
+  if (cuenta.usuario && !cuenta.proyecto) {
+    const nombre = cuenta.usuario.toUpperCase();
+    throw new Error(
+      `${cuenta.usuario} tiene credenciales propias (GOOGLE_APPLICATION_CREDENTIALS_${nombre}) ` +
+        `pero falta GOOGLE_CLOUD_PROJECT_${nombre}. No se usa el proyecto compartido: ` +
+        `se le facturaria a otra cuenta.`
+    );
+  }
   const missing: string[] = [];
-  if (!config.google.project) missing.push("GOOGLE_CLOUD_PROJECT");
+  if (!cuenta.proyecto) missing.push("GOOGLE_CLOUD_PROJECT");
   if (!config.google.location) missing.push("GOOGLE_CLOUD_LOCATION");
   if (missing.length > 0) {
     throw new Error(
       `Faltan variables de entorno para Vertex AI: ${missing.join(", ")}. ` +
-        `Configuralas en .env.local y corré 'gcloud auth application-default login'. ` +
+        `Configuralas en .env.local y corré 'gcloud auth application-default login', ` +
+        `o que el usuario cargue su propia cuenta desde su nombre, arriba a la derecha. ` +
         `O usá PROVIDER_MODE=mock para probar sin credenciales.`
     );
   }

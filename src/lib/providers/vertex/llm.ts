@@ -3,6 +3,7 @@
  * Usa generateContent con responseMimeType=application/json + responseSchema.
  */
 import { vertexBaseUrl, assertVertexConfig, resolveModel } from "../../config";
+import { vertexCuentaFor } from "../../cuentaVertex";
 import {
   PARSER_RESPONSE_SCHEMA,
   PARSER_SYSTEM_PROMPT,
@@ -23,13 +24,18 @@ interface GeminiResponse {
 export class VertexLlmProvider implements LlmProvider {
   async parseBrief(
     text: string,
-    opts?: { model?: string; references?: { id: string; label?: string }[] }
+    opts: {
+      usuario: string | null;
+      model?: string;
+      references?: { id: string; label?: string }[];
+    }
   ): Promise<ProjectPlan> {
-    assertVertexConfig();
-    const model = resolveModel("llm", opts?.model);
-    const url = `${vertexBaseUrl()}/${model}:generateContent`;
+    const cuenta = vertexCuentaFor(opts.usuario);
+    assertVertexConfig(cuenta);
+    const model = resolveModel("llm", opts.model);
+    const url = `${vertexBaseUrl(cuenta)}/${model}:generateContent`;
 
-    const refBlock = buildReferencesPromptBlock(opts?.references);
+    const refBlock = buildReferencesPromptBlock(opts.references);
     const userText = refBlock
       ? `${refBlock}\n\nBRIEF:\n${text}`
       : `BRIEF:\n${text}`;
@@ -56,7 +62,7 @@ export class VertexLlmProvider implements LlmProvider {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: await authHeaders(),
+      headers: await authHeaders(cuenta),
       body: JSON.stringify(body),
     });
 

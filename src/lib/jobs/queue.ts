@@ -12,6 +12,7 @@
  * Singleton via globalThis para sobrevivir al HMR de Next en dev.
  */
 import { config } from "../config";
+import { vertexCuentaFor } from "../cuentaVertex";
 import { jobsDb, projectsDb } from "../db";
 import type { JobRecord, JobType, ProjectStatus } from "../types";
 import { ProviderHttpError } from "../providers/types";
@@ -32,8 +33,11 @@ interface QueueState {
   running: Set<string>;
   retryAt: Map<string, number>;
   pumping: boolean;
-  /** timestamps de los ultimos arranques de VIDEO (ventana deslizante de rate limit) */
-  videoStarts: number[];
+  /**
+   * timestamps de los ultimos arranques de VIDEO (ventana deslizante de rate limit),
+   * POR CUENTA de Vertex: la clave es el proyecto de GCP (ver `cuentaDe`).
+   */
+  videoStarts: Map<string, number[]>;
 }
 
 const globalForQueue = globalThis as unknown as { __augcQueue?: QueueState };
@@ -45,22 +49,37 @@ const state: QueueState =
     running: new Set(),
     retryAt: new Map(),
     pumping: false,
-    videoStarts: [],
+    videoStarts: new Map(),
   });
-// Defensivo: si el estado venia de una version anterior (HMR) puede no tener el campo.
-if (!state.videoStarts) state.videoStarts = [];
+// Defensivo: si el estado venia de una version anterior (HMR) puede no tener el campo,
+// o tenerlo con la forma vieja (un array unico para todos).
+if (!(state.videoStarts instanceof Map)) state.videoStarts = new Map();
 
 /**
- * Rate limit de VIDEO: como maximo N arranques por ventana (default 4 por minuto).
- * Devuelve 0 si se puede arrancar ya, o los ms que faltan para el proximo slot.
+ * Cuenta de Vertex que paga un job, como clave del rate limit: el proyecto de GCP del
+ * dueño. La cuota de Veo es POR PROYECTO, asi que con una ventana global los videos de
+ * un usuario frenarian los de otro que genera con su propia cuenta. Dos usuarios en la
+ * cuenta compartida caen en la misma clave, y ahi si comparten ventana, como antes.
  */
-function videoRateWaitMs(): number {
+function cuentaDe(job: JobRecord): string {
+  return vertexCuentaFor(projectsDb.get(job.projectId)?.owner ?? null).proyecto;
+}
+
+/**
+ * Rate limit de VIDEO: como maximo N arranques por ventana (default 4 por minuto) en
+ * cada cuenta. Devuelve 0 si se puede arrancar ya, o los ms que faltan para el proximo
+ * slot.
+ */
+function videoRateWaitMs(cuenta: string): number {
   const { videoRateMax, videoRateWindowMs } = config.pipeline;
   const now = Date.now();
   // Descartamos los arranques que salieron de la ventana.
-  state.videoStarts = state.videoStarts.filter((t) => now - t < videoRateWindowMs);
-  if (state.videoStarts.length < videoRateMax) return 0;
-  const oldest = Math.min(...state.videoStarts);
+  const starts = (state.videoStarts.get(cuenta) ?? []).filter(
+    (t) => now - t < videoRateWindowMs
+  );
+  state.videoStarts.set(cuenta, starts);
+  if (starts.length < videoRateMax) return 0;
+  const oldest = Math.min(...starts);
   return Math.max(250, videoRateWindowMs - (now - oldest));
 }
 
@@ -352,8 +371,8 @@ function isStageBlocked(job: JobRecord): boolean {
 
 function runnableReason(job: JobRecord): "run" | "wait" | "dep-failed" {
   if (isStageBlocked(job)) return "wait";
-  // Rate limit de video: si la ventana esta llena, este job espera su turno.
-  if (job.type === "video" && videoRateWaitMs() > 0) return "wait";
+  // Rate limit de video: si la ventana de SU cuenta esta llena, este job espera su turno.
+  if (job.type === "video" && videoRateWaitMs(cuentaDe(job)) > 0) return "wait";
   const base = depReason(job);
   if (base !== "run") return base;
   // Con auto-aprobacion no hay gate por lotes: la ventana de generacion la define
@@ -445,9 +464,13 @@ function pump(): void {
           scheduledRetryTick = true;
           // Si lo unico que frena es la ventana de rate limit de video, esperamos
           // exactamente lo que falta para el proximo slot en vez de sondear cada 500ms.
-          const wait = videoRateWaitMs();
-          const hasVideoPending = pending.some((j) => j.type === "video");
-          setTimeout(() => pump(), hasVideoPending && wait > 0 ? wait + 100 : 500);
+          // Con varias cuentas, el primero que se libere entre las que tienen videos
+          // esperando; si alguna no esta frenada por la ventana, 500ms como siempre.
+          const waits = pending
+            .filter((j) => j.type === "video")
+            .map((j) => videoRateWaitMs(cuentaDe(j)));
+          const wait = waits.length > 0 ? Math.min(...waits) : 0;
+          setTimeout(() => pump(), wait > 0 ? wait + 100 : 500);
         }
         break;
       }
@@ -460,8 +483,11 @@ function pump(): void {
 
 function startJob(job: JobRecord): void {
   state.running.add(job.id);
-  // Anotamos el arranque para la ventana de rate limit de video.
-  if (job.type === "video") state.videoStarts.push(Date.now());
+  // Anotamos el arranque para la ventana de rate limit de video de su cuenta.
+  if (job.type === "video") {
+    const cuenta = cuentaDe(job);
+    state.videoStarts.set(cuenta, [...(state.videoStarts.get(cuenta) ?? []), Date.now()]);
+  }
   jobsDb.update(job.id, {
     status: "generating",
     attempts: job.attempts + 1,

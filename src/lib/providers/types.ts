@@ -3,6 +3,11 @@
  * los adaptadores concretos (mock / vertex) son intercambiables por env (PROVIDER_MODE).
  *
  * El modelo concreto se pasa POR LLAMADA (lo elige el usuario por proyecto).
+ *
+ * `usuario` tambien, y es OBLIGATORIO a proposito: decide con que cuenta de Vertex se
+ * genera y a quien se le factura (ver `vertexCuentaFor`). Si fuera opcional, un camino
+ * nuevo que se olvide de pasarlo generaria en silencio con la cuenta compartida. `null`
+ * es la compartida, y se pasa a mano solo para un proyecto viejo sin dueño.
  */
 import type { ProjectPlan } from "../schema";
 
@@ -38,7 +43,9 @@ export interface LlmProvider {
   /** Interpreta el brief en lenguaje natural y devuelve el PlanJSON estructurado. */
   parseBrief(
     text: string,
-    opts?: {
+    opts: {
+      /** Dueño de la llamada: con su cuenta de Vertex se genera. */
+      usuario: string | null;
       model?: string;
       /**
        * Avatares/fotos de referencia que el usuario ya subió (VSL). El parser los
@@ -57,6 +64,8 @@ export interface RefImage {
 }
 
 export interface ImageGenInput {
+  /** Dueño del proyecto: con su cuenta de Vertex se genera. */
+  usuario: string | null;
   prompt: string;
   /** Si viene, se hace image2image / edicion manteniendo identidad (Nano Banana). */
   refImageBytes?: Uint8Array;
@@ -89,6 +98,8 @@ export interface ImageProvider {
 }
 
 export interface VideoGenInput {
+  /** Dueño del proyecto: con su cuenta de Vertex se genera. */
+  usuario: string | null;
   imageBytes: Uint8Array;
   imageMimeType?: string;
   prompt: string;
@@ -121,6 +132,8 @@ export interface VideoGenResult {
 }
 
 export interface VideoExtendInput {
+  /** Dueño del proyecto: con su cuenta de Vertex se genera. */
+  usuario: string | null;
   /** video base (mp4) que se quiere extender. */
   videoBytes: Uint8Array;
   videoMimeType?: string;
