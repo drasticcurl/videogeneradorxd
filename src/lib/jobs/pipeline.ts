@@ -107,7 +107,17 @@ export function logEvent(
 
 /* ---------------------------- build jobs ----------------------------- */
 
-/** Crea (o re-crea) los jobs de un proyecto a partir de su plan. Idempotente por id. */
+/**
+ * Crea (o re-crea) los jobs de un proyecto a partir de su plan. Idempotente por id.
+ *
+ * Un job que YA existe se conserva ENTERO, en cualquier estado: solo se refrescan los
+ * campos que salen del plan (dependencia, label, variantes). Antes, los que no estaban
+ * aprobados se rearmaban desde `blank()` copiando nada mas que el status: un clip en
+ * "Elegí variante" perdia su outputPath y sus candidatos, quedaba esperando aprobacion
+ * SIN video, y aprobarlo a ciegas daba un "done" sin archivo. Lo disparaba cualquier
+ * guardado del plan (cambiar la resolucion de un clip, subir una referencia...).
+ * Tambien se perdian el modelo elegido por clip (`modelOverride`) y el `meta`.
+ */
 export function buildJobs(project: ProjectRecord): JobRecord[] {
   const now = new Date().toISOString();
   const existing = new Map(jobsDb.byProject(project.id).map((j) => [j.id, j]));
@@ -156,8 +166,7 @@ export function buildJobs(project: ProjectRecord): JobRecord[] {
           ? imageJobId(project.id, genRef)
           : null;
       const prev = existing.get(id);
-      // Preservamos lo ya aprobado/bloqueado.
-      if (prev && (prev.locked || prev.status === "done")) {
+      if (prev) {
         jobs.push({ ...prev, dependsOn, variants: project.imageVariants });
         continue;
       }
@@ -169,9 +178,6 @@ export function buildJobs(project: ProjectRecord): JobRecord[] {
           label: img.id,
           dependsOn,
           variants: project.imageVariants,
-          status: prev?.status ?? "pending",
-          candidates: prev?.candidates ?? [],
-          createdAt: prev?.createdAt ?? now,
         })
       );
     }
@@ -182,7 +188,7 @@ export function buildJobs(project: ProjectRecord): JobRecord[] {
     if (clip.etiqueta !== "IA") continue;
     const id = videoJobId(project.id, clip.id);
     const prev = existing.get(id);
-    if (prev && (prev.locked || prev.status === "done")) {
+    if (prev) {
       jobs.push({
         ...prev,
         dependsOn: imageJobId(project.id, clip.image_id),
@@ -198,8 +204,6 @@ export function buildJobs(project: ProjectRecord): JobRecord[] {
         label: `${String(clip.orden).padStart(2, "0")}_${clip.id}`,
         dependsOn: imageJobId(project.id, clip.image_id),
         variants: 1,
-        status: prev?.status ?? "pending",
-        createdAt: prev?.createdAt ?? now,
       })
     );
   }
@@ -613,6 +617,9 @@ export async function approveJob(
   }
 
   // video
+  // Sin archivo no hay nada que aprobar: un "done" vacio le hace creer a la cola que el
+  // clip esta listo y el unir lo saltea o revienta.
+  if (!job.outputPath) throw new Error("El clip no tiene video generado para aprobar.");
   const updated = jobsDb.update(jobId, {
     status: "done",
     locked: true,
